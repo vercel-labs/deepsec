@@ -52,7 +52,7 @@ The scanner looks for these patterns, but you should look for ALL of them regard
 |------|----------|
 | auth-bypass | Authentication checks that can be circumvented |
 | missing-auth | HTTP endpoints without authentication |
-| acl-check | Missing or incorrect RBAC/permission checks (auth.can(), withAuthentication) |
+| acl-check | Missing or incorrect RBAC/permission checks |
 | xss | Cross-site scripting via innerHTML, dangerouslySetInnerHTML, etc. |
 | dangerous-html | Unsafe HTML rendering with user-controlled data |
 | rce | Remote code execution via exec, eval, spawn, etc. |
@@ -722,9 +722,19 @@ export async function revalidate(params: {
   }
 
   if (toRevalidate.length === 0) {
-    emitProgress({ type: "all_complete", message: "No findings to revalidate" });
+    emitProgress({
+      type: "all_complete",
+      message: "No findings to revalidate",
+    });
     completeRun(projectId, runId, "done", { findingsRevalidated: 0 });
-    return { runId, revalidated: 0, truePositives: 0, falsePositives: 0, fixed: 0, uncertain: 0 };
+    return {
+      runId,
+      revalidated: 0,
+      truePositives: 0,
+      falsePositives: 0,
+      fixed: 0,
+      uncertain: 0,
+    };
   }
 
   let totalRevalidated = 0;
