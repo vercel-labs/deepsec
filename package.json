@@ -5,6 +5,10 @@
   "type": "module",
   "description": "AI-powered vulnerability scanner for any codebase",
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@8.15.9",
   "repository": {
     "type": "git",
     "url": "https://github.com/vercel-labs/deepsec"

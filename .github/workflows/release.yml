@@ -1,0 +1,70 @@
+name: Release
+
+# Fires on every push to main. The paths filter narrows it to commits that
+# touch the publish surface — the package.json (where the version lives) or
+# the workflow itself. The version-vs-npm comparison below is the real gate;
+# the filter is just an optimization to avoid spinning up a runner for every
+# unrelated push.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/deepsec/package.json'
+      - '.github/workflows/release.yml'
+
+# Serialize releases. Two pushes landing on main back-to-back must not race
+# each other into npm publish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write  # required for npm OIDC trusted publishing + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version is read from `packageManager` in the root package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      # Compare the version in packages/deepsec/package.json with whatever is
+      # currently published on npm. Skip if equal — re-running this workflow
+      # on a no-op commit must not error or republish.
+      - name: Resolve version delta
+        id: ver
+        run: |
+          set -eo pipefail
+          LOCAL=$(node -p "require('./packages/deepsec/package.json').version")
+          PUBLISHED=$(npm view deepsec version 2>/dev/null || true)
+          echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL" != "$PUBLISHED" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Will publish deepsec@$LOCAL (currently on npm: ${PUBLISHED:-<none>})"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::deepsec@$LOCAL already on npm — skipping publish"
+          fi
+
+      - if: steps.ver.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+
+      # `npm publish` runs the package's prepublishOnly hook (`pnpm -w validate`)
+      # and then prepack (`pnpm bundle`) — full validation + fresh bundle ship
+      # together. With `id-token: write` and a Trusted Publisher configured for
+      # the `deepsec` package on npmjs.com pointing at this workflow, no
+      # NPM_TOKEN secret is needed: --provenance signs the build with the
+      # OIDC-issued token and authenticates the publish in the same exchange.
+      - if: steps.ver.outputs.publish == 'true'
+        working-directory: packages/deepsec
+        run: npm publish --provenance --access public

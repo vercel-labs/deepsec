@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-progress PR runs on new pushes; let main runs finish so the
+# release workflow's history stays uninterrupted.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # deepsec supports Node 22+ (engines.node in package.json); test on both
+    # the floor and the current Node so a 24-only API change can't sneak in.
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version is read from `packageManager` in the root package.json,
+      # so bumping it there is enough — no version pin needed here.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Mirrors the steps in the root `validate` script, split out so the
+      # GitHub UI shows which one failed without grepping logs.
+      - run: pnpm -r build
+      - run: pnpm lint
+      - run: pnpm knip
+      - run: pnpm test:unit
+      - run: pnpm test:bundle
