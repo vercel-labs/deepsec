@@ -1,15 +1,9 @@
 # deepsec
 
-AI-powered vulnerability scanner. Regex matchers find candidate sites,
-then Claude or Codex agents investigate each batch and emit structured
-findings. The pipeline triages, revalidates, and exports results.
+`deepsec` an agent-powered vulnerability scanner that you can run in your own infrastructure, optimized to perform on-demand review of all code in existing 
+large-scale repos.
 
-Pair it with your existing coding agent: hand it a confirmed finding and
-ask it to write a matcher for sites of the same shape. Plugin slots cover
-matchers, notifiers, ownership, people lookups, and remote executors.
-
-The analysis is deep and expensive. Use it as a one-shot pass to clean a
-codebase up, then lean on cheaper code-review tools for ongoing feedback.
+`deepsec` is designed to surface hard-to-find issues that have been lurking in applications for a long time. It is configured to use the best models at maximum thinking levels, meaning scans can cost thousands or even tens-of-thousands of dollars for large codebases. Our customers have found the cost worth it for how quickly they were able to patch vulnerabilities that would have otherwise gone unfixed.
 
 For large codebases, work fans out across worker machines in parallel.
 Commands are idempotent — interrupt a job, restart it, and deepsec picks up
@@ -41,8 +35,8 @@ real finding suggests one.
 
 Two things to do before scanning:
 
-**1. Paste your AI Gateway token into `.env.local`.** See
-[docs/vercel-setup.md](docs/vercel-setup.md) for how to get one.
+**1. Paste your AI Gateway, Anthropic, or OpenAI token into `.env.local`.** See
+[docs/vercel-setup.md](docs/vercel-setup.md) for how to get started.
 
 **2. Have your coding agent fill in `data/<id>/INFO.md`.** Open the
 codebase in Claude Code / Cursor / Codex CLI / etc., then paste this
@@ -80,22 +74,6 @@ goes to `.deepsec/data/<id>/`; everything except curated
 `INFO.md`/`SETUP.md` is gitignored. Schema in
 [docs/data-layout.md](docs/data-layout.md).
 
-### Why in-repo?
-
-Putting `.deepsec/` *inside* the repo means teammates inherit the
-project context (auth shape, threat model in `INFO.md`, custom
-matchers) just by cloning. The scaffold's `.gitignore` keeps the
-config + curated context tracked and the bulky scan output ignored.
-
-`.deepsec/` doesn't pollute the parent repo's lockfile or tooling —
-it's a self-contained directory with its own `package.json`. The
-parent repo only needs to be aware that `.deepsec/` exists; nothing
-else.
-
-To scan a *different* codebase from the same `.deepsec/`, run
-`pnpm deepsec init-project <path>` (e.g. for a sibling service,
-sub-package, etc.) and paste the same prompt above with the new id.
-
 ## Docs
 
 - [docs/getting-started.md](docs/getting-started.md) — first-scan walkthrough
@@ -112,8 +90,8 @@ sub-package, etc.) and paste the same prompt above with the new id.
 
 ## AI provider — Vercel AI Gateway
 
-Both agent backends route through Vercel AI Gateway by default. One
-token covers Claude and Codex; the gateway has zero data retention.
+Both agent backends route through Vercel AI Gateway by default, but you can provide
+your own API keys, of course. The AI Gateway has default quotas suitable for highly concurrent research.
 
 ```
 ANTHROPIC_AUTH_TOKEN=vck_...
@@ -122,9 +100,8 @@ OPENAI_BASE_URL=https://ai-gateway.vercel.sh/v1
 ```
 
 See [docs/vercel-setup.md](docs/vercel-setup.md) for getting a key
-and for the Vercel Sandbox setup. To bypass the gateway, point
-`ANTHROPIC_BASE_URL` at the official Anthropic endpoint (or any
-Anthropic-compatible API).
+and for the Vercel Sandbox setup. To bypass the gateway, define
+`ANTHROPIC_BASE_URL` or `OPENAI_API_KEY` with their respective provider values.
 
 ## Severity levels
 
@@ -160,8 +137,7 @@ with two custom matchers, see
 
 ## Distributed execution (optional)
 
-Large monorepos can fan work across [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox)
-microVMs:
+Large monorepos can fan work across [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) microVMs:
 
 ```bash
 pnpm deepsec sandbox process --project-id my-app --sandboxes 10 --concurrency 4

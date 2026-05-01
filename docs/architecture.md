@@ -3,11 +3,11 @@
 ## Pipeline
 
 ```
-       scan          process         triage         revalidate          enrich           export
-        │              │                │                │                  │              │
-        ▼              ▼                ▼                ▼                  ▼              ▼
-  candidates  →   findings    →  P0/P1/P2  →  TP/FP/Fixed verdict  →  +committers  →  JSON / md-dir
-                                                                       +ownership
+       scan          process        revalidate          enrich           export
+        │              │                │                │                  │    
+        ▼              ▼                ▼                ▼                  ▼
+  candidates  →   findings    TP/FP/Fixed verdict  →  +committers  →  JSON / md-dir
+                                                      +ownership
 ```
 
 Each stage is a separate CLI subcommand and reads/writes a consistent
@@ -81,15 +81,6 @@ Concurrency: `--concurrency 5 --batch-size 5` means 5 batches in flight,
 5 files per batch = 25 files in the air at peak. The processor claims
 files atomically via `lockedByRunId` so multiple workers can run in
 parallel without stepping on each other.
-
-### triage
-
-- **What it does:** Cheaply classify findings P0/P1/P2/skip based on
-  severity, vuln type, and reasoning — without re-reading the code.
-- **Cost:** $ — uses a cheaper model (default Sonnet).
-- **Inputs:** Findings with no `triage` field set yet.
-- **Outputs:** `triage: { priority, exploitability, impact, reasoning, … }`
-  on each finding.
 
 ### revalidate
 

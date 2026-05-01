@@ -1,8 +1,5 @@
 # Getting started
 
-The README has the four commands. This page explains what each one does
-and how to read the output.
-
 ## Install
 
 Requires **Node.js 22+**. The recipe below uses pnpm; npm and yarn
@@ -81,8 +78,8 @@ pnpm deepsec scan
 more than one project. Pass `--root <path>` to override the resolved
 path — useful for one-off scans against a different checkout.
 
-`scan` runs ~110 regex matchers across the codebase. No AI calls, no
-cost. On a 2,000-file project it takes ~15s. Output goes to
+`scan` runs ~110 regex matchers across the codebase. There are no AI calls at this stage. 
+On a 2,000-file project it takes ~15s. Output goes to
 `data/<id>/files/` as one JSON file per scanned source file (called a
 `FileRecord`).
 
@@ -99,7 +96,7 @@ pending AI investigation, etc.
 pnpm deepsec process --concurrency 5
 ```
 
-This is where it gets expensive. Defaults: Claude Opus, 5 files per batch,
+Defaults: Claude Opus, 5 files per batch,
 5 batches in parallel = 25 files in flight at once. You can lower the
 parallelism (`--concurrency 1`) or set `--limit 50` to budget-cap.
 

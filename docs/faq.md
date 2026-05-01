@@ -83,9 +83,7 @@ and how to wire up Vercel Sandbox auth (OIDC or access token).
 
 ## How accurate is it? What's the FP rate?
 
-Without revalidation: ~30–50% FP rate on `MEDIUM`, ~10–20% on `HIGH+`.
-After revalidation: ~2–5% on `HIGH+`, with 95%+ TP rates on `CRITICAL`
-in our internal use.
+After revalidation: ~10–29% on `HIGH+.
 
 Two things help most:
 
@@ -164,20 +162,6 @@ text-readable source file. The thinner the regex layer, the more the
 process stage carries. A few starter matchers for the new language are
 worth writing; they front-load file selection so the AI gets the most
 promising sites first.
-
-## How does it compare to Semgrep / CodeQL / OpenGrep?
-
-deepsec is regex-then-AI: cheap wide net, AI for disambiguation. Semgrep
-and CodeQL are AST/dataflow-then-rules: structural matching, no AI.
-
-They're complementary. The AI catches shapes that are hard to express
-structurally (auth bypass via business logic, OAuth state misuse, ICS
-injection). Semgrep catches shapes that need precise structural matching
-(taint flows, type-aware patterns).
-
-deepsec catches what Semgrep misses, and vice versa. The highest
-signal-per-dollar comes from running deepsec on top of an existing
-Semgrep ruleset.
 
 ## What if I find a vulnerability in deepsec itself?
 
