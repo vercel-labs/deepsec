@@ -2,6 +2,7 @@ import { readProjectConfig } from "@deepsec/core";
 import { process as processRun } from "@deepsec/processor";
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
+import { assertAgentCredential } from "../preflight.js";
 import { resolveProjectId } from "../resolve-project-id.js";
 
 function logProgress(progress: {
@@ -90,6 +91,8 @@ export async function processCommand(opts: {
   const effectiveRoot = opts.root ?? project.rootPath;
   const agentType = opts.agent ?? "claude-agent-sdk";
   const model = opts.model ?? defaultModelForAgent(agentType);
+
+  assertAgentCredential(agentType);
 
   // --reinvestigate  → true (re-investigate all)
   // --reinvestigate 2 → number (only files with < 2 analyses)

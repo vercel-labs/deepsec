@@ -2,10 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDataRoot, readProjectConfig } from "@deepsec/core";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../formatters.js";
+import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
 import { orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
 import { extractReinvestigate } from "./sandbox-process.js";
+
+// Mirror of VALID_COMMANDS in sandbox-process.ts. Kept in sync by hand —
+// `enrich` is intentionally excluded: it runs locally (git committer
+// lookups, ownership-plugin RPC) and the worker env-forwarding path that
+// used to cover its credentials no longer exists, so a sandboxed enrich
+// would run half-configured rather than fail clearly.
+const VALID_COMMANDS: ReadonlySet<SandboxSubcommand> = new Set([
+  "process",
+  "revalidate",
+  "triage",
+  "scan",
+  "report",
+]);
 
 function extractFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
@@ -55,12 +69,28 @@ export async function sandboxAllCommand(
     args?: string[];
   },
 ) {
+  if (!VALID_COMMANDS.has(subcommand as SandboxSubcommand)) {
+    console.error(`Unknown sandbox-all subcommand: ${subcommand}`);
+    console.error(`Valid commands: ${Array.from(VALID_COMMANDS).join(", ")}`);
+    if (subcommand === "enrich") {
+      console.error(
+        `  enrich runs locally (git history + ownership lookups) and is not sandboxed.\n` +
+          `  Run \`deepsec enrich --project-id <id>\` directly instead.`,
+      );
+    }
+    process.exit(1);
+  }
   const command = subcommand as SandboxSubcommand;
   const passthrough = opts.args ?? [];
   const totalSandboxes = opts.sandboxes ?? 10;
   const concurrency = parseInt(extractFlag(passthrough, "--concurrency") ?? "4", 10) || 4;
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
   const timeout = opts.timeout ?? 5 * 60 * 60 * 1000;
+  const agentType = extractFlag(passthrough, "--agent") ?? "claude-agent-sdk";
+
+  // Same preflight as sandbox-process — fail fast before fanning out.
+  assertSandboxCredential();
+  assertAgentCredential(agentType);
 
   console.log(`${BOLD}Sandbox All${RESET} — ${CYAN}${command}${RESET}`);
   console.log(`  Total sandboxes: ${totalSandboxes}`);
@@ -147,10 +177,10 @@ export async function sandboxAllCommand(
       limit: undefined,
       concurrency,
       batchSize: parseInt(extractFlag(passthrough, "--batch-size") ?? "5", 10) || 5,
-      agentType: extractFlag(passthrough, "--agent") ?? "claude-agent-sdk",
+      agentType,
       model:
         extractFlag(passthrough, "--model") ??
-        (extractFlag(passthrough, "--agent") === "codex" ? "gpt-5.5" : "claude-opus-4-7"),
+        (agentType === "codex" ? "gpt-5.5" : "claude-opus-4-7"),
       snapshotId: undefined,
       saveSnapshot: false,
       keepAlive: false,

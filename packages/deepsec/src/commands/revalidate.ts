@@ -3,6 +3,7 @@ import { readProjectConfig } from "@deepsec/core";
 import { revalidate } from "@deepsec/processor";
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
+import { assertAgentCredential } from "../preflight.js";
 import { resolveProjectId } from "../resolve-project-id.js";
 
 function logProgress(progress: {
@@ -74,6 +75,8 @@ export async function revalidateCommand(opts: {
   const minSeverity = opts.minSeverity as Severity | undefined;
   const onlySlugs = parseCsv(opts.onlySlugs);
   const skipSlugs = parseCsv(opts.skipSlugs);
+
+  assertAgentCredential(agentType);
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);
   console.log(`  Agent: ${agentType} (${model})`);

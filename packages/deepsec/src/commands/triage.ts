@@ -2,6 +2,7 @@ import type { Severity } from "@deepsec/core";
 import { readProjectConfig } from "@deepsec/core";
 import { triage } from "@deepsec/processor";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
+import { assertAgentCredential } from "../preflight.js";
 import { resolveProjectId } from "../resolve-project-id.js";
 
 export async function triageCommand(opts: {
@@ -16,6 +17,9 @@ export async function triageCommand(opts: {
   readProjectConfig(projectId);
   const severity = (opts.severity ?? "MEDIUM") as Severity;
   const model = opts.model ?? "claude-sonnet-4-6";
+
+  // Triage uses Anthropic directly — no codex path here.
+  assertAgentCredential("claude-agent-sdk");
 
   console.log(
     `${BOLD}Triaging${RESET} ${severity} findings for project ${BOLD}${projectId}${RESET}`,
