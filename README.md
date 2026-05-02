@@ -148,6 +148,17 @@ uploaded; `.git` is excluded. Both OIDC tokens (local) and access
 tokens (CI) are supported — see
 [docs/vercel-setup.md](docs/vercel-setup.md).
 
+## Security model of deepsec itself
+
+Treat `deepsec` like a coding agent with full shell access on the enviroment that it is
+running on. It is designed to run on trusted inputs (your source code) but you may still
+be concerned about prompt injection due to external dependencies or vendored code.
+
+Running on a sandbox (see above) does limit the potential exposure substantially:
+
+- The API keys for the coding agents are injected outside of the sandbox and hence cannot be exfiltrated
+- For the worker sandboxes, network egress from the sandbox is limited to coding agent hosts (Egress is allowed during the bootstrap process, but this does not run the coding agent)
+
 ## Workflow reference
 
 | Command         | What it does                                             |
