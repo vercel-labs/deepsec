@@ -45,6 +45,14 @@ export function initCommand(opts: InitOpts) {
   // Workspace skeleton: empty config (with marker), README, AGENTS, env.
   fs.mkdirSync(workspaceDir, { recursive: true });
   writeFile(workspaceDir, "package.json", packageJson(workspacePackageName(workspaceDir)));
+  // Sever .deepsec/ from any ancestor monorepo. npm and yarn walk up looking
+  // for a `package.json` with `workspaces` defined; pnpm walks up looking
+  // for a `pnpm-workspace.yaml`. Both stop at the first hit, so dropping a
+  // pnpm-workspace.yaml here (and an empty `workspaces: []` in package.json,
+  // see packageJson()) makes `.deepsec/` its own root regardless of what
+  // the parent repo defines. Lets `npm/yarn/pnpm install` from `.deepsec/`
+  // manage only this directory's deps.
+  writeFile(workspaceDir, "pnpm-workspace.yaml", pnpmWorkspaceYaml());
   writeFile(workspaceDir, "deepsec.config.ts", emptyConfigTs());
   writeFile(workspaceDir, "AGENTS.md", workspaceAgentsMd());
   writeFile(workspaceDir, ".env.local", envLocal());
@@ -133,11 +141,23 @@ function packageJson(name: string): string {
       private: true,
       description: "deepsec scanning workspace",
       type: "module",
+      // Empty workspaces array marks this package.json as a workspace root
+      // for npm and yarn — both walk up looking for a package.json that
+      // declares `workspaces`, and stop at the first hit. Without this, a
+      // parent monorepo's workspace would absorb `.deepsec/`.
+      workspaces: [],
       dependencies: { deepsec: "^0.1.0" },
     },
     null,
     2,
   )}\n`;
+}
+
+function pnpmWorkspaceYaml(): string {
+  // Mirror of the `workspaces: []` in package.json, for pnpm. pnpm reads
+  // this file (not package.json:workspaces) — empty `packages` list means
+  // ".deepsec/ is its own workspace root with no members beyond itself."
+  return `packages: []\n`;
 }
 
 /**
