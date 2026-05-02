@@ -45,7 +45,11 @@ export function initCommand(opts: InitOpts) {
 
   // Workspace skeleton: empty config (with marker), README, AGENTS, env.
   fs.mkdirSync(workspaceDir, { recursive: true });
-  writeFile(workspaceDir, "package.json", packageJson(workspacePackageName(workspaceDir)));
+  writeFile(
+    workspaceDir,
+    "package.json",
+    packageJson(workspacePackageName(workspaceDir)),
+  );
   // Sever .deepsec/ from any ancestor monorepo. npm and yarn walk up looking
   // for a `package.json` with `workspaces` defined; pnpm walks up looking
   // for a `pnpm-workspace.yaml`. Both stop at the first hit, so dropping a
@@ -76,7 +80,11 @@ export function initCommand(opts: InitOpts) {
   }
 
   // README references the project, so write it AFTER registration.
-  writeFile(workspaceDir, "README.md", readmeMd(registered.id, registered.targetRel));
+  writeFile(
+    workspaceDir,
+    "README.md",
+    readmeMd(registered.id, registered.targetRel),
+  );
 
   const wsRel = path.relative(process.cwd(), workspaceDir) || ".";
   console.log(`${GREEN}✓${RESET} Created ${BOLD}${workspaceDir}${RESET}`);
@@ -85,11 +93,13 @@ export function initCommand(opts: InitOpts) {
   );
   console.log("Next:\n");
   if (wsRel !== ".") console.log(`  cd ${wsRel}`);
-  console.log(`  pnpm install                          ${DIM}# installs deepsec${RESET}`);
+  console.log(
+    `  pnpm install                          ${DIM}# installs deepsec${RESET}`,
+  );
   console.log(`  ${DIM}# Set AI_GATEWAY_API_KEY in .env.local${RESET}`);
   console.log();
   console.log(
-    `  ${YELLOW}Paste this into your coding agent${RESET} ${DIM}(Claude Code, Cursor, Codex CLI):${RESET}`,
+    `  ${YELLOW}Paste this into your coding agent${RESET} ${DIM}(Claude Code, Cursor, Codex, OpenCode, Pi, etc.):${RESET}`,
   );
   console.log();
   printAgentPrompt(registered.id, registered.targetRel);
@@ -98,8 +108,12 @@ export function initCommand(opts: InitOpts) {
   console.log(`    pnpm deepsec scan`);
   console.log(`    pnpm deepsec process`);
   console.log();
-  console.log(`  ${DIM}# --project-id is auto-resolved while there's only one project.${RESET}`);
-  console.log(`  ${DIM}# Register another codebase later: deepsec init-project <root>${RESET}`);
+  console.log(
+    `  ${DIM}# --project-id is auto-resolved while there's only one project.${RESET}`,
+  );
+  console.log(
+    `  ${DIM}# Register another codebase later: deepsec init-project <root>${RESET}`,
+  );
 }
 
 function printAgentPrompt(id: string, targetRel: string): void {

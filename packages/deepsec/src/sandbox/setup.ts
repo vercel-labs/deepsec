@@ -1,7 +1,15 @@
-import { type NetworkPolicy, type NetworkPolicyRule, Sandbox } from "@vercel/sandbox";
+import {
+  type NetworkPolicy,
+  type NetworkPolicyRule,
+  Sandbox,
+} from "@vercel/sandbox";
 import { markSetupComplete } from "./download.js";
 import { trackSandbox, untrackSandbox } from "./shutdown.js";
-import { extractTarballOnSandbox, type TarballStats, uploadTarballToSandbox } from "./upload.js";
+import {
+  extractTarballOnSandbox,
+  type TarballStats,
+  uploadTarballToSandbox,
+} from "./upload.js";
 
 const DEEPSEC_DIR = "/vercel/sandbox/deepsec-app";
 const DATA_DIR = "/vercel/sandbox/deepsec-app/data";
@@ -41,7 +49,11 @@ export interface UploadBundle {
 // deliberately absent — they're brokered via firewall header injection
 // (see resolveBrokeredCredentials + buildWorkerNetworkPolicy below) so a
 // compromised in-VM agent can't read them out of /proc/<pid>/environ.
-const SANDBOX_ENV_KEYS: string[] = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "DEEPSEC_AGENT_DEBUG"];
+const SANDBOX_ENV_KEYS: string[] = [
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_BASE_URL",
+  "DEEPSEC_AGENT_DEBUG",
+];
 
 /**
  * The Anthropic / OpenAI SDKs throw at construction if no auth token is set.
@@ -69,13 +81,16 @@ interface BrokeredCredentials {
  * Claude and OpenAI traffic, so when only ANTHROPIC_AUTH_TOKEN is set and
  * the worker is going to run codex, fall it back as the OpenAI token.
  */
-export function resolveBrokeredCredentials(agentType: string | undefined): BrokeredCredentials {
+export function resolveBrokeredCredentials(
+  agentType: string | undefined,
+): BrokeredCredentials {
   const anthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const explicitOpenai = process.env.OPENAI_API_KEY;
   // Only borrow ANTHROPIC for OPENAI on the codex path — and only when the
   // user hasn't pinned an explicit OpenAI key. Outside codex this fallback
   // would never hit the network anyway, but scoping it keeps intent clear.
-  const openaiToken = explicitOpenai ?? (agentType === "codex" ? anthropicToken : undefined);
+  const openaiToken =
+    explicitOpenai ?? (agentType === "codex" ? anthropicToken : undefined);
   return { anthropicToken, openaiToken };
 }
 
@@ -185,16 +200,25 @@ export function buildWorkerNetworkPolicy(
   // the user hasn't configured one.
   const aiHost = isCodex
     ? (hostFromUrl(env["OPENAI_BASE_URL"]) ?? DEFAULT_OPENAI_HOST)
-    : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ?? DEFAULT_ANTHROPIC_HOST);
+    : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ??
+      DEFAULT_ANTHROPIC_HOST);
 
   // The fallback flips at resolveBrokeredCredentials — by here, openaiToken
   // already carries the ANTHROPIC gateway token if the user only set that
   // one and is running codex.
-  const injectToken = isCodex ? credentials.openaiToken : credentials.anthropicToken;
+  const injectToken = isCodex
+    ? credentials.openaiToken
+    : credentials.anthropicToken;
 
   const allow: Record<string, NetworkPolicyRule[]> = {
     [aiHost]: injectToken
-      ? [{ transform: [{ headers: { authorization: `Bearer ${injectToken}` } }] }]
+      ? [
+          {
+            transform: [
+              { headers: { authorization: `Bearer ${injectToken}` } },
+            ],
+          },
+        ]
       : [],
   };
   for (const h of extraAllow) {
@@ -217,13 +241,29 @@ interface BootstrapOptions {
   onLog: (msg: string) => void;
 }
 
+function getNonOidcCreds() {
+  if (
+    process.env.VERCEL_TEAM_ID &&
+    process.env.VERCEL_PROJECT_ID &&
+    process.env.VERCEL_TOKEN
+  ) {
+    return {
+      teamId: process.env.VERCEL_TEAM_ID,
+      projectId: process.env.VERCEL_PROJECT_ID,
+      token: process.env.VERCEL_TOKEN,
+    };
+  }
+}
+
 /**
  * Stand up a fresh sandbox, upload everything, install deps, ensure native
  * binaries, then snapshot and stop. Returns the snapshot id — workers use it
  * as their seed. The sandbox is always stopped before return (success or fail)
  * to avoid leaking compute.
  */
-export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<string> {
+export async function createBootstrapSnapshot(
+  opts: BootstrapOptions,
+): Promise<string> {
   const agentType = opts.agentType ?? "claude-agent-sdk";
   // Bootstrap doesn't make AI calls — it just installs deps and snapshots.
   // We pass empty credentials so no placeholder tokens are written into the
@@ -239,6 +279,7 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
       env: sandboxEnv,
       resources: { vcpus: opts.vcpus },
       timeout: opts.timeout,
+      ...getNonOidcCreds(),
     });
   } catch (err: any) {
     throw new Error(`Sandbox.create failed: ${err?.message ?? String(err)}`);
@@ -249,9 +290,16 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
 
   try {
     // Install pnpm globally
-    await runAndLog(sandbox, "npm", ["install", "-g", "pnpm@8"], "/vercel/sandbox", opts.onLog, {
-      sudo: true,
-    });
+    await runAndLog(
+      sandbox,
+      "npm",
+      ["install", "-g", "pnpm@8"],
+      "/vercel/sandbox",
+      opts.onLog,
+      {
+        sudo: true,
+      },
+    );
     opts.onLog("  pnpm installed.");
 
     // Install ripgrep + python3 — Codex agents prefer rg/python over grep/awk
@@ -268,16 +316,41 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
 
     await Promise.all([
       (async () => {
-        await uploadTarballToSandbox(sandbox, appTar, opts.bundle.app.buffer, opts.onLog);
+        await uploadTarballToSandbox(
+          sandbox,
+          appTar,
+          opts.bundle.app.buffer,
+          opts.onLog,
+        );
         await extractTarballOnSandbox(sandbox, appTar, DEEPSEC_DIR, opts.onLog);
       })(),
       (async () => {
-        await uploadTarballToSandbox(sandbox, targetTar, opts.bundle.target.buffer, opts.onLog);
-        await extractTarballOnSandbox(sandbox, targetTar, TARGET_DIR, opts.onLog);
+        await uploadTarballToSandbox(
+          sandbox,
+          targetTar,
+          opts.bundle.target.buffer,
+          opts.onLog,
+        );
+        await extractTarballOnSandbox(
+          sandbox,
+          targetTar,
+          TARGET_DIR,
+          opts.onLog,
+        );
       })(),
       (async () => {
-        await uploadTarballToSandbox(sandbox, dataTar, opts.bundle.data.buffer, opts.onLog);
-        await extractTarballOnSandbox(sandbox, dataTar, projectDataDir, opts.onLog);
+        await uploadTarballToSandbox(
+          sandbox,
+          dataTar,
+          opts.bundle.data.buffer,
+          opts.onLog,
+        );
+        await extractTarballOnSandbox(
+          sandbox,
+          dataTar,
+          projectDataDir,
+          opts.onLog,
+        );
       })(),
     ]);
 
@@ -287,7 +360,8 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
     // installed mode may have been generated by a newer pnpm whose lockfile
     // format pnpm@8 rejects (ERR_PNPM_LOCKFILE_BREAKING_CHANGE), so we
     // resolve fresh there.
-    const installArgs = opts.mode === "dev" ? ["install", "--frozen-lockfile"] : ["install"];
+    const installArgs =
+      opts.mode === "dev" ? ["install", "--frozen-lockfile"] : ["install"];
     opts.onLog(`Running pnpm ${installArgs.join(" ")}...`);
     await runAndLog(sandbox, "pnpm", installArgs, DEEPSEC_DIR, opts.onLog);
 
@@ -363,12 +437,16 @@ export async function spawnFromSnapshot(opts: SpawnOptions): Promise<Sandbox> {
       resources: { vcpus: opts.vcpus },
       timeout: opts.timeout,
       networkPolicy,
+      ...getNonOidcCreds(),
     });
   } catch (err: any) {
     const details = [err?.message];
     if (err?.response?.status) details.push(`status: ${err.response.status}`);
-    if (err?.body) details.push(`body: ${JSON.stringify(err.body).slice(0, 300)}`);
-    throw new Error(`Sandbox.create from snapshot failed: ${details.filter(Boolean).join(" | ")}`);
+    if (err?.body)
+      details.push(`body: ${JSON.stringify(err.body).slice(0, 300)}`);
+    throw new Error(
+      `Sandbox.create from snapshot failed: ${details.filter(Boolean).join(" | ")}`,
+    );
   }
 
   trackSandbox(sandbox);
@@ -506,7 +584,9 @@ rm -rf /tmp/claude-native-fetch
     if (line.trim()) onLog(`  ${line}`);
   }
   if (result.exitCode !== 0) {
-    throw new Error(`Claude native binary install failed (exit ${result.exitCode})`);
+    throw new Error(
+      `Claude native binary install failed (exit ${result.exitCode})`,
+    );
   }
 }
 
@@ -518,7 +598,10 @@ rm -rf /tmp/claude-native-fetch
  * Best-effort: if neither tool can be installed, we log and move on. The
  * agent can fall back to grep / awk / shell.
  */
-async function installAgentTools(sandbox: Sandbox, onLog: (msg: string) => void): Promise<void> {
+async function installAgentTools(
+  sandbox: Sandbox,
+  onLog: (msg: string) => void,
+): Promise<void> {
   const script = `
 set -u
 log() { echo "  $*"; }
@@ -708,7 +791,9 @@ rm -rf /tmp/codex-native-fetch
     if (line.trim()) onLog(`  ${line}`);
   }
   if (result.exitCode !== 0) {
-    throw new Error(`Codex native binary install failed (exit ${result.exitCode})`);
+    throw new Error(
+      `Codex native binary install failed (exit ${result.exitCode})`,
+    );
   }
 }
 
@@ -719,7 +804,10 @@ rm -rf /tmp/codex-native-fetch
  * firewall, which would already block the analytics endpoints; this just
  * keeps the SDK from logging connection-refused noise.
  */
-async function writeCodexConfig(sandbox: Sandbox, onLog: (msg: string) => void): Promise<void> {
+async function writeCodexConfig(
+  sandbox: Sandbox,
+  onLog: (msg: string) => void,
+): Promise<void> {
   const configToml = `# Written by deepsec sandbox bootstrap. Disables non-AI egress
 # (analytics, update checks, OTEL exporters) so the agent stays within
 # the sandbox firewall allowlist.
@@ -742,7 +830,9 @@ trace_exporter = "none"
   await sandbox.writeFiles([
     { path: `${CODEX_HOME}/config.toml`, content: Buffer.from(configToml) },
   ]);
-  onLog(`  Codex config.toml written to ${CODEX_HOME}/config.toml (telemetry/updates disabled).`);
+  onLog(
+    `  Codex config.toml written to ${CODEX_HOME}/config.toml (telemetry/updates disabled).`,
+  );
 }
 
 async function runAndLog(
