@@ -26,13 +26,14 @@ import { scanCommand } from "./commands/scan.js";
 import { statusCommand } from "./commands/status.js";
 import { triageCommand } from "./commands/triage.js";
 import { loadConfig } from "./load-config.js";
+import { getDeepsecVersion } from "./version.js";
 
 const program = new Command();
 
 program
   .name("deepsec")
   .description("AI-powered vulnerability scanner for any codebase")
-  .version("0.1.0")
+  .version(getDeepsecVersion())
   .addHelpText(
     "after",
     `

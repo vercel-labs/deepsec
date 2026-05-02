@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { BOLD, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { requireExistingDir } from "../require-dir.js";
+import { getDeepsecVersion } from "../version.js";
 import { PROJECTS_INSERT_MARKER, registerProject } from "./init-project.js";
 
 const IGNORED_WORKSPACE_ENTRIES = new Set([".git", ".DS_Store"]);
@@ -134,6 +135,12 @@ function workspacePackageName(workspaceDir: string): string {
 }
 
 function packageJson(name: string): string {
+  // Pin the scaffolded dep to the version of deepsec running this
+  // `init`. Hardcoding a semver caret here silently rots every time
+  // we publish — the scaffolded dep would resolve against npm to
+  // whatever happens to match the literal string, which is not what
+  // a user typing `npx deepsec@latest init` expects.
+  const deepsecVersion = `^${getDeepsecVersion()}`;
   return `${JSON.stringify(
     {
       name,
@@ -146,7 +153,7 @@ function packageJson(name: string): string {
       // declares `workspaces`, and stop at the first hit. Without this, a
       // parent monorepo's workspace would absorb `.deepsec/`.
       workspaces: [],
-      dependencies: { deepsec: "^0.1.0" },
+      dependencies: { deepsec: deepsecVersion },
     },
     null,
     2,

@@ -48,10 +48,13 @@ describe("bundle e2e", () => {
     expect(stdout).toContain("process");
   });
 
-  it("--version exits 0", () => {
+  it("--version reports the current package version", () => {
     const { stdout, status } = runBundle(["--version"]);
     expect(status).toBe(0);
-    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    const deepsecPkg = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "packages/deepsec/package.json"), "utf-8"),
+    );
+    expect(stdout.trim()).toBe(deepsecPkg.version);
   });
 
   it("scan against the fixture produces FileRecords", () => {
@@ -188,10 +191,16 @@ export default defineConfig({
       expect(fs.existsSync(path.join(workspace, "matchers"))).toBe(false);
       expect(fs.existsSync(path.join(workspace, "config.json"))).toBe(false);
 
-      // package.json: workspace dir name + deepsec dep.
+      // package.json: workspace dir name + deepsec dep pinned to the
+      // current package version (NOT a hardcoded literal — that would
+      // silently rot every time we publish, leaving fresh installs to
+      // resolve a stale or non-existent npm version).
       const pkg = JSON.parse(fs.readFileSync(path.join(workspace, "package.json"), "utf-8"));
       expect(pkg.name).toBe("audits");
-      expect(pkg.dependencies.deepsec).toBeTruthy();
+      const deepsecPkg = JSON.parse(
+        fs.readFileSync(path.join(ROOT, "packages/deepsec/package.json"), "utf-8"),
+      );
+      expect(pkg.dependencies.deepsec).toBe(`^${deepsecPkg.version}`);
 
       // config.ts: minimal — id + root only, plus the insert marker.
       const configSrc = fs.readFileSync(path.join(workspace, "deepsec.config.ts"), "utf-8");
