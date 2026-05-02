@@ -1,26 +1,9 @@
 name: E2E live sandbox
 
-# Manual-only. Runs e2e/pipeline-sandbox.test.ts against a real Vercel
-# Sandbox to validate the sandbox path end-to-end (bootstrap snapshot,
-# worker spawn, file upload/download, result merge). Uses a stub agent
-# inside the sandbox — no AI credentials, no model spend — but takes
-# ~5-15 min for sandbox bootstrap + worker, so we don't run on push/PR.
-#
-# Trigger from the GitHub UI:
-#   Actions → "E2E live sandbox" → "Run workflow"
-#
-# Required repo secrets:
-#   VERCEL_TOKEN              — Vercel access token (https://vercel.com/account/tokens).
-#                               Used instead of OIDC because OIDC is
-#                               scoped to a Vercel deployment context.
-#   VERCEL_TEAM_ID            — team containing the project the sandbox
-#                               will bill against.
-#   VERCEL_PROJECT_ID         — any project ID on that team. The Sandbox
-#                               SDK only uses this for billing/scoping;
-#                               doesn't have to match this repo.
-#
-# Setting any of those wrong → the test's preflight throws clearly
-# before consuming sandbox time.
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 on:
   workflow_dispatch:
