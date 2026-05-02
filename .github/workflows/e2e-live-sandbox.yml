@@ -5,9 +5,6 @@ on:
   push:
     branches: [main]
 
-on:
-  workflow_dispatch:
-
 concurrency:
   group: e2e-live-sandbox
   cancel-in-progress: false
@@ -26,7 +23,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '24'
+          node-version: "24"
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -38,7 +35,7 @@ jobs:
 
       - name: Run live-sandbox pipeline test
         env:
-          DEEPSEC_E2E_LIVE_SANDBOX: '1'
+          DEEPSEC_E2E_LIVE_SANDBOX: "1"
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
