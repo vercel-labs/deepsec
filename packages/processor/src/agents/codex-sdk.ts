@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -57,18 +58,31 @@ const CUSTOM_PROVIDER_ID = "ai_gateway";
  * a counter + random bytes. Tempdirs auto-cleanup on process exit; even if
  * a few leak they're tiny.
  */
-let codexHomeCounter = 0;
-
+// mkdtempSync creates a 0700 directory atomically (and refuses if the
+// target already exists), which closes the symlink-clobber race a
+// pre-creating local attacker would otherwise win.
 function makeCodexHome(): string {
-  const id = `${process.pid}-${++codexHomeCounter}-${Math.random().toString(36).slice(2, 10)}`;
-  const dir = path.join(os.tmpdir(), `codex-home-${id}`);
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-"));
 }
 
+// Create the stderr log atomically with O_EXCL + 0600 so a pre-created
+// symlink at the chosen path causes failure rather than redirecting our
+// writes through it. The 16-byte CSPRNG suffix replaces Math.random(),
+// whose internal state is recoverable from a small number of observed
+// outputs.
 function makeStderrLog(): string {
-  const id = `${process.pid}-${codexHomeCounter}-${Math.random().toString(36).slice(2, 10)}`;
-  return path.join(os.tmpdir(), `codex-stderr-${id}.log`);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const id = crypto.randomBytes(16).toString("hex");
+    const p = path.join(os.tmpdir(), `codex-stderr-${id}.log`);
+    try {
+      const fd = fs.openSync(p, "wx", 0o600);
+      fs.closeSync(fd);
+      return p;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
+  throw new Error("Failed to create stderr log after 5 attempts");
 }
 
 /**

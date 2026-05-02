@@ -3,14 +3,7 @@ import { resolveProjectId } from "../resolve-project-id.js";
 import { checkStatus, collect, launch, orchestrate } from "../sandbox/orchestrator.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
 
-const VALID_COMMANDS: SandboxSubcommand[] = [
-  "process",
-  "revalidate",
-  "triage",
-  "enrich",
-  "scan",
-  "report",
-];
+const VALID_COMMANDS: SandboxSubcommand[] = ["process", "revalidate", "triage", "scan", "report"];
 
 interface SandboxOpts {
   projectId?: string;

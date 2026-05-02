@@ -20,7 +20,7 @@ export function defaultConcurrency(): number {
 export function generateRunId(): string {
   const now = new Date();
   const ts = now.toISOString().replace(/[-:T]/g, "").slice(0, 14); // YYYYMMDDHHmmss
-  const suffix = crypto.randomBytes(2).toString("hex"); // 4 hex chars
+  const suffix = crypto.randomBytes(8).toString("hex"); // 16 hex chars / 64 bits
   return `${ts}-${suffix}`;
 }
 

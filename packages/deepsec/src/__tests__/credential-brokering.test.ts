@@ -59,7 +59,7 @@ describe("credential brokering", () => {
       process.env.ANTHROPIC_AUTH_TOKEN = "vck_supersecret_realvalue";
       process.env.ANTHROPIC_BASE_URL = "https://ai-gateway.vercel.sh";
       const credentials = resolveBrokeredCredentials("claude-agent-sdk");
-      const env = buildSandboxEnv("process", "claude-agent-sdk", credentials);
+      const env = buildSandboxEnv("claude-agent-sdk", credentials);
 
       // The placeholder is set so the SDK can construct, but the real
       // token does not appear anywhere in the env map.
@@ -74,7 +74,7 @@ describe("credential brokering", () => {
       process.env.OPENAI_API_KEY = "sk-real-openai-secret";
       process.env.OPENAI_BASE_URL = "https://api.openai.com";
       const credentials = resolveBrokeredCredentials("codex");
-      const env = buildSandboxEnv("process", "codex", credentials);
+      const env = buildSandboxEnv("codex", credentials);
 
       expect(env.OPENAI_API_KEY).toBeDefined();
       expect(env.OPENAI_API_KEY).not.toBe("sk-real-openai-secret");
@@ -87,7 +87,7 @@ describe("credential brokering", () => {
       // No ANTHROPIC_AUTH_TOKEN set — SDK should fail fast at init rather
       // than 401 from upstream after a brokered placeholder gets through.
       const credentials = resolveBrokeredCredentials("claude-agent-sdk");
-      const env = buildSandboxEnv("process", "claude-agent-sdk", credentials);
+      const env = buildSandboxEnv("claude-agent-sdk", credentials);
       expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     });
 
@@ -95,7 +95,7 @@ describe("credential brokering", () => {
       process.env.ANTHROPIC_AUTH_TOKEN = "vck_real";
       process.env.ANTHROPIC_BASE_URL = "https://ai-gateway.vercel.sh";
       const credentials = resolveBrokeredCredentials("claude-agent-sdk");
-      const env = buildSandboxEnv("process", "claude-agent-sdk", credentials);
+      const env = buildSandboxEnv("claude-agent-sdk", credentials);
 
       // ANTHROPIC_BASE_URL gets rewritten to the local proxy by buildSandboxEnv
       // so the agent talks to the in-VM proxy. The original is exposed as

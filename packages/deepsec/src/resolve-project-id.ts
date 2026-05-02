@@ -1,5 +1,22 @@
 import { getConfig } from "@deepsec/core";
 
+// Strict allowlist for project ids. Catches `..`, path separators, shell
+// metacharacters, and whitespace in one place — every CLI entry point and
+// every config-supplied id flows through here, so downstream callers
+// (path joins, sandbox `sh -c` interpolation, git commit messages) can
+// treat the value as opaque.
+const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+function validateProjectId(id: string): string {
+  if (!PROJECT_ID_RE.test(id)) {
+    throw new Error(
+      `Invalid project id ${JSON.stringify(id)}: must match ${PROJECT_ID_RE} ` +
+        `(letters, digits, '.', '_', '-'; up to 64 chars; must not start with a separator).`,
+    );
+  }
+  return id;
+}
+
 /**
  * Resolve a project id from CLI input or the loaded config.
  *
@@ -12,12 +29,12 @@ import { getConfig } from "@deepsec/core";
  * didn't disambiguate.
  */
 export function resolveProjectId(provided: string | undefined): string {
-  if (provided) return provided;
+  if (provided) return validateProjectId(provided);
 
   const config = getConfig();
   const projects = config?.projects ?? [];
 
-  if (projects.length === 1) return projects[0].id;
+  if (projects.length === 1) return validateProjectId(projects[0].id);
 
   if (projects.length === 0) {
     throw new Error(
@@ -32,3 +49,5 @@ export function resolveProjectId(provided: string | undefined): string {
     `Multiple projects in deepsec.config.ts: ${ids}.\n` + `  Pass --project-id <id> to pick one.`,
   );
 }
+
+export { validateProjectId };

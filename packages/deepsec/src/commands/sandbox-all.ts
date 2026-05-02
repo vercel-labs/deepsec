@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readProjectConfig } from "@deepsec/core";
+import { getDataRoot, readProjectConfig } from "@deepsec/core";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../formatters.js";
 import { orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
@@ -20,7 +20,7 @@ function hasFlag(args: string[], flag: string): boolean {
 }
 
 function discoverProjects(): string[] {
-  const dataDir = path.resolve("data");
+  const dataDir = path.resolve(getDataRoot());
   if (!fs.existsSync(dataDir)) return [];
   return fs
     .readdirSync(dataDir, { withFileTypes: true })

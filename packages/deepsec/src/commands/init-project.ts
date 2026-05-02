@@ -3,6 +3,7 @@ import path from "node:path";
 import { dataDir, ensureProject } from "@deepsec/core";
 import { BOLD, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { requireExistingDir } from "../require-dir.js";
+import { validateProjectId } from "../resolve-project-id.js";
 
 export const PROJECTS_INSERT_MARKER = "// <deepsec:projects-insert-above>";
 
@@ -54,7 +55,7 @@ export function registerProject(opts: {
 }): RegisterResult {
   const workspaceDir = fs.realpathSync(path.resolve(opts.workspaceDir));
   const targetAbs = requireExistingDir(opts.targetRoot, "<target-root>");
-  const id = opts.id ?? path.basename(targetAbs);
+  const id = validateProjectId(opts.id ?? path.basename(targetAbs));
   const targetRel = path.relative(workspaceDir, targetAbs);
 
   const configPath = findConfigInWorkspace(workspaceDir);

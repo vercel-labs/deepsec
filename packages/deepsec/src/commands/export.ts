@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { FileRecord, Finding, Severity } from "@deepsec/core";
-import { dataDir, loadAllFileRecords } from "@deepsec/core";
+import { dataDir, getDataRoot, loadAllFileRecords } from "@deepsec/core";
 import { BOLD, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 
 const SEVERITY_ORDER: Record<Severity, number> = {
@@ -220,7 +220,7 @@ function startOfTodayLocal(): number {
 }
 
 function listProjectIds(): string[] {
-  const dataDirPath = path.resolve("data");
+  const dataDirPath = path.resolve(getDataRoot());
   if (!fs.existsSync(dataDirPath)) return [];
   return fs
     .readdirSync(dataDirPath, { withFileTypes: true })

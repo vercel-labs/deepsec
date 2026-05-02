@@ -200,7 +200,6 @@ async function bootstrapAndSpawn(
     const bundle = await prepareUploads(config, ctx.mode, ctx.root, onLog);
     snapshotId = await createBootstrapSnapshot({
       projectId: config.projectId,
-      command: config.command,
       agentType: config.agentType,
       vcpus: config.vcpus,
       timeout: config.timeout,
@@ -219,7 +218,6 @@ async function bootstrapAndSpawn(
     try {
       const sandbox = await spawnFromSnapshot({
         snapshotId: snapshotId!,
-        command: config.command,
         agentType: config.agentType,
         vcpus: config.vcpus,
         timeout: config.timeout,

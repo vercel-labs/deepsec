@@ -5,6 +5,7 @@ import type { FileRecord } from "@deepsec/core";
 import {
   completeRun,
   createRunMeta,
+  dataDir,
   ensureProject,
   getRegistry,
   readFileRecord,
@@ -257,7 +258,7 @@ export async function scan(params: {
   let ignorePaths = params.ignorePaths;
   if (!ignorePaths) {
     try {
-      const cfgPath = path.resolve(`data/${params.projectId}/config.json`);
+      const cfgPath = path.resolve(dataDir(params.projectId), "config.json");
       if (fs.existsSync(cfgPath)) {
         const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
         if (Array.isArray(cfg.ignorePaths)) ignorePaths = cfg.ignorePaths;

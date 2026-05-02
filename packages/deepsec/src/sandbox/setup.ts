@@ -41,15 +41,7 @@ export interface UploadBundle {
 // deliberately absent — they're brokered via firewall header injection
 // (see resolveBrokeredCredentials + buildWorkerNetworkPolicy below) so a
 // compromised in-VM agent can't read them out of /proc/<pid>/environ.
-const BASE_SANDBOX_ENV_KEYS: string[] = [
-  "ANTHROPIC_BASE_URL",
-  "OPENAI_BASE_URL",
-  "DEEPSEC_AGENT_DEBUG",
-];
-
-const COMMAND_ENV_KEYS: Record<string, string[]> = {
-  enrich: ["PEOPLE_SH_BYPASS", "OWNERSHIP_AUTH_TOKEN"],
-};
+const SANDBOX_ENV_KEYS: string[] = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "DEEPSEC_AGENT_DEBUG"];
 
 /**
  * The Anthropic / OpenAI SDKs throw at construction if no auth token is set.
@@ -101,16 +93,11 @@ const PROXY_SCRIPT_BY_MODE: Record<DeepsecMode, string> = {
 const CODEX_HOME = "/vercel/sandbox/.codex";
 
 export function buildSandboxEnv(
-  command: string | undefined,
   agentType: string | undefined,
   credentials: BrokeredCredentials,
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  const keys = new Set([
-    ...BASE_SANDBOX_ENV_KEYS,
-    ...(command ? (COMMAND_ENV_KEYS[command] ?? []) : []),
-  ]);
-  for (const key of keys) {
+  for (const key of SANDBOX_ENV_KEYS) {
     if (key in process.env) env[key] = process.env[key]!;
   }
 
@@ -220,7 +207,6 @@ export function buildWorkerNetworkPolicy(
 
 interface BootstrapOptions {
   projectId: string;
-  command?: string;
   /** Which agent backend the workers will run — drives which native binary we install */
   agentType?: string;
   vcpus: number;
@@ -238,13 +224,12 @@ interface BootstrapOptions {
  * to avoid leaking compute.
  */
 export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<string> {
-  const command = opts.command ?? "process";
   const agentType = opts.agentType ?? "claude-agent-sdk";
   // Bootstrap doesn't make AI calls — it just installs deps and snapshots.
   // We pass empty credentials so no placeholder tokens are written into the
   // snapshot env; workers spawned from the snapshot get fresh placeholders
   // tied to whatever the orchestrator's credentials are at spawn time.
-  const sandboxEnv = buildSandboxEnv(command, agentType, {});
+  const sandboxEnv = buildSandboxEnv(agentType, {});
 
   opts.onLog("Creating bootstrap sandbox...");
   let sandbox: Sandbox;
@@ -338,7 +323,6 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
 
 interface SpawnOptions {
   snapshotId: string;
-  command?: string;
   /** Drives which API base URL gets rewritten to the local proxy */
   agentType?: string;
   vcpus: number;
@@ -363,7 +347,7 @@ export async function spawnFromSnapshot(opts: SpawnOptions): Promise<Sandbox> {
   // Reading process.env directly here keeps the real token out of any data
   // structure that's later passed to Sandbox.create({ env }).
   const credentials = resolveBrokeredCredentials(opts.agentType);
-  const sandboxEnv = buildSandboxEnv(opts.command, opts.agentType, credentials);
+  const sandboxEnv = buildSandboxEnv(opts.agentType, credentials);
   const networkPolicy = buildWorkerNetworkPolicy(
     sandboxEnv,
     opts.agentType,

@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import type { FileRecord, Finding, RefusalReport } from "@deepsec/core";
 import type { InvestigateResult, RevalidateVerdict } from "./types.js";
 
@@ -207,20 +207,25 @@ export function buildRevalidatePrompt(params: {
       .join("\n\n");
 
     let gitContext = "";
-    try {
-      const gitLog = execSync(
-        `git log --oneline --since="3 months ago" -n 10 -- "${file.filePath}"`,
-        {
-          cwd: projectRoot,
-          encoding: "utf-8",
-          timeout: 10_000,
-          stdio: ["ignore", "pipe", "ignore"],
-        },
-      ).trim();
+    // argv form (no shell) — file.filePath comes from glob output and may
+    // contain shell metacharacters (`;`, `$`, backticks). Passing it as a
+    // single argv slot keeps it from being re-parsed as a command.
+    const gitResult = spawnSync(
+      "git",
+      ["log", "--oneline", "--since=3 months ago", "-n", "10", "--", file.filePath],
+      {
+        cwd: projectRoot,
+        encoding: "utf-8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    if (gitResult.status === 0) {
+      const gitLog = (gitResult.stdout ?? "").trim();
       if (gitLog) {
         gitContext = `\n**Recent git history:**\n\`\`\`\n${gitLog}\n\`\`\`\n`;
       }
-    } catch {}
+    }
 
     fileSections.push(`## File: ${file.filePath}\n\n${findingsList}\n${gitContext}`);
   }

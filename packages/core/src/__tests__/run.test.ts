@@ -4,7 +4,7 @@ import { createRunMeta, generateRunId } from "../run.js";
 describe("generateRunId", () => {
   it("returns a string with timestamp and suffix", () => {
     const id = generateRunId();
-    expect(id).toMatch(/^\d{14}-[a-f0-9]{4}$/);
+    expect(id).toMatch(/^\d{14}-[a-f0-9]{16}$/);
   });
 
   it("generates unique IDs", () => {
@@ -27,7 +27,7 @@ describe("createRunMeta", () => {
     expect(meta.phase).toBe("running");
     expect(meta.scannerConfig?.matcherSlugs).toEqual(["xss", "rce"]);
     expect(meta.stats).toEqual({});
-    expect(meta.runId).toMatch(/^\d{14}-[a-f0-9]{4}$/);
+    expect(meta.runId).toMatch(/^\d{14}-[a-f0-9]{16}$/);
   });
 
   it("creates a process RunMeta", () => {

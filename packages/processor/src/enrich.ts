@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import type { FileRecord, Severity } from "@deepsec/core";
 import {
@@ -61,29 +61,34 @@ export function enrichFileRecord(record: FileRecord, rootPath: string): void {
 
 function getRecentCommitters(rootPath: string, filePath: string, count: number = 5): Committer[] {
   const absPath = path.join(rootPath, filePath);
-  try {
-    const output = execSync(`git log --pretty=format:"%an\t%ae\t%aI" -n ${count} -- "${absPath}"`, {
+  // argv form (no shell). filePath comes from glob output and may contain
+  // shell metacharacters; absPath inherits them. Passing as a single argv
+  // slot keeps it from being re-parsed as a command.
+  const result = spawnSync(
+    "git",
+    ["log", "--pretty=format:%an\t%ae\t%aI", "-n", String(count), "--", absPath],
+    {
       cwd: rootPath,
       encoding: "utf-8",
       timeout: 10_000,
       // Silence stderr — on sandboxes we strip .git so every call fails;
-      // the catch below handles the empty result cleanly.
+      // empty output below handles cleanly.
       stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (!output.trim()) return [];
+    },
+  );
+  if (result.status !== 0) return [];
+  const output = result.stdout ?? "";
+  if (!output.trim()) return [];
 
-    // Dedupe by email, keep most recent
-    const seen = new Map<string, Committer>();
-    for (const line of output.trim().split("\n")) {
-      const [name, email, date] = line.split("\t");
-      if (name && email && date && !seen.has(email)) {
-        seen.set(email, { name, email, date });
-      }
+  // Dedupe by email, keep most recent
+  const seen = new Map<string, Committer>();
+  for (const line of output.trim().split("\n")) {
+    const [name, email, date] = line.split("\t");
+    if (name && email && date && !seen.has(email)) {
+      seen.set(email, { name, email, date });
     }
-    return Array.from(seen.values()).slice(0, count);
-  } catch {
-    return [];
   }
+  return Array.from(seen.values()).slice(0, count);
 }
 
 /**
@@ -98,21 +103,22 @@ function buildGitCommitterIndex(
   const index = new Map<string, Committer[]>();
   const count = opts.count ?? 5;
   const since = opts.since ?? "1 year ago";
-  let output: string;
-  try {
-    output = execSync(
-      `git log --since=${JSON.stringify(since)} --pretty=format:"COMMIT%x09%an%x09%ae%x09%aI" --name-only -- .`,
-      {
-        cwd: rootPath,
-        encoding: "utf-8",
-        maxBuffer: 2 * 1024 * 1024 * 1024, // 2 GB — large monorepos push past the default 1 MB
-        timeout: 5 * 60 * 1000,
-        stdio: ["ignore", "pipe", "ignore"],
-      },
-    );
-  } catch {
-    return index;
-  }
+  // argv form (no shell). The `since` value is hardcoded today, but a
+  // future caller passing user input would otherwise inject through the
+  // template literal.
+  const result = spawnSync(
+    "git",
+    ["log", `--since=${since}`, "--pretty=format:COMMIT\t%an\t%ae\t%aI", "--name-only", "--", "."],
+    {
+      cwd: rootPath,
+      encoding: "utf-8",
+      maxBuffer: 2 * 1024 * 1024 * 1024, // 2 GB — large monorepos push past the default 1 MB
+      timeout: 5 * 60 * 1000,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) return index;
+  const output = result.stdout ?? "";
   let cur: Committer | null = null;
   for (const line of output.split("\n")) {
     if (line.startsWith("COMMIT\t")) {

@@ -1,7 +1,9 @@
 import type { Sandbox } from "@vercel/sandbox";
 
-/** Supported subcommands for sandbox execution */
-export type SandboxSubcommand = "process" | "revalidate" | "triage" | "enrich" | "scan" | "report";
+/** Supported subcommands for sandbox execution. `enrich` is intentionally
+ * absent — enrichment runs locally (git committer lookups + plugin ownership
+ * calls) and isn't AI-bound, so the fan-out cost outweighs the benefit. */
+export type SandboxSubcommand = "process" | "revalidate" | "triage" | "scan" | "report";
 
 export interface SandboxConfig {
   projectId: string;
@@ -29,7 +31,7 @@ export interface SandboxConfig {
   keepAlive: boolean;
   /** Re-investigate already-analyzed files. `true` = all, number = files with < N analyses */
   reinvestigate: boolean | number;
-  /** Force re-check (for revalidate, triage, enrich) */
+  /** Force re-check (for revalidate, triage) */
   force: boolean;
   /** Min severity filter (for revalidate, triage) */
   minSeverity?: string;

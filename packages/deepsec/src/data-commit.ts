@@ -1,8 +1,20 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { getDataRoot } from "@deepsec/core";
 
-const DATA_DIR = path.resolve("data");
-const DATA_BRANCH = process.env.DEEPSEC_DATA_BRANCH ?? "main";
+const DATA_DIR = path.resolve(getDataRoot());
+
+// A git ref name. Validated up front so we can pass DATA_BRANCH to git
+// without the shell interpreting `;`/`$(...)` etc. — git itself rejects
+// many of these but we don't rely on that.
+const REF_RE = /^[A-Za-z0-9._/-]+$/;
+const RAW_BRANCH = process.env.DEEPSEC_DATA_BRANCH ?? "main";
+if (!REF_RE.test(RAW_BRANCH)) {
+  throw new Error(
+    `Invalid DEEPSEC_DATA_BRANCH ${JSON.stringify(RAW_BRANCH)}: must match ${REF_RE}.`,
+  );
+}
+const DATA_BRANCH = RAW_BRANCH;
 
 /**
  * Commit any changes in the data repo and push to origin.
@@ -13,7 +25,7 @@ export function commitAndPushData(message: string): boolean {
   // execSync buffer with a single `git status --porcelain` call.
   const MAX_BUFFER = 256 * 1024 * 1024;
 
-  const status = execSync("git status --porcelain", {
+  const status = execFileSync("git", ["status", "--porcelain"], {
     cwd: DATA_DIR,
     encoding: "utf-8",
     timeout: 10000,
@@ -22,13 +34,15 @@ export function commitAndPushData(message: string): boolean {
 
   if (!status) return false;
 
-  execSync("git add -A", {
+  execFileSync("git", ["add", "-A"], {
     cwd: DATA_DIR,
     encoding: "utf-8",
     timeout: 60000,
     maxBuffer: MAX_BUFFER,
   });
-  execSync(`git commit -m ${JSON.stringify(message)}`, {
+  // argv form so `message` (and any caller-derived value like projectId)
+  // is never re-parsed by a shell.
+  execFileSync("git", ["commit", "-m", message], {
     cwd: DATA_DIR,
     encoding: "utf-8",
     timeout: 60000,
@@ -38,13 +52,13 @@ export function commitAndPushData(message: string): boolean {
   let retries = 3;
   while (retries > 0) {
     try {
-      execSync(`git pull --rebase origin ${DATA_BRANCH}`, {
+      execFileSync("git", ["pull", "--rebase", "origin", DATA_BRANCH], {
         cwd: DATA_DIR,
         encoding: "utf-8",
         timeout: 30000,
         maxBuffer: MAX_BUFFER,
       });
-      execSync(`git push origin HEAD:${DATA_BRANCH}`, {
+      execFileSync("git", ["push", "origin", `HEAD:${DATA_BRANCH}`], {
         cwd: DATA_DIR,
         encoding: "utf-8",
         timeout: 30000,

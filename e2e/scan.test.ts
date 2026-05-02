@@ -26,7 +26,7 @@ describe("scan e2e", () => {
       root: FIXTURES,
     });
 
-    expect(result.runId).toMatch(/^\d{14}-[a-f0-9]{4}$/);
+    expect(result.runId).toMatch(/^\d{14}-[a-f0-9]{16}$/);
     expect(result.candidateCount).toBeGreaterThanOrEqual(5);
 
     // Verify project.json exists

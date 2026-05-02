@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadAllFileRecords } from "@deepsec/core";
+import { getDataRoot, loadAllFileRecords } from "@deepsec/core";
 import { BOLD, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
 
 const SEVERITY_ORDER: Record<string, number> = {
@@ -25,7 +25,7 @@ interface ProjectMetrics {
 }
 
 function discoverProjects(): string[] {
-  const dataDir = path.resolve("data");
+  const dataDir = path.resolve(getDataRoot());
   if (!fs.existsSync(dataDir)) return [];
   return fs
     .readdirSync(dataDir, { withFileTypes: true })
