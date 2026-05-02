@@ -54,7 +54,14 @@ export async function makeTarball(
   onLog?: (msg: string) => void,
 ): Promise<TarballStats> {
   const started = Date.now();
-  const isGit = fs.existsSync(path.join(sourceDir, ".git"));
+  // Callers pass sourceDir as either an absolute or a process-cwd-relative
+  // path (e.g. `data/<id>` from dataDir()). Resolve once so the spawn's
+  // `cwd` and tar's `-C` arg can't disagree — passing a relative cwd to
+  // spawn AND a relative `-C` to tar would double-apply: the child's
+  // process.cwd() becomes `<process.cwd()>/<sourceDir>`, then tar's
+  // `-C <sourceDir>` chdirs again to `<process.cwd()>/<sourceDir>/<sourceDir>`.
+  const absSourceDir = path.resolve(sourceDir);
+  const isGit = fs.existsSync(path.join(absSourceDir, ".git"));
 
   if (isGit) {
     onLog?.(`Tarballing ${sourceDir} (using git ls-files)...`);
@@ -85,27 +92,29 @@ export async function makeTarball(
       // locally without committing), so we filter by fs.existsSync before
       // handing the list to tar — otherwise tar errors on the missing files.
       const raw = execSync("git ls-files --cached --others --exclude-standard -z", {
-        cwd: sourceDir,
+        cwd: absSourceDir,
         maxBuffer: 512 * 1024 * 1024,
       });
       const paths = raw.toString("utf8").split("\0").filter(Boolean);
-      const existing = paths.filter((p) => fs.existsSync(path.join(sourceDir, p)));
+      const existing = paths.filter((p) => fs.existsSync(path.join(absSourceDir, p)));
       const skipped = paths.length - existing.length;
       if (skipped > 0) {
         onLog?.(`  (skipped ${skipped} tracked-but-deleted file(s))`);
       }
       const filtered = Buffer.from(existing.join("\0") + "\0");
 
-      // Set both `cwd: sourceDir` AND `-C sourceDir`. They're equivalent
-      // when production hits the non-git branch (where `-C` is processed
-      // before the `.` file arg), but in the git branch GNU tar reads
-      // paths from `-T -` in argv order — if `-C sourceDir` lands AFTER
-      // `-T -`, tar starts statting paths against the inherited cwd
-      // before the chdir takes effect. Setting `cwd` on the spawn fixes
-      // the initial dir; the `-C` arg stays as a redundant safety net so
-      // production behavior is byte-for-byte identical to before.
-      const tar = spawn("tar", ["-czf", "-", "--null", "-T", "-", "-C", sourceDir], {
-        cwd: sourceDir,
+      // Set both `cwd: absSourceDir` AND `-C absSourceDir`. They're
+      // equivalent when production hits the non-git branch (where `-C`
+      // is processed before the `.` file arg), but in the git branch
+      // GNU tar reads paths from `-T -` in argv order — if `-C` lands
+      // AFTER `-T -`, tar starts statting paths against the inherited
+      // cwd before the chdir takes effect. Setting `cwd` on the spawn
+      // fixes the initial dir; the `-C` arg stays as a redundant safety
+      // net. Both must be absolute so a relative sourceDir doesn't
+      // double-apply (spawn cwd resolves `data/x` against process.cwd
+      // → relative `-C data/x` would then chdir again).
+      const tar = spawn("tar", ["-czf", "-", "--null", "-T", "-", "-C", absSourceDir], {
+        cwd: absSourceDir,
         stdio: ["pipe", "pipe", "pipe"],
       });
       tar.stdout.on("data", (c: Buffer) => chunks.push(c));
@@ -116,11 +125,13 @@ export async function makeTarball(
       tar.stdin.end();
     } else {
       // Same belt-and-suspenders pairing as the git branch above. Here
-      // `-C sourceDir` already runs before `.` so the initial cwd never
-      // mattered for production — adding `cwd: sourceDir` doesn't change
-      // anything but keeps the two branches symmetric.
-      const tar = spawn("tar", ["-czf", "-", ...excludes, "-C", sourceDir, "."], {
-        cwd: sourceDir,
+      // `-C` already runs before `.` so the initial cwd never mattered
+      // for production — adding `cwd` doesn't change anything but keeps
+      // the two branches symmetric. Absolute paths everywhere (see
+      // absSourceDir comment above) so relative sourceDirs don't
+      // double-apply.
+      const tar = spawn("tar", ["-czf", "-", ...excludes, "-C", absSourceDir, "."], {
+        cwd: absSourceDir,
         stdio: ["ignore", "pipe", "pipe"],
       });
       tar.stdout.on("data", (c: Buffer) => chunks.push(c));
