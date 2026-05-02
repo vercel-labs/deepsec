@@ -77,7 +77,7 @@ export function initCommand(opts: InitOpts) {
   console.log("Next:\n");
   if (wsRel !== ".") console.log(`  cd ${wsRel}`);
   console.log(`  pnpm install                          ${DIM}# installs deepsec${RESET}`);
-  console.log(`  ${DIM}# Set ANTHROPIC_AUTH_TOKEN in .env.local${RESET}`);
+  console.log(`  ${DIM}# Set AI_GATEWAY_API_KEY in .env.local${RESET}`);
   console.log();
   console.log(
     `  ${YELLOW}Paste this into your coding agent${RESET} ${DIM}(Claude Code, Cursor, Codex CLI):${RESET}`,
@@ -262,8 +262,10 @@ The deepsec skill is at \`node_modules/deepsec/SKILL.md\` (after
 }
 
 function envLocal(): string {
-  return `ANTHROPIC_AUTH_TOKEN=
-ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh
+  // One-line gateway setup. deepsec expands AI_GATEWAY_API_KEY at startup
+  // into ANTHROPIC_AUTH_TOKEN / OPENAI_API_KEY / *_BASE_URL, so a user
+  // who only has a gateway key is fully wired with this single line.
+  return `AI_GATEWAY_API_KEY=
 `;
 }
 

@@ -26,10 +26,11 @@ prompt), workspace-level `AGENTS.md`, `.env.local`, `.gitignore`. No
 custom matchers in the scaffold — add those later, only when a real
 finding shapes one for you.
 
-Open `.env.local` and fill in `ANTHROPIC_AUTH_TOKEN`. Get one from
-[Vercel AI Gateway](https://vercel.com/ai-gateway) (one token covers
-Claude and Codex) or set `ANTHROPIC_BASE_URL=https://api.anthropic.com`
-to use Anthropic directly. See [vercel-setup.md](vercel-setup.md).
+Open `.env.local` and fill in `AI_GATEWAY_API_KEY`. Get one from
+[Vercel AI Gateway](https://vercel.com/ai-gateway) — one token covers
+both Claude and Codex. Prefer Anthropic directly? Set
+`ANTHROPIC_AUTH_TOKEN=sk-ant-…` and `ANTHROPIC_BASE_URL=https://api.anthropic.com`
+instead. See [vercel-setup.md](vercel-setup.md).
 
 To scan a *different* codebase from the same `.deepsec/`, run
 `pnpm deepsec init-project <path>` — relative paths resolve against

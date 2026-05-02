@@ -29,15 +29,16 @@ Full reference:
 Edit `.env.local` in your scanning workspace:
 
 ```bash
-ANTHROPIC_AUTH_TOKEN=vck_…
-ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh
+AI_GATEWAY_API_KEY=vck_…
 ```
 
-That's it. The Claude Agent SDK sends the token via the bearer header
-the gateway expects, so the AI Gateway key works as the
-`ANTHROPIC_AUTH_TOKEN`. The same key also routes Codex (`--agent
-codex`) — deepsec falls back to `ANTHROPIC_AUTH_TOKEN` when
-`OPENAI_API_KEY` is unset, so you don't need a second token.
+That's it. deepsec expands this at startup into the four vars the
+agent SDKs read (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`,
+`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`), so the same key covers both
+Claude (`--agent claude-agent-sdk`, the default) and Codex
+(`--agent codex`). Any of those four vars you set explicitly takes
+precedence over the gateway expansion — useful for mixing direct
+Anthropic with gateway-routed OpenAI, etc.
 
 ### BYOK (optional)
 
@@ -123,7 +124,7 @@ vars (access token).
 
 | Symptom | Likely cause |
 |---|---|
-| `401` from `process` / `revalidate` | `ANTHROPIC_AUTH_TOKEN` not loaded — confirm `.env.local` is in the cwd deepsec runs from. |
+| `401` from `process` / `revalidate` | `AI_GATEWAY_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) not loaded — confirm `.env.local` is in the cwd deepsec runs from. |
 | Sandbox spawn fails with auth error | OIDC token expired (12 h) — re-run `vercel env pull`. Or fall back to access-token mode. |
-| `OPENAI_API_KEY missing` on `--agent codex` | Set `OPENAI_API_KEY` explicitly *or* leave it unset and let deepsec fall back to `ANTHROPIC_AUTH_TOKEN` against the gateway. |
+| `Missing AI credentials for --agent codex` | Set `AI_GATEWAY_API_KEY` (covers both backends) or `OPENAI_API_KEY` directly. |
 | Findings missing cost in the log | Pricing entry missing for a non-default Codex model. See [models.md](models.md#future-models-eg-anthropic-mythos). |

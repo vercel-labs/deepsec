@@ -10,6 +10,33 @@
 
 const SETUP_DOC = "docs/vercel-setup.md";
 
+// Vercel AI Gateway endpoints. The Anthropic adapter is at the root; the
+// OpenAI-compatible adapter is at /v1 (codex appends /responses to it).
+const GATEWAY_ANTHROPIC_BASE_URL = "https://ai-gateway.vercel.sh";
+const GATEWAY_OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
+
+/**
+ * If the user set `AI_GATEWAY_API_KEY`, expand it into the four env vars
+ * the agent SDKs actually read. Lets a user run with a single token
+ * instead of duplicating it across `ANTHROPIC_AUTH_TOKEN` /
+ * `OPENAI_API_KEY` (the gateway accepts the same token for both).
+ *
+ * Existing values always win — this only fills in what's missing, so a
+ * user who has set, say, `ANTHROPIC_BASE_URL=https://api.anthropic.com`
+ * for direct-to-provider access doesn't get silently rerouted.
+ *
+ * Call this once at CLI startup (after dotenv loads .env.local), before
+ * any module reads these vars.
+ */
+export function applyAiGatewayDefaults(): void {
+  const key = process.env.AI_GATEWAY_API_KEY;
+  if (!key) return;
+  if (!process.env.ANTHROPIC_AUTH_TOKEN) process.env.ANTHROPIC_AUTH_TOKEN = key;
+  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
+  if (!process.env.ANTHROPIC_BASE_URL) process.env.ANTHROPIC_BASE_URL = GATEWAY_ANTHROPIC_BASE_URL;
+  if (!process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = GATEWAY_OPENAI_BASE_URL;
+}
+
 function isCodex(agentType: string | undefined): boolean {
   return agentType === "codex";
 }

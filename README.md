@@ -94,14 +94,16 @@ Both agent backends route through Vercel AI Gateway by default, but you can prov
 your own API keys, of course. The AI Gateway has default quotas suitable for highly concurrent research.
 
 ```
-ANTHROPIC_AUTH_TOKEN=vck_...
-ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh
-OPENAI_BASE_URL=https://ai-gateway.vercel.sh/v1
+AI_GATEWAY_API_KEY=vck_...
 ```
 
-See [docs/vercel-setup.md](docs/vercel-setup.md) for getting a key
-and for the Vercel Sandbox setup. To bypass the gateway, define
-`ANTHROPIC_BASE_URL` or `OPENAI_API_KEY` with their respective provider values.
+That single key covers both Claude and Codex; deepsec expands it into
+the `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` / `*_BASE_URL` quartet
+the SDKs read. See [docs/vercel-setup.md](docs/vercel-setup.md) for
+getting a key and for the Vercel Sandbox setup. To bypass the
+gateway, set `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` (or the
+OpenAI pair) explicitly — explicit values always win over the
+`AI_GATEWAY_API_KEY` expansion.
 
 ## Severity levels
 

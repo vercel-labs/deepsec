@@ -99,17 +99,21 @@ from the process environment.
 
 ### Required
 
+You need either the one-line shortcut **or** an explicit token for the
+backend you're using.
+
 | Var | Used by | Purpose |
 |---|---|---|
-| `ANTHROPIC_AUTH_TOKEN` | `process`, `revalidate`, `triage` (Claude backend) | API token for the Claude Agent SDK. AI Gateway-issued or Anthropic-issued. |
-| `ANTHROPIC_BASE_URL` | same | Default: `https://ai-gateway.vercel.sh`. Set to `https://api.anthropic.com` for direct Anthropic. |
+| `AI_GATEWAY_API_KEY` | all AI commands | Shortcut. Expands at CLI startup into `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` — one key covers both Claude and Codex through Vercel AI Gateway. Any of those four vars set explicitly takes precedence. |
+| `ANTHROPIC_AUTH_TOKEN` | `process`, `revalidate`, `triage` (Claude backend) | API token for the Claude Agent SDK. AI Gateway-issued or Anthropic-issued. Set this if you don't use `AI_GATEWAY_API_KEY`. |
+| `ANTHROPIC_BASE_URL` | same | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh`. Set to `https://api.anthropic.com` for direct Anthropic. |
 
 ### Optional
 
 | Var | Used by | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | `--agent codex` | Codex SDK token. Unset is fine if Codex routes through AI Gateway with the Anthropic token. |
-| `OPENAI_BASE_URL` | `--agent codex` | Default: `https://ai-gateway.vercel.sh/v1`. |
+| `OPENAI_API_KEY` | `--agent codex` | Codex SDK token. Unset is fine if `AI_GATEWAY_API_KEY` is set, or if Codex routes through AI Gateway with the Anthropic token. |
+| `OPENAI_BASE_URL` | `--agent codex` | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh/v1`. |
 | `DEEPSEC_AGENT_DEBUG` | both backends | Set to `1` to enable verbose agent logging. |
 | `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Equivalent to `dataDir` in config. |
 
