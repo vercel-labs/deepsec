@@ -96,7 +96,16 @@ export async function makeTarball(
       }
       const filtered = Buffer.from(existing.join("\0") + "\0");
 
+      // Set both `cwd: sourceDir` AND `-C sourceDir`. They're equivalent
+      // when production hits the non-git branch (where `-C` is processed
+      // before the `.` file arg), but in the git branch GNU tar reads
+      // paths from `-T -` in argv order — if `-C sourceDir` lands AFTER
+      // `-T -`, tar starts statting paths against the inherited cwd
+      // before the chdir takes effect. Setting `cwd` on the spawn fixes
+      // the initial dir; the `-C` arg stays as a redundant safety net so
+      // production behavior is byte-for-byte identical to before.
       const tar = spawn("tar", ["-czf", "-", "--null", "-T", "-", "-C", sourceDir], {
+        cwd: sourceDir,
         stdio: ["pipe", "pipe", "pipe"],
       });
       tar.stdout.on("data", (c: Buffer) => chunks.push(c));
@@ -106,7 +115,12 @@ export async function makeTarball(
       tar.stdin.write(filtered);
       tar.stdin.end();
     } else {
+      // Same belt-and-suspenders pairing as the git branch above. Here
+      // `-C sourceDir` already runs before `.` so the initial cwd never
+      // mattered for production — adding `cwd: sourceDir` doesn't change
+      // anything but keeps the two branches symmetric.
       const tar = spawn("tar", ["-czf", "-", ...excludes, "-C", sourceDir, "."], {
+        cwd: sourceDir,
         stdio: ["ignore", "pipe", "pipe"],
       });
       tar.stdout.on("data", (c: Buffer) => chunks.push(c));
