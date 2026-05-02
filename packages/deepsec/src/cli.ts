@@ -154,7 +154,10 @@ program
 program
   .command("report")
   .description("Generate a markdown + JSON report from current analysis state.")
-  .option("--project-id <id>", "Project identifier (omit for all projects)")
+  .option(
+    "--project-id <id>",
+    "Project identifier (default: the only project in deepsec.config.ts; required if there are multiple)",
+  )
   .option("--run-id <id>", "Filter to a specific run's results")
   .action(reportCommand);
 

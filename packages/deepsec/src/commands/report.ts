@@ -2,16 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FileRecord, Finding, Severity } from "@deepsec/core";
 import { loadAllFileRecords, readProjectConfig, reportJsonPath, reportMdPath } from "@deepsec/core";
-import { BOLD, RESET, severityColor } from "../formatters.js";
+import { BOLD, DIM, RESET, severityColor } from "../formatters.js";
+import { resolveProjectId } from "../resolve-project-id.js";
 
-function discoverProjects(): string[] {
-  const dataDir = path.resolve("data");
-  if (!fs.existsSync(dataDir)) return [];
-  return fs
-    .readdirSync(dataDir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && fs.existsSync(path.join(dataDir, e.name, "project.json")))
-    .map((e) => e.name);
-}
+const ACTIONABLE_SEVERITIES: Severity[] = ["CRITICAL", "HIGH", "MEDIUM", "HIGH_BUG", "BUG"];
+const STDOUT_PER_SEVERITY_LIMIT = 10;
 
 function generateMarkdown(records: FileRecord[], projectId: string): string {
   const allFindings: (Finding & { filePath: string })[] = [];
@@ -91,58 +86,56 @@ function generateMarkdown(records: FileRecord[], projectId: string): string {
 }
 
 export async function reportCommand(opts: { projectId?: string; runId?: string }) {
-  const projectIds = opts.projectId ? [opts.projectId] : discoverProjects();
+  const projectId = resolveProjectId(opts.projectId);
 
-  let records: FileRecord[] = [];
-  for (const pid of projectIds) {
-    try {
-      readProjectConfig(pid);
-      records.push(...loadAllFileRecords(pid));
-    } catch {}
-  }
+  // readProjectConfig throws if data/<id>/project.json is missing — that's
+  // the right behavior here (you can't report on a project that's never
+  // been initialized).
+  readProjectConfig(projectId);
+  let records: FileRecord[] = loadAllFileRecords(projectId);
 
-  // Filter to specific run if requested
   if (opts.runId) {
     records = records.filter((r) => r.analysisHistory.some((a) => a.runId === opts.runId));
   }
-
-  // Only include records that have been analyzed
   records = records.filter((r) => r.status === "analyzed");
 
   if (records.length === 0) {
-    console.log("No analyzed files found. Run the processor first.");
+    console.log("No analyzed files found. Run `deepsec process` first.");
     return;
   }
 
-  if (!opts.projectId) {
-    console.log("JSON/Markdown reports require --project-id.");
-    return;
-  }
-
-  const allFindings = records.flatMap((r) => r.findings);
-  const bySeverity = {
-    CRITICAL: allFindings.filter((f) => f.severity === "CRITICAL"),
-    HIGH: allFindings.filter((f) => f.severity === "HIGH"),
-    MEDIUM: allFindings.filter((f) => f.severity === "MEDIUM"),
-    HIGH_BUG: allFindings.filter((f) => f.severity === "HIGH_BUG"),
-    BUG: allFindings.filter((f) => f.severity === "BUG"),
+  const findingsBySeverity: Record<Severity, (Finding & { filePath: string })[]> = {
+    CRITICAL: [],
+    HIGH: [],
+    MEDIUM: [],
+    HIGH_BUG: [],
+    BUG: [],
+    LOW: [],
   };
+  for (const r of records) {
+    for (const f of r.findings) {
+      findingsBySeverity[f.severity].push({ ...f, filePath: r.filePath });
+    }
+  }
+  const totalFindings = ACTIONABLE_SEVERITIES.reduce(
+    (sum, sev) => sum + findingsBySeverity[sev].length,
+    0,
+  );
 
-  // Write JSON report
-  const jsonPath = reportJsonPath(opts.projectId, opts.runId);
+  const jsonPath = reportJsonPath(projectId, opts.runId);
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
   const reportData = {
-    projectId: opts.projectId,
+    projectId,
     generatedAt: new Date().toISOString(),
     runId: opts.runId ?? null,
     summary: {
       filesAnalyzed: records.length,
-      totalFindings: allFindings.length,
-      critical: bySeverity.CRITICAL.length,
-      high: bySeverity.HIGH.length,
-      medium: bySeverity.MEDIUM.length,
-      highBug: bySeverity.HIGH_BUG.length,
-      bug: bySeverity.BUG.length,
+      totalFindings,
+      critical: findingsBySeverity.CRITICAL.length,
+      high: findingsBySeverity.HIGH.length,
+      medium: findingsBySeverity.MEDIUM.length,
+      highBug: findingsBySeverity.HIGH_BUG.length,
+      bug: findingsBySeverity.BUG.length,
     },
     files: records.map((r) => ({
       filePath: r.filePath,
@@ -152,21 +145,73 @@ export async function reportCommand(opts: { projectId?: string; runId?: string }
   };
   fs.writeFileSync(jsonPath, JSON.stringify(reportData, null, 2) + "\n");
 
-  // Write markdown report
-  const mdPath = reportMdPath(opts.projectId, opts.runId);
-  const markdown = generateMarkdown(records, opts.projectId);
-  fs.writeFileSync(mdPath, markdown);
+  const mdPath = reportMdPath(projectId, opts.runId);
+  fs.writeFileSync(mdPath, generateMarkdown(records, projectId));
 
-  // Print summary
-  console.log(`${BOLD}Report generated${RESET}`);
+  printStdoutSummary({
+    projectId,
+    runId: opts.runId,
+    records,
+    findingsBySeverity,
+    totalFindings,
+    jsonPath,
+    mdPath,
+  });
+}
+
+function printStdoutSummary(args: {
+  projectId: string;
+  runId?: string;
+  records: FileRecord[];
+  findingsBySeverity: Record<Severity, (Finding & { filePath: string })[]>;
+  totalFindings: number;
+  jsonPath: string;
+  mdPath: string;
+}) {
+  const { projectId, runId, records, findingsBySeverity, totalFindings, jsonPath, mdPath } = args;
+  const date = new Date().toISOString().slice(0, 10);
+
   console.log();
-  for (const severity of ["CRITICAL", "HIGH", "MEDIUM", "HIGH_BUG", "BUG"] as const) {
-    const count = bySeverity[severity].length;
-    if (count > 0) {
-      console.log(`  ${severityColor(severity)}${severity}${RESET}: ${count}`);
+  console.log(`${BOLD}Vulnerability scan report — ${projectId}${RESET}`);
+  console.log(`${DIM}Generated ${date}${runId ? ` · run ${runId}` : ""}${RESET}`);
+  console.log();
+  console.log(`  Files analyzed: ${records.length}`);
+  console.log(`  Findings:       ${totalFindings}`);
+  console.log();
+
+  // Severity breakdown — show every actionable severity even if zero so the
+  // reader sees the shape of the result, not just what fired.
+  for (const severity of ACTIONABLE_SEVERITIES) {
+    const count = findingsBySeverity[severity].length;
+    const padded = severity.padEnd(8);
+    const color = count > 0 ? severityColor(severity) : DIM;
+    console.log(`  ${color}${padded}${RESET}  ${count}`);
+  }
+
+  // Top findings, severity-ordered. Skips false-positive/fixed verdicts —
+  // those are noise once revalidate has run.
+  for (const severity of ACTIONABLE_SEVERITIES) {
+    const findings = findingsBySeverity[severity].filter((f) => {
+      const v = f.revalidation?.verdict;
+      return v !== "false-positive" && v !== "fixed";
+    });
+    if (findings.length === 0) continue;
+
+    console.log();
+    console.log(`${severityColor(severity)}${BOLD}${severity}${RESET} (${findings.length})`);
+    for (const f of findings.slice(0, STDOUT_PER_SEVERITY_LIMIT)) {
+      const lines = f.lineNumbers.length > 0 ? `:${f.lineNumbers[0]}` : "";
+      console.log(`  • ${f.title}`);
+      console.log(`    ${DIM}${f.filePath}${lines}${RESET}`);
+    }
+    const remaining = findings.length - STDOUT_PER_SEVERITY_LIMIT;
+    if (remaining > 0) {
+      console.log(`    ${DIM}… and ${remaining} more${RESET}`);
     }
   }
+
   console.log();
-  console.log(`  JSON: ${jsonPath}`);
-  console.log(`  Markdown: ${mdPath}`);
+  console.log(`${DIM}Reports written:${RESET}`);
+  console.log(`  ${jsonPath}`);
+  console.log(`  ${mdPath}`);
 }
