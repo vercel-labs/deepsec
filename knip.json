@@ -18,11 +18,7 @@
       "entry": ["src/__tests__/**/*.test.ts"]
     },
     "packages/deepsec": {
-      "entry": [
-        "src/config.ts",
-        "src/sandbox/request-proxy.mjs!",
-        "src/__tests__/**/*.test.ts"
-      ]
+      "entry": ["src/config.ts", "src/sandbox/request-proxy.mjs!", "src/__tests__/**/*.test.ts"]
     }
   },
   "ignore": ["fixtures/vulnerable-app/**", "samples/**"],
