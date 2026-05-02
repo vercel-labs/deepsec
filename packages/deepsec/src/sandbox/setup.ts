@@ -1,4 +1,4 @@
-import { type NetworkPolicy, Sandbox } from "@vercel/sandbox";
+import { type NetworkPolicy, type NetworkPolicyRule, Sandbox } from "@vercel/sandbox";
 import { markSetupComplete } from "./download.js";
 import { trackSandbox, untrackSandbox } from "./shutdown.js";
 import { extractTarballOnSandbox, type TarballStats, uploadTarballToSandbox } from "./upload.js";
@@ -36,11 +36,13 @@ export interface UploadBundle {
 
 // --- Sandbox env vars ---
 
+// Routing / debug knobs the agent reads inside the sandbox. AI credential
+// env vars (ANTHROPIC_AUTH_TOKEN, OPENAI_API_KEY, AI_GATEWAY_API_KEY) are
+// deliberately absent — they're brokered via firewall header injection
+// (see resolveBrokeredCredentials + buildWorkerNetworkPolicy below) so a
+// compromised in-VM agent can't read them out of /proc/<pid>/environ.
 const BASE_SANDBOX_ENV_KEYS: string[] = [
-  "AI_GATEWAY_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
-  "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
   "DEEPSEC_AGENT_DEBUG",
 ];
@@ -48,6 +50,42 @@ const BASE_SANDBOX_ENV_KEYS: string[] = [
 const COMMAND_ENV_KEYS: Record<string, string[]> = {
   enrich: ["PEOPLE_SH_BYPASS", "OWNERSHIP_AUTH_TOKEN"],
 };
+
+/**
+ * The Anthropic / OpenAI SDKs throw at construction if no auth token is set.
+ * We need *something* in env so the SDK builds, but the value must not be a
+ * real secret — the firewall transform below replaces it on every outbound
+ * request. Deliberately recognizable so a curious greppy reader knows it's
+ * a decoy. Length is set to keep the agent SDK's "looks like a token" sniff
+ * tests happy without resembling any real provider format.
+ */
+const BROKERED_TOKEN_PLACEHOLDER = "deepsec-sandbox-brokered-credential";
+
+/**
+ * Real credentials live on the orchestrator host only. The sandbox sees a
+ * placeholder; the firewall replaces the Authorization header at egress
+ * with the real token.
+ */
+interface BrokeredCredentials {
+  anthropicToken?: string;
+  openaiToken?: string;
+}
+
+/**
+ * Resolve the orchestrator-side AI credentials that will be brokered into
+ * the sandbox. AI Gateway issues one token per team that authenticates both
+ * Claude and OpenAI traffic, so when only ANTHROPIC_AUTH_TOKEN is set and
+ * the worker is going to run codex, fall it back as the OpenAI token.
+ */
+export function resolveBrokeredCredentials(agentType: string | undefined): BrokeredCredentials {
+  const anthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  const explicitOpenai = process.env.OPENAI_API_KEY;
+  // Only borrow ANTHROPIC for OPENAI on the codex path — and only when the
+  // user hasn't pinned an explicit OpenAI key. Outside codex this fallback
+  // would never hit the network anyway, but scoping it keeps intent clear.
+  const openaiToken = explicitOpenai ?? (agentType === "codex" ? anthropicToken : undefined);
+  return { anthropicToken, openaiToken };
+}
 
 const PROXY_PORT = 8787;
 const PROXY_URL = `http://127.0.0.1:${PROXY_PORT}`;
@@ -62,7 +100,11 @@ const PROXY_SCRIPT_BY_MODE: Record<DeepsecMode, string> = {
 };
 const CODEX_HOME = "/vercel/sandbox/.codex";
 
-function buildSandboxEnv(command?: string, agentType?: string): Record<string, string> {
+export function buildSandboxEnv(
+  command: string | undefined,
+  agentType: string | undefined,
+  credentials: BrokeredCredentials,
+): Record<string, string> {
   const env: Record<string, string> = {};
   const keys = new Set([
     ...BASE_SANDBOX_ENV_KEYS,
@@ -70,6 +112,17 @@ function buildSandboxEnv(command?: string, agentType?: string): Record<string, s
   ]);
   for (const key of keys) {
     if (key in process.env) env[key] = process.env[key]!;
+  }
+
+  // Decoy tokens. Real values stay on the orchestrator host; the firewall
+  // transform overwrites Authorization at egress. We only emit a placeholder
+  // when the orchestrator actually has a real token to broker — otherwise
+  // we let the SDK fail loudly at init rather than 401 later from upstream.
+  if (credentials.anthropicToken) {
+    env["ANTHROPIC_AUTH_TOKEN"] = BROKERED_TOKEN_PLACEHOLDER;
+  }
+  if (credentials.openaiToken) {
+    env["OPENAI_API_KEY"] = BROKERED_TOKEN_PLACEHOLDER;
   }
 
   // Belt-and-suspenders alongside the worker egress firewall: the master
@@ -91,9 +144,6 @@ function buildSandboxEnv(command?: string, agentType?: string): Record<string, s
     if (!env["OPENAI_BASE_URL"] && env["ANTHROPIC_BASE_URL"]) {
       env["OPENAI_BASE_URL"] = env["ANTHROPIC_BASE_URL"];
     }
-    if (!env["OPENAI_API_KEY"] && env["ANTHROPIC_AUTH_TOKEN"]) {
-      env["OPENAI_API_KEY"] = env["ANTHROPIC_AUTH_TOKEN"];
-    }
   } else {
     const realBaseUrl = env["ANTHROPIC_BASE_URL"];
     if (realBaseUrl) {
@@ -104,14 +154,27 @@ function buildSandboxEnv(command?: string, agentType?: string): Record<string, s
   return env;
 }
 
-// --- Worker egress firewall ---
+// --- Worker egress firewall + credential brokering ---
 //
 // Workers should only reach the AI host the SDK/proxy actually forwards to.
 // We derive that from the upstream base URL already present in the env, and
 // fall back to the documented hosts when env parsing fails so we never end
 // up applying an effective deny-all by accident.
+//
+// On top of allowlisting, we use the SDK's per-domain `transform.headers`
+// feature to inject the Authorization header at the firewall layer. The
+// real bearer token never enters the VM — code inside the sandbox sees
+// only the BROKERED_TOKEN_PLACEHOLDER. The firewall's egress proxy MITMs
+// TLS using a Vercel-installed CA trusted by the sandbox image, so it can
+// rewrite headers on encrypted requests.
 
-const DEFAULT_AI_HOSTS = ["ai-gateway.vercel.sh", "api.anthropic.com", "api.openai.com"];
+// One default per backend — Claude agents never make OpenAI-host calls and
+// vice versa, so allowing both was over-permissive. Specifically, with
+// brokering on, allowing the off-backend host means the firewall would have
+// no rule to inject credentials there, but a curious agent could still try
+// to reach it; better to deny outright.
+const DEFAULT_ANTHROPIC_HOST = "api.anthropic.com";
+const DEFAULT_OPENAI_HOST = "api.openai.com";
 
 function hostFromUrl(u: string | undefined): string | null {
   if (!u) return null;
@@ -125,23 +188,32 @@ function hostFromUrl(u: string | undefined): string | null {
 export function buildWorkerNetworkPolicy(
   env: Record<string, string>,
   agentType: string | undefined,
+  credentials: BrokeredCredentials = {},
   extraAllow: string[] = [],
 ): NetworkPolicy {
-  const allow = new Set<string>(extraAllow);
+  const isCodex = agentType === "codex";
 
-  if (agentType === "codex") {
-    const h = hostFromUrl(env["OPENAI_BASE_URL"]);
-    if (h) allow.add(h);
-  } else {
-    const h = hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]);
-    if (h) allow.add(h);
+  // Single AI host per backend. Prefer derived from the base URL the agent
+  // will actually use; fall back to the provider's documented default when
+  // the user hasn't configured one.
+  const aiHost = isCodex
+    ? (hostFromUrl(env["OPENAI_BASE_URL"]) ?? DEFAULT_OPENAI_HOST)
+    : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ?? DEFAULT_ANTHROPIC_HOST);
+
+  // The fallback flips at resolveBrokeredCredentials — by here, openaiToken
+  // already carries the ANTHROPIC gateway token if the user only set that
+  // one and is running codex.
+  const injectToken = isCodex ? credentials.openaiToken : credentials.anthropicToken;
+
+  const allow: Record<string, NetworkPolicyRule[]> = {
+    [aiHost]: injectToken
+      ? [{ transform: [{ headers: { authorization: `Bearer ${injectToken}` } }] }]
+      : [],
+  };
+  for (const h of extraAllow) {
+    if (!(h in allow)) allow[h] = [];
   }
-
-  if (allow.size === 0) {
-    for (const h of DEFAULT_AI_HOSTS) allow.add(h);
-  }
-
-  return { allow: [...allow] };
+  return { allow };
 }
 
 // --- Bootstrap: one sandbox does full setup, snapshots, stops ---
@@ -168,7 +240,11 @@ interface BootstrapOptions {
 export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<string> {
   const command = opts.command ?? "process";
   const agentType = opts.agentType ?? "claude-agent-sdk";
-  const sandboxEnv = buildSandboxEnv(command, agentType);
+  // Bootstrap doesn't make AI calls — it just installs deps and snapshots.
+  // We pass empty credentials so no placeholder tokens are written into the
+  // snapshot env; workers spawned from the snapshot get fresh placeholders
+  // tied to whatever the orchestrator's credentials are at spawn time.
+  const sandboxEnv = buildSandboxEnv(command, agentType, {});
 
   opts.onLog("Creating bootstrap sandbox...");
   let sandbox: Sandbox;
@@ -281,8 +357,19 @@ interface SpawnOptions {
  * request-proxy that mediates outbound API traffic for the active agent.
  */
 export async function spawnFromSnapshot(opts: SpawnOptions): Promise<Sandbox> {
-  const sandboxEnv = buildSandboxEnv(opts.command, opts.agentType);
-  const networkPolicy = buildWorkerNetworkPolicy(sandboxEnv, opts.agentType, opts.allowedHosts);
+  // Resolve once. The same `credentials` object is the source of truth for
+  // (a) what placeholders to expose in the sandbox env (so the SDK builds)
+  // and (b) which Authorization header the firewall transform should inject.
+  // Reading process.env directly here keeps the real token out of any data
+  // structure that's later passed to Sandbox.create({ env }).
+  const credentials = resolveBrokeredCredentials(opts.agentType);
+  const sandboxEnv = buildSandboxEnv(opts.command, opts.agentType, credentials);
+  const networkPolicy = buildWorkerNetworkPolicy(
+    sandboxEnv,
+    opts.agentType,
+    credentials,
+    opts.allowedHosts,
+  );
 
   let sandbox: Sandbox;
   try {
