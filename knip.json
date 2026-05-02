@@ -2,7 +2,13 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["e2e/scan.test.ts", "e2e/bundle.test.ts", "e2e/vitest.config.ts"]
+      "entry": [
+        "e2e/scan.test.ts",
+        "e2e/bundle.test.ts",
+        "e2e/pipeline.test.ts",
+        "e2e/pipeline-sandbox.test.ts",
+        "e2e/vitest.config.ts"
+      ]
     },
     "packages/core": {},
     "packages/scanner": {

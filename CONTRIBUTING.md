@@ -46,6 +46,31 @@ All of build, test, lint, and knip must pass before a PR is mergeable.
 PRs that touch the publish surface (anything imported via `deepsec/config`)
 must also pass `pnpm test:bundle`.
 
+### Live-sandbox e2e (manual)
+
+`e2e/pipeline-sandbox.test.ts` runs the full pipeline against a real
+Vercel Sandbox, but with a stub agent inside the sandbox — exercises
+bootstrap snapshot, worker spawn, file upload/download, and result
+merge without spending model tokens. Gated on `DEEPSEC_E2E_LIVE_SANDBOX=1`
++ Vercel Sandbox credentials, so `pnpm test` skips it by default.
+
+- **In CI**: trigger the
+  [E2E live sandbox](.github/workflows/e2e-live-sandbox.yml) workflow
+  manually from GitHub Actions. Required repo secrets: `VERCEL_TOKEN`,
+  `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`. (No AI key needed.)
+- **Locally**, when working on sandbox code:
+  ```bash
+  VERCEL_OIDC_TOKEN=$(grep ^VERCEL_OIDC .deepsec/.env.local | cut -d= -f2) \
+  DEEPSEC_E2E_LIVE_SANDBOX=1 \
+    pnpm exec vitest run --project e2e e2e/pipeline-sandbox.test.ts
+  ```
+
+Run it before PRs that touch `packages/deepsec/src/sandbox/`. The
+stub-agent flow doesn't exercise the firewall's credential-brokering
+transform (no AI traffic flows), so PRs that touch that path
+specifically still warrant a one-off run with `--agent claude-agent-sdk`
++ an AI key.
+
 ## Adding a matcher
 
 Short version (full version in [docs/writing-matchers.md](docs/writing-matchers.md)):

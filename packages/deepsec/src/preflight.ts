@@ -41,13 +41,25 @@ function isCodex(agentType: string | undefined): boolean {
   return agentType === "codex";
 }
 
+// Built-in backends we know how to credential-check. Agents registered
+// via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
+// their own credential resolution, so we skip the check for anything
+// other than these.
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex"]);
+
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
  * Throws with a concrete pointer at .env.local when it doesn't — the
  * sandbox path brokers credentials via firewall header injection, but
  * that only works if the orchestrator actually has a token to inject.
+ *
+ * Skipped for plugin-supplied agents (`agentType` not in `KNOWN_BACKENDS`):
+ * those backends own their credential story. Tests use this to plug in a
+ * stub agent without setting fake env vars.
  */
 export function assertAgentCredential(agentType: string | undefined): void {
+  if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
+
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;
   const openai = process.env.OPENAI_API_KEY;
 

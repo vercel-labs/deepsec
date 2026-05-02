@@ -379,10 +379,14 @@ export async function spawnFromSnapshot(opts: SpawnOptions): Promise<Sandbox> {
   await markSetupComplete(sandbox);
 
   // The local request-proxy exists to strip `eager_input_streaming` from
-  // Anthropic-bound tool schemas (Bedrock rejects it). Codex talks directly
-  // to the gateway without any body mutation, so we skip the proxy entirely
-  // when agent=codex — saves a hop and avoids base-url rewriting bugs.
-  if (opts.agentType !== "codex") {
+  // Anthropic-bound tool schemas (Bedrock rejects it). Only the
+  // claude-agent-sdk backend needs it. Codex talks directly to the
+  // gateway without body mutation; custom plugin agents own their own
+  // transport. Allowlisting by name (rather than "everyone except codex")
+  // keeps a stub agent out of the proxy startup, which fails fast when
+  // ANTHROPIC_UPSTREAM_BASE_URL isn't set — letting the live-sandbox e2e
+  // run with no AI credentials.
+  if (opts.agentType === "claude-agent-sdk") {
     await startRequestProxy(sandbox, opts.mode, opts.onLog);
   }
 

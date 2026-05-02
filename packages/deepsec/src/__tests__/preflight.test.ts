@@ -45,6 +45,13 @@ describe("assertAgentCredential", () => {
   it("throws for codex when no token", () => {
     expect(() => assertAgentCredential("codex")).toThrow(/OPENAI_API_KEY/);
   });
+
+  it("skips the credential check for custom plugin agents", () => {
+    // Tests use this so a stub agent registered via plugins[] doesn't
+    // require fake ANTHROPIC_AUTH_TOKEN env vars.
+    expect(() => assertAgentCredential("stub")).not.toThrow();
+    expect(() => assertAgentCredential("anything-else")).not.toThrow();
+  });
 });
 
 describe("assertSandboxCredential", () => {

@@ -277,7 +277,7 @@ export function initProjectCommand(opts: {
     `${GREEN}✓${RESET} Added project ${BOLD}${result.id}${RESET} → ${result.targetRel}\n`,
   );
   console.log(
-    `  ${YELLOW}Paste this into your coding agent${RESET} ${DIM}(Claude Code, Cursor, Codex CLI):${RESET}`,
+    `  ${YELLOW}Paste this into your coding agent${RESET} ${DIM}(Claude Code, Cursor, Codex, OpenCode, Pi, etc.):${RESET}`,
   );
   console.log();
   printAgentPrompt(result.id, result.targetRel);

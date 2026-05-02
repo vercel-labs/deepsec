@@ -1,0 +1,62 @@
+name: E2E live sandbox
+
+# Manual-only. Runs e2e/pipeline-sandbox.test.ts against a real Vercel
+# Sandbox to validate the sandbox path end-to-end (bootstrap snapshot,
+# worker spawn, file upload/download, result merge). Uses a stub agent
+# inside the sandbox — no AI credentials, no model spend — but takes
+# ~5-15 min for sandbox bootstrap + worker, so we don't run on push/PR.
+#
+# Trigger from the GitHub UI:
+#   Actions → "E2E live sandbox" → "Run workflow"
+#
+# Required repo secrets:
+#   VERCEL_TOKEN              — Vercel access token (https://vercel.com/account/tokens).
+#                               Used instead of OIDC because OIDC is
+#                               scoped to a Vercel deployment context.
+#   VERCEL_TEAM_ID            — team containing the project the sandbox
+#                               will bill against.
+#   VERCEL_PROJECT_ID         — any project ID on that team. The Sandbox
+#                               SDK only uses this for billing/scoping;
+#                               doesn't have to match this repo.
+#
+# Setting any of those wrong → the test's preflight throws clearly
+# before consuming sandbox time.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-live-sandbox
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline-sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The bundle is what gets exec'd by the e2e tests. Mirror the same
+      # build that release.yml ships — keeps the live test honest about
+      # what production users actually run.
+      - run: pnpm bundle
+
+      - name: Run live-sandbox pipeline test
+        env:
+          DEEPSEC_E2E_LIVE_SANDBOX: '1'
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: pnpm exec vitest run --project e2e e2e/pipeline-sandbox.test.ts
