@@ -42,8 +42,17 @@ import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
-const BUNDLE = path.join(ROOT, "packages/deepsec/dist/cli.mjs");
 const FIXTURES = path.join(ROOT, "fixtures/vulnerable-app");
+
+// We invoke the bundle through `tmp/node_modules/deepsec/dist/cli.mjs`
+// (a symlink chain back to the source package) WITH
+// `--preserve-symlinks-main`. That keeps `import.meta.url` at the
+// node_modules path, so `resolveDeepsecAppContext` picks
+// mode="installed" — same as production. In dev mode the appRoot
+// would be the source repo (a git checkout), and `makeTarball`'s git
+// branch would tarball ROOT itself, which is not what real users do
+// AND tickles a tar arg-order interaction in CI's GNU tar.
+const BUNDLE_REL = "node_modules/deepsec/dist/cli.mjs";
 
 // Opt-in flag plus a sandbox-credential check so a typo doesn't burn
 // 30s spinning up a sandbox that can't authenticate.
@@ -137,8 +146,9 @@ function injectStubPlugin(configPath: string): void {
   fs.writeFileSync(configPath, patched);
 }
 
-function runBundle(args: string[], cwd: string, timeoutMs: number) {
-  const r = spawnSync("node", [BUNDLE, ...args], {
+function runBundle(args: string[], cwd: string, timeoutMs: number, tmp: string) {
+  const bundle = path.join(tmp, BUNDLE_REL);
+  const r = spawnSync("node", ["--preserve-symlinks-main", bundle, ...args], {
     cwd,
     env: process.env,
     encoding: "utf-8",
@@ -156,8 +166,9 @@ function runBundle(args: string[], cwd: string, timeoutMs: number) {
  * the long-running sandbox commands keep the live-stream form above so
  * the operator can watch progress.
  */
-function runBundleCapture(args: string[], cwd: string, timeoutMs: number) {
-  const r = spawnSync("node", [BUNDLE, ...args], {
+function runBundleCapture(args: string[], cwd: string, timeoutMs: number, tmp: string) {
+  const bundle = path.join(tmp, BUNDLE_REL);
+  const r = spawnSync("node", ["--preserve-symlinks-main", bundle, ...args], {
     cwd,
     env: process.env,
     encoding: "utf-8",
@@ -172,8 +183,9 @@ function runBundleCapture(args: string[], cwd: string, timeoutMs: number) {
 
 describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
   beforeAll(() => {
-    if (!fs.existsSync(BUNDLE)) {
-      throw new Error(`Bundle not found at ${BUNDLE}. Run \`pnpm bundle\` first.`);
+    const realBundle = path.join(ROOT, "packages/deepsec/dist/cli.mjs");
+    if (!fs.existsSync(realBundle)) {
+      throw new Error(`Bundle not found at ${realBundle}. Run \`pnpm bundle\` first.`);
     }
     if (LIVE && !HAS_SANDBOX_KEY) {
       console.warn("DEEPSEC_E2E_LIVE_SANDBOX=1 but no Vercel Sandbox key — skipping.");
@@ -189,7 +201,12 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
         fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(tmp, "node_modules"), "dir");
 
         // 1. init
-        const init = runBundle(["init", workspaceDir, FIXTURES, "--id", "fixture"], tmp, 60_000);
+        const init = runBundle(
+          ["init", workspaceDir, FIXTURES, "--id", "fixture"],
+          tmp,
+          60_000,
+          tmp,
+        );
         expect(init.status).toBe(0);
 
         // 2. Drop the stub plugin + register it. Same shape as
@@ -206,7 +223,7 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
         );
 
         // 3. scan locally
-        const scan = runBundle(["scan"], workspaceDir, 60_000);
+        const scan = runBundle(["scan"], workspaceDir, 60_000, tmp);
         expect(scan.status).toBe(0);
 
         // 4. sandbox process — 1 sandbox, 2 files, stub agent. The
@@ -230,6 +247,7 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
           ],
           workspaceDir,
           15 * 60_000,
+          tmp,
         );
         expect(proc.status).toBe(0);
 
@@ -261,6 +279,7 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
           ],
           workspaceDir,
           15 * 60_000,
+          tmp,
         );
         expect(reval.status).toBe(0);
 
@@ -272,11 +291,11 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
         // 6. Read-only commands. Same set as pipeline.test.ts — confirms
         // the data dir produced by the sandbox path is structurally
         // identical to the local-process path.
-        const metrics = runBundleCapture(["metrics"], workspaceDir, 30_000);
+        const metrics = runBundleCapture(["metrics"], workspaceDir, 30_000, tmp);
         expect(metrics.status).toBe(0);
         expect(metrics.stdout).toContain("fixture");
 
-        const report = runBundleCapture(["report"], workspaceDir, 30_000);
+        const report = runBundleCapture(["report"], workspaceDir, 30_000, tmp);
         expect(report.status).toBe(0);
         const reportsDir = path.join(workspaceDir, "data/fixture/reports");
         expect(fs.existsSync(path.join(reportsDir, "report.json"))).toBe(true);
@@ -291,6 +310,7 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
           ["export", "--format", "json", "--out", exportPath],
           workspaceDir,
           30_000,
+          tmp,
         );
         expect(exportJson.status).toBe(0);
         const exported = JSON.parse(fs.readFileSync(exportPath, "utf-8"));
@@ -302,6 +322,7 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
           ["export", "--format", "md-dir", "--out", mdDir],
           workspaceDir,
           30_000,
+          tmp,
         );
         expect(exportMd.status).toBe(0);
         const mdFiles = fs
@@ -309,7 +330,7 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
           .filter((e) => typeof e === "string" && e.endsWith(".md"));
         expect(mdFiles.length).toBeGreaterThan(0);
 
-        const status = runBundleCapture(["status"], workspaceDir, 30_000);
+        const status = runBundleCapture(["status"], workspaceDir, 30_000, tmp);
         expect(status.status).toBe(0);
         expect(status.stdout).toContain("fixture");
       } finally {
