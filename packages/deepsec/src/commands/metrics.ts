@@ -1,16 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getDataRoot, loadAllFileRecords } from "@deepsec/core";
+import type { Severity } from "@deepsec/core";
+import { getDataRoot, loadAllFileRecords, SEVERITY_ORDER } from "@deepsec/core";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
-
-const SEVERITY_ORDER: Record<string, number> = {
-  CRITICAL: 0,
-  HIGH: 1,
-  MEDIUM: 2,
-  HIGH_BUG: 3,
-  BUG: 4,
-  LOW: 5,
-};
 
 interface TokenStats {
   input: number;
@@ -59,7 +51,7 @@ function discoverProjects(): string[] {
 }
 
 function getMetrics(projectId: string, minSeverity?: string): ProjectMetrics {
-  const minOrder = minSeverity ? (SEVERITY_ORDER[minSeverity] ?? 2) : 99;
+  const minOrder = minSeverity ? (SEVERITY_ORDER[minSeverity as Severity] ?? 2) : 99;
   const records = loadAllFileRecords(projectId);
 
   const m: ProjectMetrics = {

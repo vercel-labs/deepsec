@@ -1,17 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { FileRecord } from "@deepsec/core";
-import { dataDir, loadAllFileRecords } from "@deepsec/core";
+import type { FileRecord, Severity } from "@deepsec/core";
+import { dataDir, loadAllFileRecords, SEVERITY_ORDER } from "@deepsec/core";
 import { noiseScore } from "@deepsec/scanner";
 import type { PartitionResult, SandboxSubcommand } from "./types.js";
-
-const SEVERITY_ORDER: Record<string, number> = {
-  CRITICAL: 0,
-  HIGH: 1,
-  MEDIUM: 2,
-  HIGH_BUG: 3,
-  BUG: 4,
-};
 
 /**
  * Load eligible files for the given command and split into N disjoint partitions.
@@ -60,18 +52,19 @@ export function partitionFiles(
       }
       break;
 
-    case "revalidate":
+    case "revalidate": {
+      const minSev = opts.minSeverity ? SEVERITY_ORDER[opts.minSeverity as Severity] : undefined;
       eligible = allRecords.filter((r) => {
         if (r.findings.length === 0) return false;
         const unrevalidated = r.findings.filter((f) => {
           if (!opts.force && f.revalidation) return false;
-          if (opts.minSeverity && SEVERITY_ORDER[f.severity] > SEVERITY_ORDER[opts.minSeverity])
-            return false;
+          if (minSev !== undefined && SEVERITY_ORDER[f.severity] > minSev) return false;
           return true;
         });
         return unrevalidated.length > 0;
       });
       break;
+    }
 
     default:
       eligible = allRecords;
