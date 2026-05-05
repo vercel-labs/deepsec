@@ -1,5 +1,7 @@
+import { EventEmitter } from "node:events";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAcpInvocation } from "../agents/acp-agent.js";
+import { buildAcpInvocation, killAgent } from "../agents/acp-agent.js";
 
 const registry = {
   version: "1.0.0",
@@ -92,5 +94,64 @@ describe("ACP invocation resolution", () => {
     await expect(buildAcpInvocation("/repo", { acpRegistryAgent: "binary-agent" })).rejects.toThrow(
       /binary-only.*--acp-command\/--acp-args/,
     );
+  });
+});
+
+class FakeChildProcess extends EventEmitter {
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  killed = false;
+  kill = vi.fn((signal?: NodeJS.Signals | number) => {
+    this.killed = true;
+    if (signal === "SIGTERM") return true;
+    if (signal === "SIGKILL") {
+      this.signalCode = "SIGKILL";
+      this.emit("exit", null, "SIGKILL");
+      return true;
+    }
+    return true;
+  });
+}
+
+function killFakeAgent(child: FakeChildProcess): Promise<void> {
+  return killAgent(child as unknown as ChildProcessWithoutNullStreams);
+}
+
+describe("ACP agent shutdown", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("escalates to SIGKILL when SIGTERM does not exit the bridge", async () => {
+    vi.useFakeTimers();
+    const child = new FakeChildProcess();
+
+    const killed = killFakeAgent(child);
+    await vi.advanceTimersByTimeAsync(100);
+    await killed;
+
+    expect(child.kill).toHaveBeenCalledTimes(2);
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+
+  it("does not escalate when the bridge exits after SIGTERM", async () => {
+    vi.useFakeTimers();
+    const child = new FakeChildProcess();
+    child.kill.mockImplementationOnce(() => {
+      child.killed = true;
+      setTimeout(() => {
+        child.signalCode = "SIGTERM";
+        child.emit("exit", null, "SIGTERM");
+      }, 10);
+      return true;
+    });
+
+    const killed = killFakeAgent(child);
+    await vi.advanceTimersByTimeAsync(10);
+    await killed;
+
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 });

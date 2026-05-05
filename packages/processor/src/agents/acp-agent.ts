@@ -287,11 +287,37 @@ class DeepsecAcpClient implements acp.Client {
   }
 }
 
-async function killAgent(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.killed) return;
+function hasExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+  if (hasExited(child)) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.off("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timeout = setTimeout(() => finish(hasExited(child)), timeoutMs);
+    child.once("exit", onExit);
+  });
+}
+
+export async function killAgent(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (hasExited(child)) return;
+
   child.kill("SIGTERM");
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+  const exitedAfterSigterm = await waitForExit(child, 100);
+  if (!exitedAfterSigterm && !hasExited(child)) {
+    child.kill("SIGKILL");
+    await waitForExit(child, 100);
+  }
 }
 
 async function* runAcpPrompt(params: {
