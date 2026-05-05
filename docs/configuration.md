@@ -27,7 +27,7 @@ see [`samples/webapp/deepsec.config.ts`](../samples/webapp/deepsec.config.ts).
 | `projects` | `ProjectDeclaration[]` | The codebases deepsec knows about. |
 | `plugins` | `DeepsecPlugin[]` | Loaded in order; later plugins override single-slot capabilities. |
 | `matchers` | `{ only?: string[]; exclude?: string[] }` | Filter the matcher set used by `scan`. |
-| `defaultAgent` | `string` | Default `--agent` value (`claude-agent-sdk` or `codex`). See [models.md](models.md). |
+| `defaultAgent` | `string` | Default `--agent` value (`claude-agent-sdk`, `codex`, or `acp`). See [models.md](models.md). |
 | `dataDir` | `string` | Override the `data/` directory. Defaults to `./data`. |
 
 ## ProjectDeclaration

@@ -50,6 +50,10 @@ function isCodex(agentType: string | undefined): boolean {
   return agentType === "codex";
 }
 
+function isAcp(agentType: string | undefined): boolean {
+  return agentType === "acp";
+}
+
 /**
  * Walk `$PATH` looking for a binary. Used as a positive signal that an
  * agent CLI (`claude`, `codex`) is set up on this host — if it's
@@ -107,7 +111,7 @@ function hasLocalCodexAgent(): boolean {
 // via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
 // their own credential resolution, so we skip the check for anything
 // other than these.
-const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex"]);
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "acp"]);
 
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
@@ -129,6 +133,10 @@ export function assertAgentCredential(
   options: { inSandbox?: boolean } = {},
 ): void {
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
+  // ACP agents own their authentication/credential flow behind the ACP bridge
+  // (for example, `atlas alta agent run` uses the local Atlas/Alta setup).
+  // Deepsec just connects to the bridge and should not require Claude/OpenAI env vars.
+  if (isAcp(agentType)) return;
 
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;
   const openai = process.env.OPENAI_API_KEY;

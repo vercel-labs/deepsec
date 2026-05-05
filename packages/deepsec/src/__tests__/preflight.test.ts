@@ -98,6 +98,13 @@ describe("assertAgentCredential", () => {
     expect(() => assertAgentCredential("codex")).toThrow(/AI_GATEWAY_API_KEY/);
   });
 
+  it("skips Deepsec-managed credential checks for ACP agents", () => {
+    // ACP bridges own their auth flow (for example, local Atlas/Alta login),
+    // so missing Claude/OpenAI env vars should not block --agent acp.
+    expect(() => assertAgentCredential("acp")).not.toThrow();
+    expect(() => assertAgentCredential("acp", { inSandbox: true })).not.toThrow();
+  });
+
   it("skips the credential check for custom plugin agents", () => {
     // Tests use this so a stub agent registered via plugins[] doesn't
     // require fake ANTHROPIC_AUTH_TOKEN env vars.

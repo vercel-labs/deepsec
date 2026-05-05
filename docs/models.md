@@ -1,11 +1,12 @@
 # Models
 
-deepsec talks to LLMs through two interchangeable backends:
+deepsec talks to LLMs through interchangeable backends:
 
 | Backend                     | Default model         | Used by                      |
 |-----------------------------|-----------------------|------------------------------|
 | `claude-agent-sdk` (default) | `claude-opus-4-7`     | `process`, `revalidate`      |
 | `codex`                     | `gpt-5.5`             | `process`, `revalidate`      |
+| `acp`                       | `acp-default`         | `process`, `revalidate`      |
 | `claude-agent-sdk` (triage)  | `claude-sonnet-4-6`   | `triage` (Claude-only)       |
 
 Both backends route through [Vercel AI Gateway](https://vercel.com/ai-gateway)
@@ -27,6 +28,19 @@ pnpm deepsec process --project-id my-app --agent codex
 
 # Codex backend, specific model:
 pnpm deepsec process --project-id my-app --agent codex --model gpt-5.4
+
+# ACP backend, Alta/Rovo Dev bridge via `atlas alta agent run`:
+pnpm deepsec process --project-id my-app --agent acp --acp-agent rovo-dev
+
+# ACP backend, any other ACP source accepted by `atlas alta agent run`:
+pnpm deepsec process --project-id my-app --agent acp --acp-agent my-agent
+
+# ACP backend, registry agent from https://agentclientprotocol.com:
+pnpm deepsec process --project-id my-app --agent acp --acp-registry-agent claude-acp
+
+# ACP backend, fully custom bridge command/args:
+pnpm deepsec process --project-id my-app --agent acp --acp-command 'my-acp serve --stdio'
+pnpm deepsec process --project-id my-app --agent acp --acp-command my-acp --acp-args '["serve","--stdio"]'
 
 # Triage uses Claude; pass a cheaper model if you want:
 pnpm deepsec triage --project-id my-app --model claude-haiku-4-5

@@ -10,6 +10,7 @@ const repoRoot = resolve(__dirname, "../..");
 // Externalized at runtime: native binaries, heavy SDKs, and jiti (which
 // bundles its own esbuild — re-bundling it produces broken output).
 const external = [
+  "@agentclientprotocol/sdk",
   "@anthropic-ai/claude-agent-sdk",
   "@openai/codex",
   "@openai/codex-sdk",

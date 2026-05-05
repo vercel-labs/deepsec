@@ -138,11 +138,22 @@ program
   .option("--run-id <id>", "Resume a specific processing run")
   .option(
     "--agent <type>",
-    "Agent plugin type: claude-agent-sdk or codex (default: defaultAgent in deepsec.config.ts, else claude-agent-sdk)",
+    "Agent plugin type: claude-agent-sdk, codex, or acp (default: defaultAgent in deepsec.config.ts, else claude-agent-sdk)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-7 for claude-agent-sdk, gpt-5.5 for codex)",
+    "Model to use (default: claude-opus-4-7 for claude-agent-sdk, gpt-5.5 for codex, acp-default for acp)",
+  )
+  .option("--acp-agent <source>", "Alta/Atlas ACP source for --agent acp, e.g. rovo-dev")
+  .option("--acp-registry-agent <id>", "ACP registry agent id, e.g. claude-acp or codex-acp")
+  .option("--acp-registry-url <url>", "ACP registry URL (default: public latest registry)")
+  .option(
+    "--acp-command <cmd>",
+    "Custom ACP bridge command; may include args when --acp-args is omitted",
+  )
+  .option(
+    "--acp-args <args>",
+    "Custom ACP bridge args as JSON array or whitespace string; used with --acp-command",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
@@ -182,11 +193,22 @@ program
   .option("--run-id <id>", "Resume a specific revalidation run")
   .option(
     "--agent <type>",
-    "Agent plugin type: claude-agent-sdk or codex (default: defaultAgent in deepsec.config.ts, else claude-agent-sdk)",
+    "Agent plugin type: claude-agent-sdk, codex, or acp (default: defaultAgent in deepsec.config.ts, else claude-agent-sdk)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-7 for claude-agent-sdk, gpt-5.5 for codex)",
+    "Model to use (default: claude-opus-4-7 for claude-agent-sdk, gpt-5.5 for codex, acp-default for acp)",
+  )
+  .option("--acp-agent <source>", "Alta/Atlas ACP source for --agent acp, e.g. rovo-dev")
+  .option("--acp-registry-agent <id>", "ACP registry agent id, e.g. claude-acp or codex-acp")
+  .option("--acp-registry-url <url>", "ACP registry URL (default: public latest registry)")
+  .option(
+    "--acp-command <cmd>",
+    "Custom ACP bridge command; may include args when --acp-args is omitted",
+  )
+  .option(
+    "--acp-args <args>",
+    "Custom ACP bridge args as JSON array or whitespace string; used with --acp-command",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
