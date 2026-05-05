@@ -133,8 +133,7 @@ export function assertAgentCredential(
   options: { inSandbox?: boolean } = {},
 ): void {
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
-  // ACP agents own their authentication/credential flow behind the ACP bridge
-  // (for example, `atlas alta agent run` uses the local Atlas/Alta setup).
+  // ACP agents own their authentication/credential flow behind the selected ACP bridge.
   // Deepsec just connects to the bridge and should not require Claude/OpenAI env vars.
   if (isAcp(agentType)) return;
 

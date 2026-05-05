@@ -31,8 +31,6 @@ const DEBUG = process.env.DEEPSEC_AGENT_DEBUG === "1";
 interface AcpConfig {
   model?: string;
   maxTurns?: number;
-  /** Alta/Atlas source for `atlas alta agent run --workspace <root> <source>`. */
-  acpAgent?: string;
   /** Registry agent id from https://agentclientprotocol.com, e.g. `claude-acp` or `codex-acp`. */
   acpRegistryAgent?: string;
   /** Registry JSON URL. Defaults to the public latest registry. */
@@ -86,7 +84,6 @@ function asAcpConfig(config: Record<string, unknown>): AcpConfig {
   return {
     model: typeof config.model === "string" ? config.model : undefined,
     maxTurns: typeof config.maxTurns === "number" ? config.maxTurns : undefined,
-    acpAgent: typeof config.acpAgent === "string" ? config.acpAgent : undefined,
     acpRegistryAgent:
       typeof config.acpRegistryAgent === "string" ? config.acpRegistryAgent : undefined,
     acpRegistryUrl: typeof config.acpRegistryUrl === "string" ? config.acpRegistryUrl : undefined,
@@ -205,24 +202,15 @@ async function registryInvocation(config: AcpConfig): Promise<AcpInvocation | un
 }
 
 export async function buildAcpInvocation(
-  projectRoot: string,
+  _projectRoot: string,
   config: AcpConfig,
 ): Promise<AcpInvocation> {
   const custom = customInvocation(config);
   if (custom) return custom;
   const registry = await registryInvocation(config);
   if (registry) return registry;
-  if (config.acpAgent) {
-    return {
-      command: "atlas",
-      args: ["alta", "agent", "run", "--workspace", projectRoot, config.acpAgent],
-      env: config.acpEnv,
-      label: `atlas alta agent run ${config.acpAgent}`,
-    };
-  }
-
   throw new Error(
-    "ACP agent selection is required. Pass --acp-registry-agent <id>, --acp-command <cmd>, or --acp-agent <source> for atlas alta agent run.",
+    "ACP agent selection is required. Pass --acp-registry-agent <id> or --acp-command <cmd>.",
   );
 }
 
@@ -416,8 +404,7 @@ export class AcpAgentPlugin implements AgentPlugin {
     const { batch, projectRoot, promptTemplate, projectInfo } = params;
     const config = asAcpConfig(params.config);
     const model = config.model ?? DEFAULT_MODEL;
-    const agentName =
-      config.acpRegistryAgent ?? config.acpAgent ?? config.acpCommand ?? "(not configured)";
+    const agentName = config.acpRegistryAgent ?? config.acpCommand ?? "(not configured)";
 
     yield {
       type: "started",

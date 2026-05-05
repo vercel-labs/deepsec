@@ -40,11 +40,6 @@ describe("ACP invocation resolution", () => {
     );
   });
 
-  it("uses an explicit Alta source", async () => {
-    const invocation = await buildAcpInvocation("/repo", { acpAgent: "my-agent" });
-    expect(invocation.args).toEqual(["alta", "agent", "run", "--workspace", "/repo", "my-agent"]);
-  });
-
   it("accepts a full custom command string", async () => {
     await expect(
       buildAcpInvocation("/repo", { acpCommand: "node ./server.js --stdio 'quoted arg'" }),

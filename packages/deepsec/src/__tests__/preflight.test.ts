@@ -99,8 +99,7 @@ describe("assertAgentCredential", () => {
   });
 
   it("skips Deepsec-managed credential checks for ACP agents", () => {
-    // ACP bridges own their auth flow (for example, local Atlas/Alta login),
-    // so missing Claude/OpenAI env vars should not block --agent acp.
+    // ACP bridges own their auth flow, so missing Claude/OpenAI env vars should not block --agent acp.
     expect(() => assertAgentCredential("acp")).not.toThrow();
     expect(() => assertAgentCredential("acp", { inSandbox: true })).not.toThrow();
   });

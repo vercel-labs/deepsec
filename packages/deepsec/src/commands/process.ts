@@ -83,7 +83,6 @@ function parseAcpArgs(v: string | undefined): string[] | undefined {
 function buildAgentConfig(opts: {
   model: string;
   maxTurns?: number;
-  acpAgent?: string;
   acpRegistryAgent?: string;
   acpRegistryUrl?: string;
   acpCommand?: string;
@@ -92,7 +91,6 @@ function buildAgentConfig(opts: {
   return {
     model: opts.model,
     ...(opts.maxTurns ? { maxTurns: opts.maxTurns } : {}),
-    ...(opts.acpAgent ? { acpAgent: opts.acpAgent } : {}),
     ...(opts.acpRegistryAgent ? { acpRegistryAgent: opts.acpRegistryAgent } : {}),
     ...(opts.acpRegistryUrl ? { acpRegistryUrl: opts.acpRegistryUrl } : {}),
     ...(opts.acpCommand ? { acpCommand: opts.acpCommand } : {}),
@@ -106,7 +104,6 @@ export async function processCommand(opts: {
   agent?: string;
   model?: string;
   maxTurns?: number;
-  acpAgent?: string;
   acpRegistryAgent?: string;
   acpRegistryUrl?: string;
   acpCommand?: string;
@@ -175,7 +172,6 @@ export async function processCommand(opts: {
     config: buildAgentConfig({
       model,
       maxTurns: opts.maxTurns,
-      acpAgent: opts.acpAgent,
       acpRegistryAgent: opts.acpRegistryAgent,
       acpRegistryUrl: opts.acpRegistryUrl,
       acpCommand: opts.acpCommand,

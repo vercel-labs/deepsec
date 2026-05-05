@@ -29,12 +29,6 @@ pnpm deepsec process --project-id my-app --agent codex
 # Codex backend, specific model:
 pnpm deepsec process --project-id my-app --agent codex --model gpt-5.4
 
-# ACP backend, Alta/Rovo Dev bridge via `atlas alta agent run`:
-pnpm deepsec process --project-id my-app --agent acp --acp-agent rovo-dev
-
-# ACP backend, any other ACP source accepted by `atlas alta agent run`:
-pnpm deepsec process --project-id my-app --agent acp --acp-agent my-agent
-
 # ACP backend, registry agent from https://agentclientprotocol.com:
 pnpm deepsec process --project-id my-app --agent acp --acp-registry-agent claude-acp
 
