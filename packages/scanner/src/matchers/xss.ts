@@ -13,7 +13,8 @@ function hasHtmlTagAfter(line: string, start: number): boolean {
     if (line.charCodeAt(i) !== 60 /* < */) continue;
     const next = line.charCodeAt(i + 1);
     const afterSlash = next === 47 /* / */ ? line.charCodeAt(i + 2) : next;
-    if ((afterSlash >= 65 && afterSlash <= 90) || (afterSlash >= 97 && afterSlash <= 122)) return true;
+    if ((afterSlash >= 65 && afterSlash <= 90) || (afterSlash >= 97 && afterSlash <= 122))
+      return true;
   }
   return false;
 }
