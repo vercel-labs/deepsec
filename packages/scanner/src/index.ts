@@ -135,7 +135,10 @@ export class RegexScannerDriver implements ScannerDriver {
       const key = patternKey(matcher.filePatterns);
       const files = globCache.get(key) ?? [];
 
-      for (const relPath of files) {
+      for (const relPathRaw of files) {
+        // On Windows, glob can return "\"-separated relative paths.
+        // Deepsec stores file records with POSIX separators.
+        const relPath = relPathRaw.replaceAll("\\", "/");
         let content = contentCache.get(relPath);
         if (content === undefined) {
           try {
