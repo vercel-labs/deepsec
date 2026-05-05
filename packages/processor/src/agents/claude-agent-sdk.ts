@@ -76,6 +76,7 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
     let toolUseCount = 0;
     let sdkMeta: Partial<BatchMeta> = {};
     let lastError = "";
+    let hadErrors = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
@@ -89,6 +90,7 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
         toolUseCount = 0;
         sdkMeta = {};
         lastError = "";
+        hadErrors = false;
       }
 
       try {
@@ -173,6 +175,7 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
                   }
                 } else {
                   lastError = String(msg.error ?? "unknown");
+                  hadErrors = true;
                   yield {
                     type: "error" as const,
                     message: `Agent error: ${lastError.slice(0, 300)}`,
@@ -189,6 +192,7 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
         }
       } catch (sdkErr) {
         lastError = sdkErr instanceof Error ? sdkErr.message : String(sdkErr);
+        hadErrors = true;
         yield {
           type: "error" as const,
           message: `Agent SDK error: ${lastError.slice(0, 300)}`,
@@ -225,6 +229,7 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
         durationMs,
         ...sdkMeta,
         refusal,
+        hadErrors,
       },
     };
   }

@@ -108,6 +108,8 @@ describe("processor with stub agent", () => {
 
     expect(result.findingCount).toBe(1);
     expect(result.analysisCount).toBe(1);
+    expect(result.failedCount).toBe(0);
+    expect(result.phase).toBe("done");
     expect(stub.calls.investigateCalls).toHaveLength(1);
     expect(stub.calls.investigateCalls[0].batch).toHaveLength(1);
 
@@ -250,6 +252,49 @@ describe("processor with stub agent", () => {
     expect(rec.findings).toHaveLength(0);
     expect(rec.analysisHistory[0].refusal?.refused).toBe(true);
     expect(rec.analysisHistory[0].refusal?.reason).toBe("stub refusal");
+  });
+
+  it("process() marks batch retryable and run partial on agent error with zero output", async () => {
+    const fx = setupProject({ files: ["a.ts", "b.ts"] });
+    fx.writeRecord(pendingRecord(fx.projectId, "a.ts"));
+    fx.writeRecord(pendingRecord(fx.projectId, "b.ts"));
+
+    const stub = new StubAgent({
+      async *investigateImpl(params) {
+        return {
+          results: params.batch.map((r) => ({ filePath: r.filePath, findings: [] })),
+          meta: {
+            durationMs: 1,
+            hadErrors: true,
+            usage: {
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub-plugin", agents: [stub] }],
+      }),
+    );
+
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+
+    expect(result.analysisCount).toBe(0);
+    expect(result.findingCount).toBe(0);
+    expect(result.failedCount).toBe(2);
+    expect(result.phase).toBe("partial");
+    expect(fx.readRecord("a.ts").status).toBe("error");
+    expect(fx.readRecord("b.ts").status).toBe("error");
   });
 
   it("revalidate() attaches verdicts to existing findings", async () => {

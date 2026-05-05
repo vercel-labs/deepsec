@@ -122,7 +122,7 @@ export function readRunMeta(projectId: string, runId: string): RunMeta {
 export function completeRun(
   projectId: string,
   runId: string,
-  phase: "done" | "error",
+  phase: "done" | "partial" | "error",
   stats?: Partial<RunMeta["stats"]>,
 ): void {
   const meta = readRunMeta(projectId, runId);

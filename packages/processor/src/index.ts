@@ -200,7 +200,13 @@ export async function process(params: {
   /** Skip files whose candidate slugs are ALL in this set (files with any other slug still get processed) */
   skipSlugs?: string[];
   onProgress?: (progress: ProcessProgress) => void;
-}): Promise<{ runId: string; analysisCount: number; findingCount: number }> {
+}): Promise<{
+  runId: string;
+  analysisCount: number;
+  findingCount: number;
+  failedCount: number;
+  phase: "done" | "partial";
+}> {
   const {
     projectId,
     agentType = "claude-agent-sdk",
@@ -282,7 +288,7 @@ export async function process(params: {
         type: "all_complete",
         message: `Run ${runId} already completed`,
       });
-      return { runId, analysisCount: 0, findingCount: 0 };
+      return { runId, analysisCount: 0, findingCount: 0, failedCount: 0, phase: "done" };
     }
   } else {
     // Create new run
@@ -385,7 +391,7 @@ export async function process(params: {
       message: "No files to process",
     });
     completeRun(projectId, runId, "done", { filesProcessed: 0 });
-    return { runId, analysisCount: 0, findingCount: 0 };
+    return { runId, analysisCount: 0, findingCount: 0, failedCount: 0, phase: "done" };
   }
 
   // Apply path filter
@@ -412,8 +418,10 @@ export async function process(params: {
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let totalDurationMs = 0;
+  let totalFailedAnalyses = 0;
   let batchesCompleted = 0;
   let batchesInFlight = 0;
+  let hadPartialFailures = false;
   const concurrency = params.concurrency ?? defaultConcurrency();
 
   async function processBatch(batch: FileRecord[], i: number) {
@@ -448,12 +456,36 @@ export async function process(params: {
 
       const output = result.value as InvestigateOutput;
       const { results, meta: batchMeta } = output;
+      const zeroOutput = (batchMeta.usage?.outputTokens ?? 0) === 0;
+      const degradedBatch = Boolean(batchMeta.hadErrors && zeroOutput);
 
       // Accumulate run-level stats
       totalCostUsd += batchMeta.costUsd ?? 0;
       totalInputTokens += batchMeta.usage?.inputTokens ?? 0;
       totalOutputTokens += batchMeta.usage?.outputTokens ?? 0;
       totalDurationMs += batchMeta.durationMs;
+
+      // If the agent reported runtime failures and produced zero output
+      // tokens, treat this batch as retryable failure instead of a clean
+      // "analyzed with 0 findings" pass.
+      if (degradedBatch) {
+        hadPartialFailures = true;
+        for (const record of batch) {
+          record.status = "error";
+          record.lockedByRunId = undefined;
+          writeFileRecord(record);
+          totalFailedAnalyses++;
+        }
+        batchesInFlight--;
+        batchesCompleted++;
+        emitProgress({
+          type: "batch_complete",
+          message: `Batch ${i + 1}/${batches.length} partial: agent error with empty output; marked ${batch.length} file(s) retryable (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
+          batchIndex: i,
+          totalBatches: batches.length,
+        });
+        return;
+      }
 
       // Update file records with results + metadata.
       //
@@ -512,6 +544,8 @@ export async function process(params: {
           record.status = "error";
           record.lockedByRunId = undefined;
           writeFileRecord(record);
+          totalFailedAnalyses++;
+          hadPartialFailures = true;
         }
       }
 
@@ -530,7 +564,9 @@ export async function process(params: {
         record.status = "error";
         record.lockedByRunId = undefined;
         writeFileRecord(record);
+        totalFailedAnalyses++;
       }
+      hadPartialFailures = true;
       emitProgress({
         type: "batch_complete",
         message: `Batch ${i + 1}/${batches.length} failed: ${err instanceof Error ? err.message : String(err)} (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
@@ -558,8 +594,10 @@ export async function process(params: {
     await Promise.all(workers);
   }
 
-  completeRun(projectId, runId, "done", {
+  const finalPhase = hadPartialFailures ? "partial" : "done";
+  completeRun(projectId, runId, finalPhase, {
     filesProcessed: totalAnalyses,
+    filesFailed: totalFailedAnalyses,
     findingsCount: totalFindings,
     totalCostUsd,
     totalInputTokens,
@@ -569,10 +607,16 @@ export async function process(params: {
 
   emitProgress({
     type: "all_complete",
-    message: `Processing complete: ${totalAnalyses} analyses, ${totalFindings} findings`,
+    message: `Processing complete: ${totalAnalyses} analyses, ${totalFindings} findings${totalFailedAnalyses > 0 ? `, ${totalFailedAnalyses} failed/retryable` : ""}`,
   });
 
-  return { runId, analysisCount: totalAnalyses, findingCount: totalFindings };
+  return {
+    runId,
+    analysisCount: totalAnalyses,
+    findingCount: totalFindings,
+    failedCount: totalFailedAnalyses,
+    phase: finalPhase,
+  };
 }
 
 // --- Revalidation ---

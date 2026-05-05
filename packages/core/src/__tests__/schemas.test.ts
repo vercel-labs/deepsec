@@ -108,4 +108,23 @@ describe("runMetaSchema", () => {
     };
     expect(() => runMetaSchema.parse(valid)).not.toThrow();
   });
+
+  it("accepts partial process run meta with failed file count", () => {
+    const valid = {
+      runId: "20260401-a1b2",
+      projectId: "test",
+      rootPath: "/path",
+      createdAt: "2026-04-01T14:30:52.000Z",
+      completedAt: "2026-04-01T15:00:00.000Z",
+      type: "process",
+      phase: "partial",
+      processorConfig: {
+        agentType: "claude-agent-sdk",
+        model: "claude-opus-4-6",
+        modelConfig: { maxTurns: 50 },
+      },
+      stats: { filesProcessed: 3, filesFailed: 2, findingsCount: 1 },
+    };
+    expect(() => runMetaSchema.parse(valid)).not.toThrow();
+  });
 });
