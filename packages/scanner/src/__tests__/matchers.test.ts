@@ -59,6 +59,29 @@ describe("xss matcher", () => {
     const slugs = matches.map((m) => m.matchedPattern);
     expect(slugs).toContain("dangerouslySetInnerHTML");
   });
+
+  it("detects template interpolation mixed with HTML", () => {
+    const matches = xssMatcher.match(
+      "const unsafe = `<div data-user=${userInput}>${body}</div>`;",
+      "src/components/comment.tsx",
+    );
+    expect(matches.map((m) => m.matchedPattern)).toContain("template literal in HTML");
+  });
+
+  it("does not catastrophically backtrack on long generated HTML report lines", () => {
+    const longJsonLine = `app.report = ${JSON.stringify({
+      files: Object.fromEntries(
+        Array.from({ length: 3000 }, (_, i) => [
+          `packages/example-${i}/src/file.ts`,
+          { language: "typescript", mutants: [{ id: String(i), replacement: "${user.value}" }] },
+        ]),
+      ),
+    })};`;
+    const started = performance.now();
+    const matches = xssMatcher.match(longJsonLine, "reports/mutation/packages-acp/mutation.html");
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(matches).toEqual([]);
+  });
 });
 
 describe("rce matcher", () => {
