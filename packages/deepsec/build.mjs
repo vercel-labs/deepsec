@@ -15,6 +15,7 @@ const external = [
   "@openai/codex-sdk",
   "@vercel/sandbox",
   "jiti",
+  "tar",
 ];
 
 const common = {
