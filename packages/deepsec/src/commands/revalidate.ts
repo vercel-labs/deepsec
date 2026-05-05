@@ -52,12 +52,46 @@ function parseCsv(v: string | undefined): string[] | undefined {
   return parts.length > 0 ? parts : undefined;
 }
 
+function parseAcpArgs(v: string | undefined): string[] | undefined {
+  if (!v) return undefined;
+  const trimmed = v.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) throw new Error("--acp-args JSON must be an array of strings");
+    return parsed.map(String);
+  }
+  return trimmed.split(/\s+/).filter(Boolean);
+}
+
+function buildAgentConfig(opts: {
+  model: string;
+  maxTurns?: number;
+  acpRegistryAgent?: string;
+  acpRegistryUrl?: string;
+  acpCommand?: string;
+  acpArgs?: string;
+}): Record<string, unknown> {
+  return {
+    model: opts.model,
+    ...(opts.maxTurns ? { maxTurns: opts.maxTurns } : {}),
+    ...(opts.acpRegistryAgent ? { acpRegistryAgent: opts.acpRegistryAgent } : {}),
+    ...(opts.acpRegistryUrl ? { acpRegistryUrl: opts.acpRegistryUrl } : {}),
+    ...(opts.acpCommand ? { acpCommand: opts.acpCommand } : {}),
+    ...(opts.acpArgs ? { acpArgs: parseAcpArgs(opts.acpArgs) } : {}),
+  };
+}
+
 export async function revalidateCommand(opts: {
   projectId?: string;
   runId?: string;
   agent?: string;
   model?: string;
   maxTurns?: number;
+  acpRegistryAgent?: string;
+  acpRegistryUrl?: string;
+  acpCommand?: string;
+  acpArgs?: string;
   minSeverity?: string;
   force?: boolean;
   limit?: number;
@@ -92,7 +126,14 @@ export async function revalidateCommand(opts: {
     projectId,
     runId: opts.runId,
     agentType,
-    config: { model, ...(opts.maxTurns ? { maxTurns: opts.maxTurns } : {}) },
+    config: buildAgentConfig({
+      model,
+      maxTurns: opts.maxTurns,
+      acpRegistryAgent: opts.acpRegistryAgent,
+      acpRegistryUrl: opts.acpRegistryUrl,
+      acpCommand: opts.acpCommand,
+      acpArgs: opts.acpArgs,
+    }),
     minSeverity,
     force: opts.force,
     limit: opts.limit,

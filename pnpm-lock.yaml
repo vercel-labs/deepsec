@@ -39,6 +39,9 @@ importers:
 
   packages/deepsec:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^0.21.0
+        version: 0.21.0(zod@4.4.1)
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.119
         version: 0.2.123(zod@4.4.1)
@@ -76,6 +79,9 @@ importers:
 
   packages/processor:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^0.21.0
+        version: 0.21.0(zod@4.4.1)
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.119
         version: 0.2.123(zod@4.4.1)
@@ -102,6 +108,14 @@ importers:
         version: 11.1.0
 
 packages:
+
+  /@agentclientprotocol/sdk@0.21.0(zod@4.4.1):
+    resolution: {integrity: sha512-ONj+Q8qOdNQp5XbH5jnMwzT9IKZJsSN0p0lkceS4GtUtNOPVLpNzSS8gqQdGMKfBvA0ESbkL8BTaSN1Rc9miEw==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    dependencies:
+      zod: 4.4.1
+    dev: false
 
   /@anthropic-ai/claude-agent-sdk-darwin-arm64@0.2.123:
     resolution: {integrity: sha512-tYAXCjlXZQklsUs0J//gip3fZQRzhlH5OCgvNXV70qe7A1iiwHqO2KPGvEHV1L+deEKQoMZmTaCOrQpN6zju3w==}

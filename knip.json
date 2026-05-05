@@ -23,6 +23,7 @@
   },
   "ignore": ["fixtures/vulnerable-app/**", "samples/**"],
   "ignoreDependencies": [
+    "@agentclientprotocol/sdk",
     "@anthropic-ai/claude-agent-sdk",
     "@openai/codex",
     "@openai/codex-sdk",
