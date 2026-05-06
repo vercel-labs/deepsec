@@ -6,6 +6,23 @@ export const nonAtomicOperationMatcher: MatcherPlugin = {
   slug: "non-atomic-operation",
   description: "Read-then-write without transaction/lock — TOCTOU race condition risk",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `async function transfer(id) {
+  const account = await db.account.findById(id);
+  if (account.balance < 100) return;
+  await db.account.update({ id, balance: account.balance - 100 });
+}`,
+    `const user = await prisma.user.findUnique({ where: { id } });
+if (!user) throw new Error("missing");
+await prisma.user.delete({ where: { id } });`,
+    `const item = await repo.findOne({ id });
+await repo.save({ ...item, count: item.count + 1 });`,
+    `const row = await store.findFirst({ where: { key } });
+const next = row.value + 1;
+await store.update({ where: { key }, data: { value: next } });`,
+    `const order = await orders.findUnique({ where: { id } });
+await orders.modify({ id: order.id });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

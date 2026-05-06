@@ -13,6 +13,16 @@ export const missingAuthMatcher: MatcherPlugin = {
     "**/server/**/*.{ts,tsx,js,jsx}",
     "**/*.{ts,tsx,js,jsx}", // catch-all for non-standard layouts
   ],
+  examples: [
+    `export async function GET(req) { return Response.json({}); }`,
+    `export function POST(req) { return new Response(""); }`,
+    `export const GET = async () => Response.json({});`,
+    `export let PUT = (req) => new Response("");`,
+    `export default async function handler(req, res) { res.json({}); }`,
+    `export default function (req, res) { res.end(); }`,
+    `router.get("/items", (req, res) => res.json([]));`,
+    `app.post("/login", handler);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

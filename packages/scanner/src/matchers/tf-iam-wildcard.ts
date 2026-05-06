@@ -18,6 +18,16 @@ export const tfIamWildcardMatcher: MatcherPlugin = {
   slug: "tf-iam-wildcard",
   description: "Terraform IAM/KMS/S3/SNS policy with wildcard Action/Resource/Principal",
   filePatterns: ["**/*.tf", "**/*.tf.json", "**/*.hcl"],
+  requires: { tech: ["terraform"] },
+  examples: [
+    `    actions = ["*"]`,
+    `"Action": "*",`,
+    `    resources = ["*"]`,
+    `"Resource": "*",`,
+    `"Principal": "*",`,
+    `"AWS": "*"`,
+    `    identifiers = ["*"]`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

@@ -16,6 +16,17 @@ export const tfEncryptionMissingMatcher: MatcherPlugin = {
   description:
     "Terraform storage resource (S3/RDS/EBS/DynamoDB/SNS/SQS) without encryption-at-rest config",
   filePatterns: ["**/*.tf", "**/*.tf.json"],
+  requires: { tech: ["terraform"] },
+  examples: [
+    `resource "aws_s3_bucket" "logs" {\n  bucket = "my-logs"\n}`,
+    `resource "aws_db_instance" "db" {\n  engine = "postgres"\n}`,
+    `resource "aws_rds_cluster" "main" {\n  engine = "aurora-postgresql"\n}`,
+    `resource "aws_ebs_volume" "data" {\n  size = 100\n}`,
+    `resource "aws_dynamodb_table" "users" {\n  name = "users"\n  hash_key = "id"\n}`,
+    `resource "aws_sns_topic" "alerts" {\n  name = "alerts"\n}`,
+    `resource "aws_sqs_queue" "jobs" {\n  name = "jobs"\n}`,
+    `resource "aws_elasticache_replication_group" "cache" {\n  replication_group_id = "cache"\n}`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

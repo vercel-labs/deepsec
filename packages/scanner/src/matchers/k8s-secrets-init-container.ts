@@ -21,6 +21,14 @@ export const k8sSecretsInitContainerMatcher: MatcherPlugin = {
   slug: "k8s-secrets-init-container",
   description: "K8s manifest uses the secrets-init-container decryption pipeline",
   filePatterns: ["**/*.yaml", "**/*.yml"],
+  examples: [
+    `initContainers:\n  - name: init\n    image: ghcr.io/example/secrets-init-container:v1`,
+    `env:\n    name: ENCRYPTED_V1_DATABASE_URL\n    value: "..."`,
+    `env:\n    name: ENCRYPTED_V2_API_TOKEN\n    value: "..."`,
+    `volumeMounts:\n  - name: decrypted\n    mountPath: /usr/share`,
+    `volumes:\n  - name: decrypted-env\n    emptyDir:\n      medium: Memory`,
+    `secretKeyRef:\n  name: encrypted-v1-database\n  key: payload`,
+  ],
   match(content, filePath) {
     if (/(?:^|\/)(?:node_modules|vendor|charts|\.github)\//.test(filePath)) return [];
 

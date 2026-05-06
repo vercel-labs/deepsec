@@ -281,17 +281,20 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
     const dataTar = "/tmp/deepsec-data.tar.gz";
     const projectDataDir = `${DATA_DIR}/${opts.projectId}`;
 
+    // Each uploadTarballToSandbox call frees the local temp tarball as soon
+    // as the upload completes, so peak host-side memory is bounded by the
+    // largest single tarball (not the sum of all three).
     await Promise.all([
       (async () => {
-        await uploadTarballToSandbox(sandbox, appTar, opts.bundle.app.buffer, opts.onLog);
+        await uploadTarballToSandbox(sandbox, appTar, opts.bundle.app.tarPath, opts.onLog);
         await extractTarballOnSandbox(sandbox, appTar, DEEPSEC_DIR, opts.onLog);
       })(),
       (async () => {
-        await uploadTarballToSandbox(sandbox, targetTar, opts.bundle.target.buffer, opts.onLog);
+        await uploadTarballToSandbox(sandbox, targetTar, opts.bundle.target.tarPath, opts.onLog);
         await extractTarballOnSandbox(sandbox, targetTar, TARGET_DIR, opts.onLog);
       })(),
       (async () => {
-        await uploadTarballToSandbox(sandbox, dataTar, opts.bundle.data.buffer, opts.onLog);
+        await uploadTarballToSandbox(sandbox, dataTar, opts.bundle.data.tarPath, opts.onLog);
         await extractTarballOnSandbox(sandbox, dataTar, projectDataDir, opts.onLog);
       })(),
     ]);

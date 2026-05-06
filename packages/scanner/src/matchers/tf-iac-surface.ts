@@ -15,6 +15,24 @@ export const tfIacSurfaceMatcher: MatcherPlugin = {
   slug: "tf-iac-surface",
   description: "Terraform/HCL/Sentinel file declaring security-critical infrastructure resources",
   filePatterns: ["**/*.tf", "**/*.tf.json", "**/*.hcl", "**/*.sentinel"],
+  requires: { tech: ["terraform"] },
+  examples: [
+    `resource "aws_iam_role" "service" {`,
+    `resource "aws_iam_policy_attachment" "admin" {`,
+    `resource "aws_kms_key" "main" {`,
+    `resource "aws_eks_cluster" "main" {`,
+    `resource "aws_security_group" "web" {`,
+    `resource "aws_network_acl" "main" {`,
+    `resource "aws_vpc_endpoint" "s3" {`,
+    `resource "aws_s3_bucket_policy" "logs" {`,
+    `resource "aws_route53_record" "www" {`,
+    `resource "aws_secretsmanager_secret" "db" {`,
+    `resource "aws_lb_listener" "https" {`,
+    `resource "kubernetes_cluster_role" "admin" {`,
+    `resource "helm_release" "prom" {`,
+    `data "aws_iam_policy_document" "doc" {`,
+    `import "tfplan"`,
+  ],
   match(content, filePath) {
     if (/\.terraform\//.test(filePath)) return [];
 

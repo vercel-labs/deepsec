@@ -15,6 +15,13 @@ export const tfPublicIngressMatcher: MatcherPlugin = {
   description:
     "Terraform security-group / NACL / EKS ingress allowing 0.0.0.0/0 on non-HTTPS ports",
   filePatterns: ["**/*.tf", "**/*.tf.json", "**/*.hcl"],
+  requires: { tech: ["terraform"] },
+  examples: [
+    `ingress {\n  from_port = 22\n  to_port = 22\n  protocol = "tcp"\n  cidr_blocks = ["0.0.0.0/0"]\n}`,
+    `ingress {\n  from_port = 3306\n  to_port = 3306\n  protocol = "tcp"\n  cidr_blocks = ["0.0.0.0/0"]\n}`,
+    `resource "aws_security_group_rule" "open" {\n  type = "ingress"\n  from_port = 5432\n  to_port = 5432\n  cidr_blocks = ["0.0.0.0/0"]\n}`,
+    `vpc_config {\n  endpoint_public_access = true\n  subnet_ids = var.subnets\n}`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

@@ -201,6 +201,9 @@ export default defineConfig({
         fs.readFileSync(path.join(ROOT, "packages/deepsec/package.json"), "utf-8"),
       );
       expect(pkg.dependencies.deepsec).toBe(`^${deepsecPkg.version}`);
+      // packageManager: pinned to pnpm so a parent repo's `packageManager`
+      // (e.g. yarn) doesn't make pnpm refuse to install in `.deepsec/`.
+      expect(pkg.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
 
       // config.ts: minimal — id + root only, plus the insert marker.
       const configSrc = fs.readFileSync(path.join(workspace, "deepsec.config.ts"), "utf-8");

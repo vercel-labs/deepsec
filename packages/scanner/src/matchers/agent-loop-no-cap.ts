@@ -17,6 +17,15 @@ export const agentLoopNoCapMatcher: MatcherPlugin = {
   slug: "agent-loop-no-cap",
   description: "Agent / LLM call without maxSteps / maxTurns / stopWhen — DoS + cost-burn risk",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  examples: [
+    `import { streamText } from "ai";\nconst result = streamText({\n  model: openai("gpt-4"),\n  prompt: "hi",\n});`,
+    `import { generateText } from "ai";\nawait generateText({ model, prompt: "hi" });`,
+    `import { generateObject } from "ai";\nawait generateObject({ model, schema, prompt });`,
+    `import { streamObject } from "ai";\nawait streamObject({ model, schema, prompt });`,
+    `import { query } from "@anthropic-ai/claude-agent-sdk";\nawait query({ prompt: "hi" });`,
+    `import { Codex } from "@openai/codex-sdk";\nawait claude.query({ prompt: "hi" });`,
+    `import { openai } from "@ai-sdk/openai";\nawait generateText({ model: openai("gpt-4"), prompt: "hi" });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

@@ -14,6 +14,14 @@ export const tfModuleUnpinnedMatcher: MatcherPlugin = {
   slug: "tf-module-unpinned",
   description: "Terraform module references a remote git/github source without a commit-SHA pin",
   filePatterns: ["**/*.tf"],
+  requires: { tech: ["terraform"] },
+  examples: [
+    `module "vpc" {\n  source = "github.com/terraform-aws-modules/terraform-aws-vpc"\n}`,
+    `module "k8s" {\n  source = "git::https://github.com/some-org/k8s-module.git"\n}`,
+    `module "iam" {\n  source = "git::ssh://git@github.com/org/iam.git?ref=main"\n}`,
+    `module "registry" {\n  source = "terraform-aws-modules/eks/aws"\n}`,
+    `module "external" {\n  source = "https://example.com/modules/foo.tar.gz"\n}`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

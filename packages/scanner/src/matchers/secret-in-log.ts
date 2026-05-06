@@ -7,6 +7,24 @@ export const secretInLogMatcher: MatcherPlugin = {
   description:
     "Credentials or tokens appearing in log statements or error messages returned to callers",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `console.log("token", token);`,
+    `console.error("failed:", apiKey);`,
+    `console.warn("auth", refreshToken);`,
+    `console.info("got", accessToken);`,
+    `logger.info({ secret });`,
+    `logger.error({ password });`,
+    `migrationsLogger.warn({ apiKey });`,
+    `log.debug({ credential });`,
+    `({ token, foo })`,
+    `({ secret: v })`,
+    `JSON.stringify({ token: t });`,
+    `throw new Error("token=" + token);`,
+    `res.json({ token });`,
+    `res.send({ secret });`,
+    `return { error: "missing token" };`,
+    `return { message: "credential rejected" };`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

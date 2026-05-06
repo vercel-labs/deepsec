@@ -6,6 +6,40 @@ export const securityBehindFlagMatcher: MatcherPlugin = {
   slug: "security-behind-flag",
   description: "Security-critical code gated by feature flags — fails open when flag is off",
   filePatterns: ["**/*.{ts,tsx,js,jsx,lua,go}"],
+  examples: [
+    `if (featureFlag("strict-auth")) {
+  await verifyToken(req);
+}`,
+    `if (feature_flag.is_enabled("waf")) {
+  await firewallCheck(req);
+}`,
+    `if (LaunchDarkly.variation("rate-limit", false)) {
+  throttle(req);
+}`,
+    `const variant = client.variation("csrf-check");
+if (variant) {
+  validateCsrf(req);
+}`,
+    `if (statsig.checkGate("strip-headers")) {
+  sanitize(req.headers);
+}`,
+    `if (flag_enabled("encryption")) {
+  encrypt(payload);
+}`,
+    `if (isEnabled("auth-required")) {
+  await verifyToken(req);
+}`,
+    `if (isFeatureEnabled("rate-limit")) {
+  throttle(req);
+}`,
+    `const flag = experiment("hmac-check");
+if (flag) {
+  hmac(secret, body);
+}`,
+    `if (getFlag("strict-cors")) {
+  applyCors(req);
+}`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

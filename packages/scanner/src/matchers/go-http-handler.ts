@@ -6,6 +6,19 @@ export const goHttpHandlerMatcher: MatcherPlugin = {
   slug: "go-http-handler",
   description: "Go HTTP handler functions — entry points for investigation (weak candidate)",
   filePatterns: ["**/*.go"],
+  requires: { tech: ["go"] },
+  examples: [
+    `http.HandleFunc("/users", usersHandler)`,
+    `http.Handle("/api/", apiHandler)`,
+    `mux.HandleFunc("/login", loginHandler)`,
+    `mux.Handle("/static/", fs)`,
+    `r.GET("/users/:id", getUser)`,
+    `router.POST("/items", createItem)`,
+    `app.PUT("/users/:id", updateUser)`,
+    `e.DELETE("/items/:id", deleteItem)`,
+    `func usersHandler(w http.ResponseWriter, r *http.Request) {`,
+    `func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {`,
+  ],
   match(content, filePath) {
     if (/_test\.go$/.test(filePath)) return [];
 

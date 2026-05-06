@@ -21,6 +21,15 @@ export const drizzleRawSqlMatcher: MatcherPlugin = {
   slug: "drizzle-raw-sql",
   description: "Drizzle `sql.raw()` / `sql.unsafe()` or risky interpolation — SQL injection bypass",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  requires: { tech: ["drizzle"] },
+  examples: [
+    `import { sql } from "drizzle-orm";\nawait db.execute(sql.raw(userQuery));`,
+    `import { sql } from "drizzle-orm";\nawait db.execute(sql.unsafe(userQuery));`,
+    `import { eq } from "drizzle-orm";\nawait db.execute(sql\`SELECT * FROM users WHERE name = \${"a" + b}\`);`,
+    `import { sql } from "drizzle-orm";\nconst orderBy = "name";\nawait db.execute(sql\`SELECT * FROM users ORDER BY \${\`\${orderBy}\`}\`);`,
+    `import { db } from "@repo/db";\ndb.execute(sql.raw("SELECT * FROM " + tableName));`,
+    `import { drizzle } from "drizzle-orm/node-postgres";\nawait conn.execute(sql.unsafe(\`DROP TABLE \${name}\`));`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

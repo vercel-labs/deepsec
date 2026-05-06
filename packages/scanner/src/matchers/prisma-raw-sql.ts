@@ -18,6 +18,16 @@ export const prismaRawSqlMatcher: MatcherPlugin = {
   description:
     "Prisma raw SQL ($queryRaw / $executeRaw / *Unsafe) — verify parameterization and source of inputs",
   filePatterns: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+  requires: { tech: ["prisma"] },
+  examples: [
+    `await prisma.$queryRawUnsafe(\`SELECT * FROM users WHERE name = '\${name}'\`);`,
+    `await prisma.$executeRawUnsafe("DELETE FROM users WHERE id = " + id);`,
+    `await prisma.$queryRaw(query);`,
+    `await prisma.$executeRaw(query);`,
+    `await prisma.$queryRaw\`SELECT * FROM users WHERE name = \${name}\`;`,
+    `await prisma.$executeRaw\`UPDATE users SET name = \${name}\`;`,
+    `await prisma.$queryRaw(Prisma.raw(\`SELECT * FROM \${tableName}\`));`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

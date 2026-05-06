@@ -16,6 +16,14 @@ export const goEmbedAssetMatcher: MatcherPlugin = {
   slug: "go-embed-asset",
   description: "Go //go:embed directive (binary assets bundled into the program)",
   filePatterns: ["**/*.go"],
+  requires: { tech: ["go"] },
+  examples: [
+    `//go:embed kernel.bin\nvar kernelImage []byte`,
+    `//go:embed rootfs.tar.gz\nvar rootfs []byte`,
+    `//go:embed assets/*\nvar assets embed.FS`,
+    `//go:embed templates/index.html\nvar indexHTML []byte`,
+    `//go:embed config.yaml\nvar configBytes []byte`,
+  ],
   match(content, filePath) {
     if (/_test\.go$/.test(filePath)) return [];
     if (/(?:^|\/)gen\//.test(filePath)) return [];

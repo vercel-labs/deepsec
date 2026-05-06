@@ -18,6 +18,15 @@ export const rateLimitBypassMatcher: MatcherPlugin = {
     "**/services/**/src/index.ts",
     "**/pages/api/**/*.{ts,tsx}",
   ],
+  examples: [
+    `// login handler\nexport const POST = async (req) => signIn(req);`,
+    `// password reset\nexport async function POST(req) { return resetPassword(req); }`,
+    `// billing charge\nexport default async function (req, res) { charge(req); }`,
+    `// delete account\nexport const DELETE = (req) => removeUser(req);`,
+    `// data export\nexport default async function handler(req, res) { exportData(); }`,
+    `// generate token\nexport const POST = async (req) => createToken(req);`,
+    `// invite member\nexport default function handler(req, res) { invite(req); }`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

@@ -7,6 +7,17 @@ export const spreadOperatorInjectionMatcher: MatcherPlugin = {
   description:
     "Object spread of user input into payloads — prototype pollution or key injection risk",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `const payload = { ...req.body, createdAt: new Date() };`,
+    `await db.user.create({ data: { ...request.body } });`,
+    `const merged = { ...parsed.body };`,
+    `return { ...parsed.query, page: 1 };`,
+    `const next = { ...searchParams };`,
+    `function build(params) { return { ...params, role: "user" }; }`,
+    `const out = { ...query };`,
+    `Object.assign({}, req, { id: 1 })`,
+    `Object.assign({ }, body, { extra: true })`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

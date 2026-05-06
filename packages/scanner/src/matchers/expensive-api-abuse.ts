@@ -24,6 +24,87 @@ export const expensiveApiAbuseMatcher: MatcherPlugin = {
     "**/actions.{ts,tsx}",
     "**/*.{ts,tsx}",
   ],
+  examples: [
+    `export async function POST(req: Request) {
+  const { text } = await generateText({ model, prompt: "hi" });
+  return Response.json({ text });
+}`,
+    `export async function POST(req: Request) {
+  const result = streamText({ model, messages: [] });
+  return result.toAIStreamResponse();
+}`,
+    `export async function POST() {
+  const out = await generateObject({ model, schema, prompt: "x" });
+  return Response.json(out);
+}`,
+    `export const POST = async () => {
+  const stream = streamObject({ model, schema, prompt: "y" });
+  return new Response(stream.textStream);
+};`,
+    `export async function POST() {
+  const v = await embed({ model, value: "hello" });
+  return Response.json(v);
+}`,
+    `export async function POST() {
+  const vs = await embedMany({ model, values: ["a", "b"] });
+  return Response.json(vs);
+}`,
+    `"use server";
+export async function ask(prompt: string) {
+  return openai.chat.completions.create({ model: "gpt-4", messages: [] });
+}`,
+    `export async function POST() {
+  return openai.completions.create({ model: "gpt-3.5", prompt: "x" });
+}`,
+    `export async function POST() {
+  return openai.embeddings.create({ model: "text-embed", input: "x" });
+}`,
+    `export async function POST() {
+  return openai.images.generate({ prompt: "x" });
+}`,
+    `export async function POST() {
+  return anthropic.messages.create({ model: "claude", messages: [] });
+}`,
+    `export async function POST() {
+  return anthropic.completions.create({ model: "claude", prompt: "x" });
+}`,
+    `export async function POST() {
+  await fetch("https://ai-gateway.vercel.sh/v1/chat", { method: "POST" });
+  return new Response("ok");
+}`,
+    `export async function POST() {
+  await fetch("https://api.openai.com/v1/chat/completions", { method: "POST" });
+  return new Response("ok");
+}`,
+    `export async function POST() {
+  await fetch("https://api.openai.com/v1/completions", { method: "POST" });
+  return new Response("ok");
+}`,
+    `export async function POST() {
+  await fetch("https://api.openai.com/v1/embeddings", { method: "POST" });
+  return new Response("ok");
+}`,
+    `export async function POST() {
+  await fetch("https://api.openai.com/v1/images/generations", { method: "POST" });
+  return new Response("ok");
+}`,
+    `"use server";
+export async function notify() {
+  await sendgrid.send({ to: "x@x.com", subject: "hi" });
+}`,
+    `"use server";
+export async function notify() {
+  await resend.emails.send({ to: "x@x.com" });
+}`,
+    `"use server";
+export async function send() {
+  await twilio.messages.create({ to: "+1", body: "hi" });
+}`,
+    `"use server";
+export async function pay() {
+  await stripe.charges.create({ amount: 100, currency: "usd" });
+}`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];

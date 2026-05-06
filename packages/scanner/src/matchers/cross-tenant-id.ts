@@ -14,6 +14,22 @@ export const crossTenantIdMatcher: MatcherPlugin = {
     "**/apps/**/route.*.ts",
     "**/app/api/**/*.ts",
   ],
+  examples: [
+    `const t = await getTeamById(parsed.body.teamId);`,
+    `const u = await getUserById(req.params.userId);`,
+    `const i = await getInstallationByUid(parsed.query.installationUid);`,
+    `const teamId = parsed.body.teamId;`,
+    `const ownerId = req.params.ownerId;`,
+    `const userId = parsed.query.userId;`,
+    `const installationId = parsed.body.installationId;`,
+    `const configurationId = parsed.body.configurationId;`,
+    `const integrationConfigurationId = req.body.integrationConfigurationId;`,
+    `const t = getTeamById(install.ownerId);`,
+    `const t = getTeamById(record.teamId);`,
+    `const r = await findById(parsed.params.id);`,
+    `const r = await findOneById(req.body.id);`,
+    `const r = await findByUid(parsed.body.uid);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

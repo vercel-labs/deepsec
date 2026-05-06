@@ -16,6 +16,26 @@ export const errorMessageLeakMatcher: MatcherPlugin = {
     "**/routes/**/*.{ts,tsx}",
     "**/endpoints/**/*.{ts,tsx}",
   ],
+  examples: [
+    `try { run(); } catch (err) {
+  return Response.json({ error: err.message });
+}`,
+    `try { run(); } catch (error) {
+  return NextResponse.json({ message: error.message }, { status: 500 });
+}`,
+    `try { run(); } catch (err) {
+  return Response.json({ stack: err.stack });
+}`,
+    `try { run(); } catch (error) {
+  return res.json({ trace: error.stack });
+}`,
+    `try { run(); } catch (err) {
+  return res.send(err.toString());
+}`,
+    `try { run(); } catch (err) {
+  return Response.json({ error: String(err) });
+}`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];

@@ -17,6 +17,15 @@ export const protoRpcSurfaceMatcher: MatcherPlugin = {
   slug: "proto-rpc-surface",
   description: "Protobuf service or message file (RPC entry point / wire-format definition)",
   filePatterns: ["**/*.proto"],
+  requires: { tech: ["grpc", "connectrpc"] },
+  examples: [
+    `service ControllerService {\n  rpc ExecCommand(ExecRequest) returns (ExecResponse);\n}`,
+    `service Sandbox {\n  rpc Run(RunRequest) returns (RunResponse);\n  rpc Stream(StreamRequest) returns (stream Event);\n}`,
+    `message ExecRequest {\n  string command = 1;\n  repeated string args = 2;\n  string path = 3;\n}`,
+    `message FileOp {\n  string source = 1;\n  string destination = 2;\n  uint32 mode = 3;\n}`,
+    `message Image {\n  string url = 1;\n  string digest = 2;\n}`,
+    `enum Mode {\n  MODE_UNSPECIFIED = 0;\n  MODE_RW = 1;\n}`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

@@ -104,6 +104,42 @@ export const cryptoUsageMatcher: MatcherPlugin = {
   description:
     "Any file that uses cryptographic primitives (sign/verify/encrypt/hash/HMAC/random/key-derivation) — wide net for AI review",
   filePatterns: ["**/*.go", "**/*.{ts,tsx,js,jsx,mjs,cjs}", "**/*.py"],
+  examples: [
+    `import "crypto/aes"`,
+    `import "crypto/sha256"`,
+    `import "golang.org/x/crypto/bcrypt"`,
+    `const crypto = require('node:crypto');`,
+    `import jwt from "jsonwebtoken";`,
+    `import { SignJWT } from "jose";`,
+    `const hash = crypto.subtle.digest("SHA-256", data);`,
+    `from cryptography.hazmat.primitives import hashes`,
+    `import hashlib`,
+    `sig := ed25519.Sign(priv, msg)`,
+    `cipher := rsa.EncryptPKCS1v15(rand, pub, msg)`,
+    `r, s, err := ecdsa.Sign(rand, key, hash)`,
+    `mac := hmac.New(sha256.New, key)`,
+    `block, _ := aes.NewCipher(key)`,
+    `gcm, _ := cipher.NewGCM(block)`,
+    `if subtle.ConstantTimeCompare(a, b) == 1 { }`,
+    `cert, _ := x509.ParseCertificate(der)`,
+    `tls.Config{ MinVersion: tls.VersionTLS12 }`,
+    `h := sha256.New()`,
+    `const hash = createHash('sha256');`,
+    `const buf = randomBytes(32);`,
+    `const id = randomUUID();`,
+    `const key = pbkdf2Sync(password, salt, 100000, 64, 'sha512');`,
+    `scrypt(password, salt, 64, (err, key) => {});`,
+    `if (timingSafeEqual(a, b)) ok();`,
+    `const sig = jwt.sign({ id: 1 }, secret);`,
+    `const out = await jose.jwtVerify(token, key);`,
+    `await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);`,
+    `import hmac
+mac = hmac.new(key, msg, hashlib.sha256)`,
+    `import secrets
+token = secrets.token_hex(16)`,
+    `import hashlib
+h = hashlib.sha256(b"abc")`,
+  ],
   match(content, filePath) {
     if (/_test\.go$/.test(filePath)) return [];
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];

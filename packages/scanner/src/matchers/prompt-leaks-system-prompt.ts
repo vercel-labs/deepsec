@@ -22,6 +22,20 @@ export const promptLeaksSystemPromptMatcher: MatcherPlugin = {
   description:
     "System prompt embeds env-var secrets / API tokens — verify nothing leaks via traces or model output",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  // Examples cover the env-var leak path (the higher-signal one — most
+  // hardcoded-secret bugs are also caught by `secrets-exposure`). The
+  // hardcoded-token-prefix path is exercised by the SECRET_ENV_VAR /
+  // HARDCODED_SECRET regexes below; we don't include literal example
+  // strings of those shapes here because GitHub push-protection rejects
+  // any diff that contains a contiguous Stripe / GitHub-PAT / Slack /
+  // AWS key shape, even when the body is obvious-placeholder.
+  examples: [
+    `await streamText({\n  system: \`You are an agent. API key: \${process.env.OPENAI_API_KEY}\`,\n  prompt: "hi",\n});`,
+    `await generateText({\n  instructions: \`Auth token is \${process.env.GITHUB_TOKEN}\`,\n});`,
+    `const config = {\n  messages: [\n    { role: "system", content: \`Your secret: \${process.env.SLACK_SIGNING_SECRET}\` },\n  ],\n};`,
+    `await generateText({\n  system: \`Bearer: \${process.env.AUTH_TOKEN}\`,\n});`,
+    `await streamText({\n  system: \`Password: \${process.env.DB_PASSWORD}\`,\n});`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

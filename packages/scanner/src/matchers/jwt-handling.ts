@@ -10,12 +10,30 @@ export const jwtHandlingMatcher: MatcherPlugin = {
   slug: "jwt-handling",
   description: "JWT signing, verification, and cookie-based session handling",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `import { jwtVerify } from "jose"; await jwtVerify(token, key);`,
+    `import jwt from "jsonwebtoken"; jwt.verify(token, key);`,
+    `await verifyJwt(token); // jwt`,
+    `import { SignJWT } from "jose"; new SignJWT({}).sign(key);`,
+    `import jwt from "jsonwebtoken"; jwt.sign(payload, key);`,
+    `const j = jwtSign(payload); // jwt`,
+    `const j = createBypassJwt(uid); // jwt`,
+    `import { jwtDecrypt } from "jose"; await jwtDecrypt(token, key);`,
+    `import { EncryptJWT } from "jose"; new EncryptJWT({}).encrypt(key);`,
+    `const opts = { cookie: { secret: "x" } }; // jwt`,
+    `const c = SESSION_COOKIE; // jwt`,
+    `const c = USER_CACHE_COOKIE; // jwt`,
+    `await refreshToken(); // jwt`,
+    `force_refresh_access_token(); // jwt`,
+    `const t = jwt.sign(p, k, { algorithm: "none" });`,
+    `const t = jwt.sign(p, k, { alg: "none" });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     if (/node_modules/.test(filePath)) return [];
 
     // Only match files that deal with JWT/tokens
-    if (!/jwt|jose|jsonwebtoken|token|session.*cookie/i.test(content)) return [];
+    if (!/jwt|jose|jsonwebtoken|token|session[\w\s]{0,20}cookie/i.test(content)) return [];
 
     return regexMatcher(
       "jwt-handling",
@@ -38,7 +56,7 @@ export const jwtHandlingMatcher: MatcherPlugin = {
           label: "Token refresh logic (verify validation)",
         },
         {
-          regex: /algorithm.*none|alg.*none/i,
+          regex: /algorithm.{0,40}none|alg.{0,40}none/i,
           label: "JWT 'none' algorithm (CRITICAL if not test)",
         },
       ],

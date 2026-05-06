@@ -51,6 +51,7 @@ If you feel like the `deepsec` should look at more parts of the code, give it [t
 ## Docs
 
 - [docs/getting-started.md](docs/getting-started.md) — first-scan walkthrough
+- [docs/supported-tech.md](docs/supported-tech.md) — frameworks and ecosystems deepsec recognizes out of the box
 - [docs/writing-matchers.md](docs/writing-matchers.md) — **prompt your coding agent to grow your matcher set**
 - [docs/configuration.md](docs/configuration.md) — `deepsec.config.ts` reference
 - [docs/plugins.md](docs/plugins.md) — plugin authoring

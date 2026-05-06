@@ -20,6 +20,18 @@ export const slackSigningVerificationMatcher: MatcherPlugin = {
   slug: "slack-signing-verification",
   description: "Slack request handlers — verify HMAC signing + replay protection",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  examples: [
+    `import { App } from "@slack/bolt";\nexport async function POST(req: Request) {\n  return new Response("ok");\n}`,
+    `import { App } from "@slack/bolt";\nconst app = new App({ signingSecret: process.env.SLACK_SIGNING_SECRET });`,
+    `import { App } from "@slack/bolt";\napp.command("/hello", async ({ ack }) => { await ack(); });`,
+    `import { App } from "@slack/bolt";\napp.action("button_click", async ({ ack }) => { await ack(); });`,
+    `import { App } from "@slack/bolt";\napp.event("message", async ({ event }) => {});`,
+    `import { App } from "@slack/bolt";\napp.view("modal_submit", async ({ ack }) => { await ack(); });`,
+    `import { App } from "@slack/bolt";\napp.shortcut("global_shortcut", async ({ ack }) => { await ack(); });`,
+    `import { AwsLambdaReceiver } from "@slack/bolt";\nconst receiver = new AwsLambdaReceiver({ signingSecret: "x" });`,
+    `import { verifySlackRequest } from "@slack/web-api";\nverifySlackRequest({ body, signingSecret });`,
+    `import { createHmac } from "crypto";\nconst SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;\nconst hmac = crypto.createHmac("sha256", slackSecret);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

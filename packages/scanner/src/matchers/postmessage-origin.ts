@@ -6,6 +6,20 @@ export const postmessageOriginMatcher: MatcherPlugin = {
   slug: "postmessage-origin",
   description: "postMessage handlers without origin validation — XSS via malicious parent frame",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `window.addEventListener("message", (event) => {
+  document.body.innerHTML = event.data;
+});`,
+    `window.addEventListener('message', handleMsg);`,
+    `iframe.onmessage = (e) => {
+  console.log(e.data);
+};`,
+    `frame.onmessage = function (e) { dispatch(e.data); };`,
+    `addEventListener("message", function (event) {
+  if (event.origin !== "https://trusted.example") return;
+  doStuff(event.data);
+});`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     if (!/addEventListener.*message|onmessage/.test(content)) return [];

@@ -20,6 +20,13 @@ export const zodPassthroughMassAssignmentMatcher: MatcherPlugin = {
   description:
     "Zod schema with .passthrough() — verify parsed output isn't passed to DB write unfiltered",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  examples: [
+    `import { z } from "zod";\nconst schema = z.object({ name: z.string() }).passthrough();`,
+    `import { z } from "zod";\nconst input = z.object({ id: z.string() }).passthrough();\nconst parsed = input.parse(req.body);\nawait db.insert(users).values(parsed);`,
+    `import { z } from "zod";\nconst schema = z.object({}).passthrough();\nawait db.update(users).set(parsed);`,
+    `import { z } from "zod";\nexport const userInput = z.object({ name: z.string() }).strict().passthrough();`,
+    `import { z } from "zod";\nconst s = z\n  .object({ name: z.string() })\n  .passthrough();`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

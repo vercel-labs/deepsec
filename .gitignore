@@ -10,3 +10,4 @@ next-env.d.ts
 .claude
 linear-*
 .deepsec
+plans/

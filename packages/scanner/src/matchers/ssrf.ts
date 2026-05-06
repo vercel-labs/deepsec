@@ -6,6 +6,15 @@ export const ssrfMatcher: MatcherPlugin = {
   slug: "ssrf",
   description: "HTTP requests with dynamic/user-controlled URLs",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `fetch(req.body.url);`,
+    `fetch(query.target);`,
+    `axios.get(req.body.endpoint);`,
+    `axios.post(params.url, data);`,
+    "https.request(`https://api/${req.body.host}`);",
+    `new URL(req.query.target);`,
+    "fetch(`${userBase}/items`);",
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

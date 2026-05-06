@@ -193,6 +193,24 @@ function fingerprint(value: string | undefined): string {
 }
 
 /**
+ * List `deepsec-tar-*` temp files currently in `os.tmpdir()`. Used as a
+ * before/after snapshot around sandbox invocations: makeTarball writes
+ * each upload bundle to a path under os.tmpdir(), and either the
+ * uploader or the orchestrator's finally block is supposed to unlink
+ * the file when the bundle is no longer needed. A leak here would mean
+ * a long-running orchestrator slowly fills /tmp — invisible from the
+ * unit tests, which only verify a single makeTarball call.
+ *
+ * We diff before/after rather than asserting an empty set so concurrent
+ * CI jobs on the same runner don't cause false positives.
+ */
+function listDeepsecTarballs(): string[] {
+  return fs
+    .readdirSync(os.tmpdir())
+    .filter((n) => n.startsWith("deepsec-tar-") && n.endsWith(".tar.gz"));
+}
+
+/**
  * Pack the local `packages/deepsec` into a `.tgz` tarball — same format
  * `npm publish` would ship. Returns the absolute path to the produced
  * file. Used by the live-sandbox test to substitute the local source
@@ -290,6 +308,15 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
         // proxy is skipped for non-claude-agent-sdk agents (see
         // setup.ts), so no AI credentials needed. Bootstrap + worker
         // is ~3-5 min — most of that is bootstrap snapshot creation.
+        //
+        // Snapshot /tmp before/after to verify the disk-backed tarball
+        // path cleans up after itself. Each `sandbox process` builds
+        // three upload bundles (app + target + data) into os.tmpdir()
+        // and is supposed to unlink them after upload completes (the
+        // uploader does it on success, the orchestrator's finally
+        // block sweeps any survivors). A regression that holds onto
+        // those files would slowly fill /tmp on long-running invokers.
+        const tarsBeforeProc = listDeepsecTarballs();
         const proc = runBundle(
           [
             "sandbox",
@@ -310,6 +337,12 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
           tmp,
         );
         expect(proc.status).toBe(0);
+        const tarsAfterProc = listDeepsecTarballs();
+        const leakedProc = tarsAfterProc.filter((n) => !tarsBeforeProc.includes(n));
+        expect(
+          leakedProc,
+          `sandbox process leaked tarballs in os.tmpdir(): ${leakedProc.join(", ")}`,
+        ).toEqual([]);
 
         // Findings should be on disk, populated by the stub agent
         // running INSIDE the sandbox and merged back via the result
@@ -322,6 +355,7 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
         expect(withFindings[0].analysisHistory.some((h) => h.agentType === "stub")).toBe(true);
 
         // 5. sandbox revalidate over the same findings.
+        const tarsBeforeReval = listDeepsecTarballs();
         const reval = runBundle(
           [
             "sandbox",
@@ -342,6 +376,12 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
           tmp,
         );
         expect(reval.status).toBe(0);
+        const tarsAfterReval = listDeepsecTarballs();
+        const leakedReval = tarsAfterReval.filter((n) => !tarsBeforeReval.includes(n));
+        expect(
+          leakedReval,
+          `sandbox revalidate leaked tarballs in os.tmpdir(): ${leakedReval.join(", ")}`,
+        ).toEqual([]);
 
         const after = readAllRecords(filesDir);
         const verdicts = after.flatMap((r) => r.findings.filter((f) => f.revalidation));

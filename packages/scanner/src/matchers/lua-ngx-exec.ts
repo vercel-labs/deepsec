@@ -6,6 +6,14 @@ export const luaNgxExecMatcher: MatcherPlugin = {
   slug: "lua-ngx-exec",
   description: "Lua ngx.exec/ngx.redirect/os.execute/io.popen with dynamic content",
   filePatterns: ["**/*.lua"],
+  examples: [
+    `ngx.exec("/internal/" .. user_path)`,
+    `ngx.redirect("https://example.com/" .. target)`,
+    `os.execute("rm -rf " .. dir)`,
+    `local fh = io.popen(cmd)`,
+    `local res = ngx.location.capture("/proxy")`,
+    `ngx.exec("@upstream")`,
+  ],
   match(content, filePath) {
     if (/_test\.lua$|_spec\.lua$/.test(filePath)) return [];
 

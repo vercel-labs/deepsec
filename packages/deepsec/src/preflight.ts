@@ -11,6 +11,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getVercelOidcToken } from "@vercel/oidc";
 
 // Linkable URL — printed in error messages so users can paste the
 // URL into a browser instead of hunting through the repo. Points at
@@ -24,11 +25,23 @@ const SETUP_DOC_URL = "https://github.com/vercel-labs/deepsec/blob/main/docs/ver
 const GATEWAY_ANTHROPIC_BASE_URL = "https://ai-gateway.vercel.sh";
 const GATEWAY_OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 
+// Refresh the OIDC token if it would expire within the next hour. Bounds the
+// risk that a token resolved at CLI startup expires mid-run — sandbox jobs
+// and long process/revalidate runs routinely take longer than a few minutes,
+// and the gateway will 401 the moment the JWT lapses.
+const OIDC_EXPIRATION_BUFFER_MS = 60 * 60 * 1000;
+
 /**
  * If the user set `AI_GATEWAY_API_KEY`, expand it into the four env vars
  * the agent SDKs actually read. Lets a user run with a single token
  * instead of duplicating it across `ANTHROPIC_AUTH_TOKEN` /
  * `OPENAI_API_KEY` (the gateway accepts the same token for both).
+ *
+ * Falls back to a Vercel OIDC token (via `@vercel/oidc`) when
+ * `AI_GATEWAY_API_KEY` is unset. The AI Gateway accepts OIDC tokens
+ * issued by `vercel env pull`, so a user who's already linked the project
+ * doesn't need a separate gateway key. `getVercelOidcToken` also refreshes
+ * the token in development when it's expired or near expiry.
  *
  * Existing values always win — this only fills in what's missing, so a
  * user who has set, say, `ANTHROPIC_BASE_URL=https://api.anthropic.com`
@@ -37,7 +50,18 @@ const GATEWAY_OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
  * Call this once at CLI startup (after dotenv loads .env.local), before
  * any module reads these vars.
  */
-export function applyAiGatewayDefaults(): void {
+export async function applyAiGatewayDefaults(): Promise<void> {
+  if (!process.env.AI_GATEWAY_API_KEY) {
+    try {
+      process.env.AI_GATEWAY_API_KEY = await getVercelOidcToken({
+        expirationBufferMs: OIDC_EXPIRATION_BUFFER_MS,
+      });
+    } catch {
+      // No OIDC token available (no env var, no linked project, or refresh
+      // failed). Fall through — assertAgentCredential will emit a clearer
+      // error pointing at .env.local if a credential is actually required.
+    }
+  }
   const key = process.env.AI_GATEWAY_API_KEY;
   if (!key) return;
   if (!process.env.ANTHROPIC_AUTH_TOKEN) process.env.ANTHROPIC_AUTH_TOKEN = key;

@@ -17,6 +17,17 @@ export const drizzleMassAssignmentMatcher: MatcherPlugin = {
   slug: "drizzle-mass-assignment",
   description: "Drizzle insert/update spreading request body — column-level mass assignment risk",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  requires: { tech: ["drizzle"] },
+  examples: [
+    `import { users } from "drizzle-orm";\nawait db.insert(users).values(req.body);`,
+    `import { users } from "drizzle-orm";\nawait db.insert(users).values({ ...req.body });`,
+    `import { posts } from "drizzle-orm";\nawait db.insert(posts).values(payload);`,
+    `import { posts } from "drizzle-orm";\nawait db.insert(posts).values({ ...input });`,
+    `import { users } from "drizzle-orm";\nawait db.update(users).set(body);`,
+    `import { users } from "drizzle-orm";\nawait db.update(users).set({ ...request.body });`,
+    `import { users } from "@repo/db";\nawait db.insert(users).values({ ...formData });`,
+    `import { users } from "drizzle-orm";\nawait db.update(users).set({ ...data });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

@@ -198,15 +198,27 @@ async function bootstrapAndSpawn(
   let snapshotId = config.snapshotId ?? null;
   if (!snapshotId) {
     const bundle = await prepareUploads(config, ctx.mode, ctx.root, onLog);
-    snapshotId = await createBootstrapSnapshot({
-      projectId: config.projectId,
-      agentType: config.agentType,
-      vcpus: config.vcpus,
-      timeout: config.timeout,
-      mode: ctx.mode,
-      bundle,
-      onLog,
-    });
+    try {
+      snapshotId = await createBootstrapSnapshot({
+        projectId: config.projectId,
+        agentType: config.agentType,
+        vcpus: config.vcpus,
+        timeout: config.timeout,
+        mode: ctx.mode,
+        bundle,
+        onLog,
+      });
+    } finally {
+      // Belt-and-suspenders: uploadTarballToSandbox unlinks each tarball on
+      // success, but if snapshot creation throws before all three uploads
+      // have run we'd leak the rest in os.tmpdir(). Best-effort sweep so
+      // long-running orchestrators don't accumulate stale temp files.
+      for (const t of [bundle.app.tarPath, bundle.target.tarPath, bundle.data.tarPath]) {
+        try {
+          fs.unlinkSync(t);
+        } catch {}
+      }
+    }
   } else {
     onLog(`Using provided snapshot: ${snapshotId}`);
   }

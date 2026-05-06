@@ -12,6 +12,14 @@ export const dockerfileCurlPipeUnverifiedMatcher: MatcherPlugin = {
   slug: "dockerfile-curl-pipe-unverified",
   description: "RUN curl|wget piped to shell/tar without checksum verification",
   filePatterns: ["**/Dockerfile", "**/Dockerfile.*", "**/*.Dockerfile"],
+  requires: { tech: ["docker"] },
+  examples: [
+    `RUN curl -fsSL https://example.com/install.sh | sh`,
+    `RUN curl -L https://get.docker.com/ | bash`,
+    `RUN wget -qO- https://example.com/install | sh`,
+    `RUN curl -L https://example.com/release.tar.gz | tar -xz`,
+    `RUN wget -O- https://example.com/file.zip | unzip -`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

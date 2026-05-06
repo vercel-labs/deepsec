@@ -10,6 +10,12 @@ export const dangerousHtmlMatcher: MatcherPlugin = {
   slug: "dangerous-html",
   description: "dangerouslySetInnerHTML and innerHTML with source classification",
   filePatterns: ["**/*.{tsx,jsx,ts,js}"],
+  examples: [
+    `<div dangerouslySetInnerHTML={{ __html: html }} />`,
+    `<span dangerouslySetInnerHTML={{ __html: props.body }} />`,
+    `el.innerHTML = data;`,
+    `node.innerHTML = result;`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

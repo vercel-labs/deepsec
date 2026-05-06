@@ -6,6 +6,17 @@ export const urlRegexValidationMatcher: MatcherPlugin = {
   slug: "url-regex-validation",
   description: "Regex-based URL/hostname validation with .+ or .* patterns — bypassable",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `const re = new RegExp("https?://.+\\\\.example\\\\.com");
+if (re.test(url)) ok();`,
+    `if (/^https?:\\/\\/.+\\.trusted\\.com/.test(url)) ok();`,
+    `const ok = /https?:.+\\.example\\.com/.test(url);`,
+    `const re = /https?:.*\\.foo\\.com/;
+if (re.test(url)) good();`,
+    `const u = new URL(req.query.target);`,
+    `const u = new URL(params.url);`,
+    `const u = new URL(body.callbackUrl);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

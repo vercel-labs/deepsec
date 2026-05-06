@@ -48,12 +48,18 @@ importers:
       '@openai/codex-sdk':
         specifier: ^0.125.0
         version: 0.125.0
+      '@vercel/oidc':
+        specifier: ^3.4.0
+        version: 3.4.0
       '@vercel/sandbox':
         specifier: ^1.9.0
         version: 1.10.0
       jiti:
         specifier: ^2.4.0
         version: 2.6.1
+      tar:
+        specifier: ^7.5.13
+        version: 7.5.13
     devDependencies:
       '@deepsec/core':
         specifier: workspace:*
@@ -800,6 +806,13 @@ packages:
     engines: {node: '>=18'}
     dev: false
 
+  /@isaacs/fs-minipass@4.0.1:
+    resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
+    engines: {node: '>=18.0.0'}
+    dependencies:
+      minipass: 7.1.3
+    dev: false
+
   /@jridgewell/sourcemap-codec@1.5.5:
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
     dev: true
@@ -1508,6 +1521,11 @@ packages:
     engines: {node: '>= 20'}
     dev: false
 
+  /@vercel/oidc@3.4.0:
+    resolution: {integrity: sha512-p0sKfHkfRmMaqqDwNL4tjnX9TgRrLMlEtUjIxfrEns8pOxz1R9ztqOVI+ehqiq93/2/HnfPe/UBZkfAZwnx0UA==}
+    engines: {node: '>= 20'}
+    dev: false
+
   /@vercel/sandbox@1.10.0:
     resolution: {integrity: sha512-rGA8KJB5ZwQeygzsndgrbHsys3HGWKHQaRQlmyIEHce2BFuTfQUgivHDj5DCZhWiyjjSEodLHpoJkZBd95K0/Q==}
     dependencies:
@@ -1720,6 +1738,11 @@ packages:
     resolution: {integrity: sha512-PAJdDJusoxnwm1VwW07VWwUN1sl7smmC3OKggvndJFadxxDRyFJBX/ggnu/KE4kQAB7a3Dp8f/YXC1FlUprWmA==}
     engines: {node: '>= 16'}
     dev: true
+
+  /chownr@3.0.0:
+    resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
+    engines: {node: '>=18'}
+    dev: false
 
   /commander@13.1.0:
     resolution: {integrity: sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw==}
@@ -2291,6 +2314,13 @@ packages:
     engines: {node: '>=16 || 14 >=14.17'}
     dev: false
 
+  /minizlib@3.1.0:
+    resolution: {integrity: sha512-KZxYo1BUkWD2TVFLr0MQoM8vUUigWD3LlD83a/75BqC+4qE0Hb1Vo5v1FgcfaNXvfXzr+5EhQ6ing/CaBijTlw==}
+    engines: {node: '>= 18'}
+    dependencies:
+      minipass: 7.1.3
+    dev: false
+
   /ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
@@ -2694,6 +2724,17 @@ packages:
       - react-native-b4a
     dev: false
 
+  /tar@7.5.13:
+    resolution: {integrity: sha512-tOG/7GyXpFevhXVh8jOPJrmtRpOTsYqUIkVdVooZYJS/z8WhfQUX8RJILmeuJNinGAMSu1veBr4asSHFt5/hng==}
+    engines: {node: '>=18'}
+    dependencies:
+      '@isaacs/fs-minipass': 4.0.1
+      chownr: 3.0.0
+      minipass: 7.1.3
+      minizlib: 3.1.0
+      yallist: 5.0.0
+    dev: false
+
   /text-decoder@1.2.7:
     resolution: {integrity: sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==}
     dependencies:
@@ -2980,6 +3021,11 @@ packages:
     engines: {node: '>= 6.0'}
     dependencies:
       os-paths: 4.4.0
+    dev: false
+
+  /yallist@5.0.0:
+    resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
+    engines: {node: '>=18'}
     dev: false
 
   /yaml@2.8.3:

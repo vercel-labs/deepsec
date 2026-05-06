@@ -14,6 +14,14 @@ export const iamPermissionsMatcher: MatcherPlugin = {
     "**/app/**/actions.{ts,tsx}",
     "**/api/**/*.{ts,tsx}",
   ],
+  examples: [
+    `export const POST = withAuthentication(handler, opts);`,
+    `const wrapped = withAuthentication(handler);`,
+    `const a = Action.READ_PROJECT.with(Resource.PROJECT);`,
+    `if (Action.UPDATE_TEAM && Resource.TEAM) ok();`,
+    `const opts = { permissions: [Action.READ.PROJECT] };`,
+    `permissions: [`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

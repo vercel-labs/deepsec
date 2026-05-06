@@ -23,7 +23,7 @@ gaps.
 
 - A revalidated true-positive needs a matcher to catch siblings on future scans.
 - A cluster of `other-*` slugs in `deepsec metrics` points at a real category deepsec has no name for.
-- The target repo has **entry points the default matchers don't see** — Hono routes, Cloudflare Workers, internal RPC handlers, Lua/Go/Ruby code, custom middleware. The AI eventually finds bugs there too, but only on files something flagged as a candidate.
+- The target repo has **entry points the default matchers don't see**. Check [docs/supported-tech.md](./supported-tech.md) first — your framework may already be covered. If not, a custom matcher fills the gap.
 - You have an **organization-specific** pattern (internal auth helper, internal SDK call, custom middleware).
 
 ## Where matchers live in your workspace

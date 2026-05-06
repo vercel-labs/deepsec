@@ -13,6 +13,13 @@ export const dockerfileRunAsRootMatcher: MatcherPlugin = {
   slug: "dockerfile-run-as-root",
   description: "Final Dockerfile stage runs as root (no USER directive, or USER root)",
   filePatterns: ["**/Dockerfile", "**/Dockerfile.*", "**/*.Dockerfile"],
+  requires: { tech: ["docker"] },
+  examples: [
+    `FROM node:20\nWORKDIR /app\nCOPY . .\nCMD ["node", "index.js"]`,
+    `FROM ubuntu:22.04\nRUN apt-get update\nUSER root\nCMD ["bash"]`,
+    `FROM python:3.11\nUSER 0\nCMD ["python", "app.py"]`,
+    `FROM alpine\nFROM debian:bookworm\nCOPY --from=0 /bin/app /bin/app\nCMD ["/bin/app"]`,
+  ],
   match(content) {
     const lines = content.split("\n");
 

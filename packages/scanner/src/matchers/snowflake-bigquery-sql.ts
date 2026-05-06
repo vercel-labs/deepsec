@@ -17,6 +17,15 @@ export const snowflakeBigquerySqlMatcher: MatcherPlugin = {
   slug: "snowflake-bigquery-sql",
   description: "Snowflake / BigQuery / ClickHouse SQL via template/string interpolation",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  examples: [
+    `import snowflake from "snowflake-sdk";\nconnection.execute({ sqlText: \`SELECT * FROM users WHERE id = \${id}\` });`,
+    `import snowflake from "snowflake-sdk";\nconnection.execute({ sqlText: "SELECT * FROM users WHERE id = " + id });`,
+    `import { BigQuery } from "@google-cloud/bigquery";\nawait bigquery.query(\`SELECT * FROM users WHERE id = \${id}\`);`,
+    `import { BigQuery } from "@google-cloud/bigquery";\nawait bigquery.createQueryJob({ query: \`SELECT * FROM \${tableName}\` });`,
+    `import { createClient } from "@clickhouse/client";\nawait clickhouse.query(\`SELECT * FROM users WHERE id = \${id}\`);`,
+    `import { createClient } from "@clickhouse/client";\nawait client.query({ query: \`SELECT * FROM \${table}\` });`,
+    `import duckdb from "duckdb";\nawait connection.execute(\`SELECT * FROM \${table}\`);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

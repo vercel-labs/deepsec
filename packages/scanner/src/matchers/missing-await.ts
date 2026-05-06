@@ -10,6 +10,22 @@ export const missingAwaitMatcher: MatcherPlugin = {
   slug: "missing-await",
   description: "Async calls that may be missing await — race conditions, lost errors",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `withMutex(() => doStuff());`,
+    `withUserMutex(() => updateUser(id));`,
+    `withLock(key, () => criticalSection());`,
+    `withDistributedLock(key, fn);`,
+    `withTransaction(async (tx) => {
+  await tx.user.update({ id });
+});`,
+    `withDbTransaction(fn);`,
+    `redis.get("key");`,
+    `redis.set(key, value);`,
+    `prisma.user.findUnique({ where: { id } });`,
+    `prisma.session.delete({ where: { id } });`,
+    `db.users.findOne({ id });`,
+    `db.posts.update({ id });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];

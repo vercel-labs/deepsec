@@ -6,6 +6,19 @@ export const unsafeDeserializationMatcher: MatcherPlugin = {
   slug: "unsafe-deserialization",
   description: "JSON.parse on user input without schema validation, or unsafe eval of parsed data",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `const data = JSON.parse(req.body);`,
+    `const x = JSON.parse(request.body);`,
+    `const cfg = JSON.parse(body.config);`,
+    `const out = JSON.parse(params.payload);`,
+    `const filter = JSON.parse(query.filter);`,
+    `const payload = JSON.parse(await req.text());`,
+    `const data = JSON.parse(await request.text());`,
+    `eval(JSON.parse(input));`,
+    `const fn = new Function(JSON.parse(spec));`,
+    `const config = yaml.load(rawYaml);`,
+    `const cfg = safeLoad(input);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

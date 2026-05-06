@@ -13,7 +13,7 @@ import {
   writeFileRecord,
   writeRunMeta,
 } from "@deepsec/core";
-import { noiseScore } from "@deepsec/scanner";
+import { noiseScore, readTechJson } from "@deepsec/scanner";
 import { ClaudeAgentSdkPlugin } from "./agents/claude-agent-sdk.js";
 import { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
 import { AgentRegistry } from "./agents/registry.js";
@@ -25,6 +25,8 @@ import type {
 } from "./agents/types.js";
 import { batchCandidates } from "./batch.js";
 import { enrichFileRecord } from "./enrich.js";
+import { assemblePrompt } from "./prompt/assemble.js";
+import { languagesForBatch } from "./prompt/file-language.js";
 
 export { ClaudeAgentSdkPlugin } from "./agents/claude-agent-sdk.js";
 export { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
@@ -32,121 +34,15 @@ export { AgentRegistry } from "./agents/registry.js";
 export type { AgentPlugin, AgentProgress } from "./agents/types.js";
 export { batchCandidates } from "./batch.js";
 export { enrich } from "./enrich.js";
+export type { AssembleParams, AssembleResult, TechHighlight } from "./prompt/index.js";
+export {
+  assemblePrompt,
+  CORE_PROMPT,
+  highlightForTag,
+  noteForSlug,
+  TECH_HIGHLIGHTS,
+} from "./prompt/index.js";
 export { triage } from "./triage.js";
-
-const DEFAULT_PROMPT_TEMPLATE = `You are a world-class security researcher with deep expertise in web application security, authentication systems, and modern JavaScript/TypeScript frameworks. You think like an attacker: you look for subtle logic flaws, not just textbook vulnerabilities. You have a track record of finding bugs that automated tools miss — race conditions, auth bypasses via parameter manipulation, and trust boundary violations.
-
-An automated scanner has identified these files as **candidates** worth investigating. The scanner uses regex and heuristic patterns to cast a wide net — many candidates will be false positives, but some will be real vulnerabilities. Your job is to perform a thorough, open-ended security review. Use the flagged patterns as starting points, then investigate each file for ANY security issue you can find — especially the subtle ones that only an expert would catch.
-
-## Severity Classification
-
-- **CRITICAL**: Remote Code Execution (RCE), authentication bypass allowing full access, SQL injection on sensitive data, unrestricted file upload leading to RCE, SSRF to internal services
-- **HIGH**: Cross-Site Scripting (XSS), Server-Side Request Forgery (SSRF), privilege escalation, hardcoded secrets/credentials in source code, insecure deserialization, missing authorization on sensitive operations
-- **MEDIUM**: Open redirect, weak cryptographic algorithms, missing rate limiting, information disclosure, insecure direct object references, race conditions, logic bugs in auth/permission checks
-
-## Known Vulnerability Categories
-
-The scanner looks for these patterns, but you should look for ALL of them regardless of what the scanner flagged:
-
-| Slug | Category |
-|------|----------|
-| auth-bypass | Authentication checks that can be circumvented |
-| missing-auth | HTTP endpoints without authentication |
-| acl-check | Missing or incorrect RBAC/permission checks |
-| xss | Cross-site scripting via innerHTML, dangerouslySetInnerHTML, etc. |
-| dangerous-html | Unsafe HTML rendering with user-controlled data |
-| rce | Remote code execution via exec, eval, spawn, etc. |
-| sql-injection | SQL injection via string interpolation/concatenation |
-| ssrf | Server-side request forgery via user-controlled URLs |
-| path-traversal | File operations with user-controlled paths |
-| secrets-exposure | Hardcoded API keys, tokens, passwords |
-| insecure-crypto | Weak hash algorithms, insecure random generation |
-| open-redirect | Redirects to user-controlled URLs |
-| unsafe-redirect | Redirects bypassing validation functions |
-| public-endpoint | Public endpoints (__PUBLIC__ auth) exposing sensitive data |
-| service-entry-point | Service handlers that may lack proper auth |
-| webhook-handler | Webhook endpoints without signature verification |
-| iam-permissions | Misconfigured IAM Action/Resource permissions |
-| server-action | Next.js Server Actions without auth checks |
-| jwt-handling | JWT signing/verification misconfigurations |
-| env-exposure | Secrets leaking to client bundles via NEXT_PUBLIC_ |
-| rate-limit-bypass | Sensitive operations without rate limiting |
-| lua-header-trust | Trusted request headers without validation (Lua/OpenResty) |
-| lua-ngx-exec | Dynamic ngx.exec/ngx.redirect/os.execute in Lua |
-| lua-shared-dict-poisoning | Cache poisoning via ngx.shared dict writes from request data |
-| lua-crypto-weakness | Weak crypto in Lua (timing-unsafe compare, hardcoded IV, ECB) |
-| go-ssrf | Go HTTP requests with string-concatenated URLs |
-| go-command-injection | Go exec.Command with dynamic arguments |
-| header-strip-bypass | Security header stripping that may be bypassable (case/encoding) |
-| cache-key-poisoning | Cache keys including attacker-controlled values |
-| secret-env-var | Direct access to secret environment variables |
-| cross-tenant-id | User-supplied IDs in DB lookups without ownership check |
-| secret-in-fallback | Secret env vars with hardcoded fallback values |
-| secret-in-log | Credentials in log statements or error responses |
-| expensive-api-abuse | Endpoints calling expensive APIs (LLM, AI, paid services) without abuse protection |
-| other-* | Any other vulnerability not listed above (use descriptive suffix) |
-
-## False Positive Guidance
-
-Before classifying an issue, check for mitigations:
-- Is the input sanitized or escaped before use? (e.g., parameterized queries, HTML escaping, safeJsonStringify)
-- Is there middleware or a framework guard that protects this code path? (e.g., withSchema auth, withAuthentication, CSRF tokens)
-- Is the vulnerable pattern only used with trusted/internal data, not user input?
-- Does the framework (Next.js, Express, etc.) provide built-in protection?
-- For auth checks: does a *backend framework* middleware wrap this handler directly (withSchema, withAuthentication, Express middleware)? If yes, that's a valid mitigation. But Next.js middleware.ts alone is NOT a sufficient mitigation — it's too easy to misconfigure and bypass.
-- For redirects: is validNextRedirect() or equivalent called before the redirect?
-
-If fully mitigated, do NOT flag it. Report only genuine, exploitable vulnerabilities.
-
-## JSON.stringify in dangerouslySetInnerHTML / script tags
-
-\`JSON.stringify(data)\` inside \`dangerouslySetInnerHTML\` or inline \`<script>\` tags is an XSS vulnerability. If \`data\` contains \`</script>\`, the browser closes the script tag early and interprets the rest as HTML — enabling arbitrary script injection.
-
-**Example attack:** If data contains \`{"name":"</script><script>alert(1)</script>"}\`, the JSON breaks out of the script block.
-
-**Mitigations to check for:**
-- \`safeJsonStringify()\` or similar that escapes \`</\` → \`<\\/\`
-- HTML entity encoding of the output
-- \`JSON.stringify().replace(/</g, '\\\\u003c')\`
-
-**NOT a mitigation:** Server-side-only data does NOT make this safe — if ANY field in the serialized object can be influenced by user input (database values, query params, URL slugs, usernames), it's exploitable. Trace the data origin carefully.
-
-## Auth Bypass Patterns to Look For
-
-Beyond missing auth, look for **subtle bypasses** in code that appears to have auth:
-
-### Query String & URL Manipulation
-- **Parameter pollution**: Can duplicate query params (e.g., \`?teamId=x&teamId=y\`) change behavior or bypass checks?
-- **Encoded characters**: Does the app handle URL-encoded, double-encoded, or Unicode-normalized paths correctly? (\`%2F\` vs \`/\`, \`%00\` null bytes)
-- **Route param injection**: Can dynamic route segments like \`[teamSlug]\` or \`[...path]\` be manipulated to access other users' data?
-- **Search params as auth input**: If middleware reads \`searchParams\` for redirects or tokens, can those be spoofed?
-- **Token refresh abuse**: Query params like \`force_refresh_access_token=true\` — are they rate-limited?
-
-### Auth Flow Bypasses
-- **OAuth callback manipulation**: State parameter tampering, redirect_uri manipulation, custom URI scheme injection
-- **Session/JWT weaknesses**: Missing algorithm pinning, stub sessions when auth not configured, test tokens reachable in prod
-- **Middleware bypass**: Routes that escape the middleware matcher pattern or hit before auth middleware runs
-- **Next.js middleware is NOT sufficient auth**: Next.js \`middleware.ts\` runs at the edge and can be bypassed (matcher patterns miss routes, direct API calls skip it). Only backend framework middleware that wraps the handler directly (e.g., \`withSchema\`, \`withAuthentication\`, Express middleware chains) counts as proper auth. If a route relies solely on Next.js middleware.ts for auth, flag it.
-- **Header injection**: Auth headers like \`X-Forwarded-For\`, \`Authorization\`, custom \`x-*\` tokens — are they validated or trusted blindly?
-
-### Authorization Gaps (has auth, wrong auth)
-- **Cross-tenant access**: User-supplied \`teamId\`/\`userId\` used in DB queries instead of the authenticated identity
-- **Missing resource-level checks**: Auth confirms "user is logged in" but doesn't verify "user owns this resource"
-- **Negated permission checks**: \`!(await auth.can(...))\` with inverted logic
-- **Server Actions without auth**: Next.js Server Actions are publicly callable POST endpoints — every one needs explicit auth
-
-## Investigation Process
-
-**Static analysis only.** Do NOT attempt to reproduce, exploit, or trigger any vulnerability. Do not run the target code, send requests against any endpoint, or execute proof-of-concept scripts. Review the source code only.
-
-1. Read each target file fully using the Read tool
-2. For flagged patterns AND any other suspicious code, trace data flow: where does input come from? Is it user-controlled?
-3. Check for sanitization, validation, or middleware guards by reading imported modules
-4. Follow the auth chain: does this endpoint have proper authentication AND authorization?
-5. Look at related files (imports, middleware, route definitions, shared utils) for full context
-6. Think about logic bugs: race conditions, TOCTOU, state management issues, error handling that leaks info
-7. Report findings with high confidence only — but DO report novel issues the scanner didn't flag
-8. Skip files that are gitignored, generated, vendored, or not production code. If a file is in dist/, node_modules/, vendor/, generated/, or matches .gitignore, return an empty findings array for it.`;
 
 export function createDefaultAgentRegistry(): AgentRegistry {
   const registry = new AgentRegistry();
@@ -207,13 +103,13 @@ export async function process(params: {
   failedCount: number;
   phase: "done" | "partial";
 }> {
-  const {
-    projectId,
-    agentType = "claude-agent-sdk",
-    config = {},
-    promptTemplate = DEFAULT_PROMPT_TEMPLATE,
-    reinvestigate = false,
-  } = params;
+  const { projectId, agentType = "claude-agent-sdk", config = {}, reinvestigate = false } = params;
+  // We deliberately don't default `promptTemplate` to DEFAULT_PROMPT_TEMPLATE
+  // here — when the caller doesn't pass one, we use the modular assembler
+  // so the prompt can adapt to the detected tech stack on a per-batch
+  // basis. Callers that pass an explicit promptTemplate (e.g. from
+  // `--prompt-template`) get that string verbatim, no assembly.
+  const customPromptTemplate = params.promptTemplate;
 
   // Wrap progress callback so it never crashes the processor
   const emitProgress = (progress: ProcessProgress) => {
@@ -269,11 +165,47 @@ export async function process(params: {
     // No config.json — that's fine
   }
 
-  // Append project-specific prompt if configured
-  let effectivePrompt = promptTemplate;
-  if (projectConfig.promptAppend) {
-    effectivePrompt += "\n" + projectConfig.promptAppend;
-  }
+  // Tech detection result drives per-batch threat highlights. Read once
+  // from `data/<id>/tech.json` (written by `scan()`); empty list when the
+  // project predates tech detection — assembler then falls back to bare
+  // core prompt, which matches the legacy DEFAULT_PROMPT_TEMPLATE shape.
+  const techDetected = readTechJson(projectId);
+  const detectedTags = techDetected?.tags ?? [];
+
+  /**
+   * Build the prompt for a specific batch. Two paths:
+   *   - Caller passed an explicit promptTemplate → use it verbatim
+   *     (with the existing project-config promptAppend behavior). This
+   *     keeps `--prompt-template` callers working unchanged.
+   *   - Otherwise → assemble per-batch from core + tech highlights +
+   *     batch-slug notes, so the prompt adapts to what we detected.
+   */
+  const buildBatchPrompt = (batch: FileRecord[]): string => {
+    if (customPromptTemplate !== undefined) {
+      let p = customPromptTemplate;
+      if (projectConfig.promptAppend) {
+        p += "\n" + projectConfig.promptAppend;
+      }
+      return p;
+    }
+    const batchSlugs = Array.from(
+      new Set(batch.flatMap((r) => r.candidates.map((c) => c.vulnSlug))),
+    );
+    // Per-batch tech filtering: keep only the highlights whose language
+    // matches a file in this specific batch. A batch of pure Python
+    // files in a polyglot Next.js + Django repo gets the Django pack
+    // but not the Next.js pack, even though both are project-level
+    // detected tags.
+    const batchLanguages = languagesForBatch(batch.map((r) => r.filePath));
+    const { prompt } = assemblePrompt({
+      detectedTags,
+      batchSlugs,
+      batchLanguages,
+      projectInfo,
+      promptAppend: projectConfig.promptAppend,
+    });
+    return prompt;
+  };
 
   const model = (config.model as string) ?? "claude-opus-4-7";
 
@@ -434,11 +366,18 @@ export async function process(params: {
     });
 
     try {
+      // When using the modular assembled prompt, INFO.md is already
+      // injected by `assemblePrompt()` (between `---` separators after
+      // the threat highlights). Pass `""` to the agent layer to avoid a
+      // second `## Project Context` block being appended on top of it.
+      // Custom-template callers don't go through the assembler, so they
+      // still need the agent layer to inject INFO.md for them.
+      const projectInfoForAgent = customPromptTemplate === undefined ? "" : projectInfo;
       const gen = agent.investigate({
         batch,
         projectRoot: effectiveRootPath,
-        promptTemplate: effectivePrompt,
-        projectInfo,
+        promptTemplate: buildBatchPrompt(batch),
+        projectInfo: projectInfoForAgent,
         config,
       });
 

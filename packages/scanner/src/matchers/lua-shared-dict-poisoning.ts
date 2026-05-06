@@ -6,6 +6,13 @@ export const luaSharedDictPoisoningMatcher: MatcherPlugin = {
   slug: "lua-shared-dict-poisoning",
   description: "Writes to ngx.shared dictionaries — cross-worker cache poisoning risk",
   filePatterns: ["**/*.lua"],
+  examples: [
+    `ngx.shared.cache:set(key, value)`,
+    `ngx.shared.ratelimit:add(client_ip, 1, 60)`,
+    `ngx.shared.tokens:replace("token_" .. user_id, payload)`,
+    `ngx.shared.counters:incr(metric, 1)`,
+    `local ok, err = ngx.shared.sessions:set(sid, data, 3600)`,
+  ],
   match(content, filePath) {
     if (/_test\.lua$|_spec\.lua$/.test(filePath)) return [];
 

@@ -6,6 +6,16 @@ export const goSsrfMatcher: MatcherPlugin = {
   slug: "go-ssrf",
   description: "Go HTTP requests with string-concatenated or formatted URLs — SSRF risk",
   filePatterns: ["**/*.go"],
+  requires: { tech: ["go"] },
+  examples: [
+    `resp, err := http.Get(baseURL + path)`,
+    `resp, err := http.Post(host + "/api", "application/json", body)`,
+    `resp, err := http.Head("https://" + target)`,
+    `req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/api", host), nil)`,
+    `req, err := http.NewRequest("POST", baseURL + path, body)`,
+    `u, err := url.Parse(scheme + "://" + host)`,
+    `endpoint := fmt.Sprintf("https://api.example.com/users/%s", userID)`,
+  ],
   match(content, filePath) {
     if (/_test\.go$/.test(filePath)) return [];
 

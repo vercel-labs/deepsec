@@ -1,7 +1,23 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Stub @vercel/oidc so the preflight suite is hermetic: the real
+// implementation decodes VERCEL_OIDC_TOKEN as a JWT and, on failure,
+// falls back to reading `.vercel/project.json` and hitting Vercel. That
+// would leak the dev's local project state into the test and 401 on CI
+// (and the synthetic strings we use below aren't valid JWTs). Treating
+// the env var as the source of truth matches what applyAiGatewayDefaults
+// relies on: a token populated by `vercel env pull`.
+vi.mock("@vercel/oidc", () => ({
+  getVercelOidcToken: async () => {
+    const token = process.env.VERCEL_OIDC_TOKEN;
+    if (!token) throw new Error("no VERCEL_OIDC_TOKEN");
+    return token;
+  },
+}));
+
 import {
   applyAiGatewayDefaults,
   assertAgentCredential,
@@ -155,6 +171,7 @@ describe("applyAiGatewayDefaults", () => {
   beforeEach(() => {
     saved = {
       AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY,
+      VERCEL_OIDC_TOKEN: process.env.VERCEL_OIDC_TOKEN,
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
@@ -169,36 +186,55 @@ describe("applyAiGatewayDefaults", () => {
     }
   });
 
-  it("does nothing when AI_GATEWAY_API_KEY is unset", () => {
-    applyAiGatewayDefaults();
+  it("does nothing when AI_GATEWAY_API_KEY is unset", async () => {
+    await applyAiGatewayDefaults();
     expect(process.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(process.env.OPENAI_API_KEY).toBeUndefined();
     expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
     expect(process.env.OPENAI_BASE_URL).toBeUndefined();
   });
 
-  it("populates all four vars from AI_GATEWAY_API_KEY", () => {
+  it("populates all four vars from AI_GATEWAY_API_KEY", async () => {
     process.env.AI_GATEWAY_API_KEY = "gw-key";
-    applyAiGatewayDefaults();
+    await applyAiGatewayDefaults();
     expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("gw-key");
     expect(process.env.OPENAI_API_KEY).toBe("gw-key");
     expect(process.env.ANTHROPIC_BASE_URL).toBe("https://ai-gateway.vercel.sh");
     expect(process.env.OPENAI_BASE_URL).toBe("https://ai-gateway.vercel.sh/v1");
   });
 
-  it("does not overwrite explicit ANTHROPIC_AUTH_TOKEN", () => {
+  it("does not overwrite explicit ANTHROPIC_AUTH_TOKEN", async () => {
     process.env.AI_GATEWAY_API_KEY = "gw-key";
     process.env.ANTHROPIC_AUTH_TOKEN = "explicit-anthropic";
-    applyAiGatewayDefaults();
+    await applyAiGatewayDefaults();
     expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("explicit-anthropic");
     expect(process.env.OPENAI_API_KEY).toBe("gw-key");
   });
 
-  it("does not overwrite an explicit ANTHROPIC_BASE_URL pointing direct-to-provider", () => {
+  it("does not overwrite an explicit ANTHROPIC_BASE_URL pointing direct-to-provider", async () => {
     process.env.AI_GATEWAY_API_KEY = "gw-key";
     process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
-    applyAiGatewayDefaults();
+    await applyAiGatewayDefaults();
     expect(process.env.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
     expect(process.env.OPENAI_BASE_URL).toBe("https://ai-gateway.vercel.sh/v1");
+  });
+
+  it("falls back to VERCEL_OIDC_TOKEN when AI_GATEWAY_API_KEY is unset", async () => {
+    process.env.VERCEL_OIDC_TOKEN = "oidc-tok";
+    await applyAiGatewayDefaults();
+    expect(process.env.AI_GATEWAY_API_KEY).toBe("oidc-tok");
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("oidc-tok");
+    expect(process.env.OPENAI_API_KEY).toBe("oidc-tok");
+    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://ai-gateway.vercel.sh");
+    expect(process.env.OPENAI_BASE_URL).toBe("https://ai-gateway.vercel.sh/v1");
+  });
+
+  it("prefers an explicit AI_GATEWAY_API_KEY over VERCEL_OIDC_TOKEN", async () => {
+    process.env.AI_GATEWAY_API_KEY = "gw-key";
+    process.env.VERCEL_OIDC_TOKEN = "oidc-tok";
+    await applyAiGatewayDefaults();
+    expect(process.env.AI_GATEWAY_API_KEY).toBe("gw-key");
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("gw-key");
+    expect(process.env.OPENAI_API_KEY).toBe("gw-key");
   });
 });

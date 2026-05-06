@@ -21,6 +21,15 @@ export const agenticUntrustedPromptInputMatcher: MatcherPlugin = {
   slug: "agentic-untrusted-prompt-input",
   description: "Prompts built from external/untrusted variables — indirect prompt-injection sink",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  examples: [
+    `await streamText({\n  model,\n  prompt: \`Summarize: \${notes}\`,\n});`,
+    `await generateText({\n  system: \`You are an assistant.\`,\n  prompt: \`Read this email: \${emailBody}\`,\n});`,
+    `await generateObject({\n  messages: [\n    { role: "user", content: \`\${transcript}\` },\n  ],\n  schema,\n});`,
+    `await openai.chat.completions.create({\n  messages: [{ role: "system", content: \`Context: \${scraped}\` }],\n});`,
+    `await anthropic.messages.create({\n  system: \`Use this KB:\n\${kbDocs}\`,\n  messages: [],\n});`,
+    `import { streamText } from "@ai-sdk/openai";\nawait streamText({\n  prompt: \`Notes from CRM: \${leadNotes}\`,\n  model,\n});`,
+    `await generateText({\n  input: \`Web research: \${webpage}\`,\n  model,\n});`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

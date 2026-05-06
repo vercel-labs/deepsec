@@ -18,6 +18,18 @@ export const unixSocketListenerMatcher: MatcherPlugin = {
   slug: "unix-socket-listener",
   description: "Unix-socket / vsock listener setup (incl. umask + auto-recreate patterns)",
   filePatterns: ["**/*.go"],
+  requires: { tech: ["go"] },
+  examples: [
+    `l, err := net.Listen("unix", "/var/run/app.sock")`,
+    `l, err := net.Listen("unixpacket", path)`,
+    `l, err := net.ListenUnix("unix", addr)`,
+    `l, err := vsock.Listen(uint32(port), nil)`,
+    `conn, err := vsock.Dial(cid, port, nil)`,
+    `pc, err := net.ListenPacket("unix", path)`,
+    `oldMask := syscall.Umask(0177)`,
+    `os.Remove(socketPath)`,
+    `watcher.Add("/var/run")`,
+  ],
   match(content, filePath) {
     if (/_test\.go$/.test(filePath)) return [];
     if (/(?:^|\/)gen\//.test(filePath)) return [];

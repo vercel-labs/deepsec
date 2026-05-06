@@ -91,14 +91,22 @@ export function buildInvestigatePrompt(params: {
     })
     .join("\n");
 
+  // Composition note: when called from the modular `assemblePrompt`
+  // pipeline, the system-prompt half (intro, severity, FP guidance,
+  // tech highlights, slug notes, INFO.md) already lives in
+  // `promptTemplate`. We just append the per-batch concrete list +
+  // procedural steps + output spec — no need to repeat the "scanner
+  // casts a wide net" intro here.
+  //
+  // `projectInfo` is only emitted when the caller passes it explicitly.
+  // The processor's modular path passes `""` because INFO.md is already
+  // in the assembled prompt; custom-template callers (--prompt-template)
+  // pass the loaded INFO.md so it still reaches the model.
+  const projectInfoBlock = projectInfo ? `## Project Context\n\n${projectInfo}\n\n` : "";
+
   return `${promptTemplate}
 
-${projectInfo ? `## Project Context\n\n${projectInfo}\n` : ""}
-## Target Files
-
-The scanner flagged the following files as **candidates** worth investigating. The scanner uses regex/heuristic patterns to find interesting code sites — it casts a wide net and many candidates may be false positives. Your job is to perform a thorough, open-ended security review of each file.
-
-**Do not limit yourself to the flagged patterns.** The scanner reasons are just starting points. As you read each file, look for ANY security issue — including categories not flagged by the scanner.
+${projectInfoBlock}## Target Files
 
 ${fileList}
 

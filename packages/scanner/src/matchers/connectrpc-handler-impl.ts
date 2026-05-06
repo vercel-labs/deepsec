@@ -18,6 +18,14 @@ export const connectrpcHandlerImplMatcher: MatcherPlugin = {
   slug: "connectrpc-handler-impl",
   description: "Go file implementing one or more ConnectRPC handler methods (entry-point surface)",
   filePatterns: ["**/*.go"],
+  requires: { tech: ["connectrpc"] },
+  examples: [
+    `func (s *Service) ExecCommand(ctx context.Context, req *connect.Request[ExecRequest]) (*connect.Response[ExecResponse], error) {\n  return nil, nil\n}`,
+    `func (cs *ControllerService) Run(\n  ctx context.Context,\n  req *connect.Request[RunRequest],\n) (*connect.Response[RunResponse], error) {\n  return nil, nil\n}`,
+    `func (s *Server) Stream(ctx context.Context, stream *connect.ServerStream[Event]) error {\n  return nil\n}`,
+    `func (h *Handler) BidiChat(ctx context.Context, stream *connect.BidiStream[Msg, Msg]) error {\n  return nil\n}`,
+    `func (s *Service) Upload(ctx context.Context, stream *connect.ClientStream[Chunk]) (*connect.Response[Ack], error) {\n  return nil, nil\n}`,
+  ],
   match(content, filePath) {
     if (/_test\.go$/.test(filePath)) return [];
     if (/(?:^|\/)gen\//.test(filePath)) return [];

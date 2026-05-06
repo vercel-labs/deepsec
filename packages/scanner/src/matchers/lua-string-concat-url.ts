@@ -6,6 +6,14 @@ export const luaStringConcatUrlMatcher: MatcherPlugin = {
   slug: "lua-string-concat-url",
   description: "Lua URL construction via string concatenation — SSRF risk",
   filePatterns: ["**/*.lua"],
+  examples: [
+    `local url = "https://api.example.com/" .. user_path`,
+    `local target = "http://internal.svc/v1/" .. ngx.var.arg_id`,
+    `local endpoint = path .. "https://upstream.local/data"`,
+    `local res = ngx.location.capture("/proxy/" .. backend_id)`,
+    `request_uri = "/api/" .. tenant_id .. "/users"`,
+    `local u = base .. "https://service" .. suffix`,
+  ],
   match(content, filePath) {
     if (/_test\.lua$|_spec\.lua$/.test(filePath)) return [];
 

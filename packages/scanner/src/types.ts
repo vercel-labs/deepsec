@@ -9,6 +9,15 @@ export interface ScanProgress {
   filePath?: string;
   matcherSlug?: string;
   matchCount?: number;
+  /**
+   * Index of the current matcher in the run order (1-based) and the
+   * total active matchers. Set on `matcher_started` and `matcher_done`
+   * for the matcher phase only — the glob phase already conveys its own
+   * progress via the message string. The CLI uses these to render a
+   * progress bar without knowing the registry up-front.
+   */
+  matcherIndex?: number;
+  matcherTotal?: number;
 }
 
 export interface ScannerDriver {

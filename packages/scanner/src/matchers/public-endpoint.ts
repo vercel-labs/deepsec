@@ -16,6 +16,14 @@ export const publicEndpointMatcher: MatcherPlugin = {
     "**/services/**/endpoints/**/*.ts",
     "**/services/**/src/index.ts",
   ],
+  examples: [
+    `{ authStrategy: "__PUBLIC__" }`,
+    `authStrategy: '__PUBLIC__',`,
+    `{ authStrategy: "static" }`,
+    `authStrategy: 'static',`,
+    `{ authStrategy: "none" }`,
+    `authStrategy: 'none',`,
+  ],
   match(content, _filePath) {
     return regexMatcher(
       "public-endpoint",

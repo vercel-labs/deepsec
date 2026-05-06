@@ -11,6 +11,19 @@ export const unsafeRedirectMatcher: MatcherPlugin = {
   slug: "unsafe-redirect",
   description: "Redirects that may bypass validNextRedirect() — open redirect risk",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `redirect(req.body.next);`,
+    `redirect(query.target);`,
+    `redirect(searchParams.get("u"));`,
+    `redirect(params.next);`,
+    "redirect(`/${req.body.path}`);",
+    `NextResponse.redirect(new URL(target, base));`,
+    `// x-app-redirect-uri header\nredirect(target);`,
+    `// returnUrl from query\nredirect(target);`,
+    `// returnTo param\nredirect(t);`,
+    `// redirectUrl from body\nredirect(t);`,
+    `// redirect.uri from header\nredirect(t);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     if (/node_modules/.test(filePath)) return [];

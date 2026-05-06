@@ -6,6 +6,18 @@ export const openRedirectMatcher: MatcherPlugin = {
   slug: "open-redirect",
   description: "Redirects with user-controlled URLs",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `redirect(req.body.next);`,
+    `redirect(query.target);`,
+    "redirect(`${origin}/${req.body.path}`);",
+    `res.redirect(req.body.url);`,
+    `res.redirect(params.next);`,
+    `headers: { Location: req.body.next }`,
+    `window.location = params.next;`,
+    `const u = returnUrl;`,
+    `const r = redirectUrl;`,
+    `const x = returnTo;`,
+  ],
   match(content, _filePath) {
     return regexMatcher(
       "open-redirect",

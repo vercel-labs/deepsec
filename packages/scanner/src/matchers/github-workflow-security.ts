@@ -25,6 +25,20 @@ export const githubWorkflowSecurityMatcher: MatcherPlugin = {
     ".github/actions/**/*.yml",
     ".github/actions/**/*.yaml",
   ],
+  requires: { tech: ["github-actions"] },
+  examples: [
+    `on:\n  pull_request_target:\n    types: [opened]`,
+    `on:\n  workflow_run:\n    workflows: [build]`,
+    `      - uses: actions/checkout@main`,
+    `      - uses: actions/setup-node@v3`,
+    `        run: echo "\${{ github.event.pull_request.title }}"`,
+    `        run: git log \${{ github.head_ref }}`,
+    `          token: \${{ secrets.GITHUB_TOKEN }}`,
+    `permissions: write-all`,
+    `permissions:\n  id-token: write\n  contents: read`,
+    `      - run: |\n          echo \${{ github.event.pull_request.head.ref }}`,
+    `      - run: curl -fsSL https://example.com/install.sh | sh`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

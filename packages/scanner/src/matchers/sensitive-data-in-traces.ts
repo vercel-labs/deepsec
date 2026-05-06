@@ -10,6 +10,32 @@ export const sensitiveDataInTracesMatcher: MatcherPlugin = {
   slug: "sensitive-data-in-traces",
   description: "Sensitive data sent to tracing/observability — check for PII, secrets, tokens",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `// handles password reset
+const password = req.body.password;
+addTagsToCurrentSpan({ user: req.body });`,
+    `// payment processing
+const card = req.body.creditCard;
+tracer.trace("charge", () => stripe.charge(card));`,
+    `// holds secret token from env
+const token = req.body.token;
+span.setTag("payload", req.body);`,
+    `// stores apiKey in trace
+const apiKey = req.headers["x-api-key"];
+Sentry.captureException(new Error("oops"));`,
+    `// invoice handler
+const invoice = req.body;
+Sentry.setContext("billing", invoice);`,
+    `// log credential issues
+const credential = req.body.credential;
+Sentry.setExtra("credential", credential);`,
+    `// store secret
+const secret = process.env.MY_SECRET;
+span.setAttribute("secret", secret);`,
+    `// payment handler tracing
+const payment = req.body.payment;
+span.addEvent("payment.received", payment);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];

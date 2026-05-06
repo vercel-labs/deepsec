@@ -44,6 +44,21 @@ export const fsWriteSymlinkBoundaryMatcher: MatcherPlugin = {
   description:
     "Filesystem write to dynamic path — verify symlink boundary check (realpath/canonical resolve)",
   filePatterns: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+  examples: [
+    `fs.writeFile(\`/tmp/uploads/\${name}\`, data, () => {});`,
+    `fs.mkdirSync(\`/var/data/\${userId}\`);`,
+    `fs.createWriteStream(\`/cache/\${id}.bin\`);`,
+    `fs.copyFileSync(\`/tmp/\${dest}\`, src);`,
+    `fs.symlinkSync(target, \`/links/\${name}\`);
+fs.symlinkSync(\`/links/\${name}\`, target);`,
+    `fs.appendFileSync(\`/logs/\${name}.log\`, line);`,
+    `fsp.writeFile(\`/data/\${id}.json\`, JSON.stringify(payload));`,
+    `await fsp.copyFile(\`/tmp/\${dest}\`, src);`,
+    `fs.writeFileSync(rootDir + "/" + name, data);`,
+    `fs.mkdirSync(baseDir + relative);`,
+    `fs.writeFileSync(path.join(uploadDir, req.body.name), buf);`,
+    `fs.writeFile(path.resolve(uploadDir, req.params.id), data, () => {});`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

@@ -155,11 +155,38 @@ function packageJson(name: string): string {
       // declares `workspaces`, and stop at the first hit. Without this, a
       // parent monorepo's workspace would absorb `.deepsec/`.
       workspaces: [],
+      // Pin the package manager for this workspace. Without this, pnpm
+      // walks up looking for a `packageManager` field and adopts whatever
+      // it finds in an ancestor — so a parent repo declaring
+      // `"packageManager": "yarn@..."` makes `pnpm install` from
+      // `.deepsec/` refuse to run. Setting it here stops the walk at the
+      // workspace root.
+      packageManager: detectPackageManager(),
       dependencies: { deepsec: deepsecVersion },
     },
     null,
     2,
   )}\n`;
+}
+
+/**
+ * Best-effort `packageManager` value for the scaffolded package.json.
+ *
+ * Tries the running pnpm/npm/yarn version (via `npm_config_user_agent`,
+ * which all three set when they spawn child processes). Falls back to a
+ * known-stable pnpm version so the resulting package.json is always
+ * valid even when init is run from a bare shell. The README / printed
+ * Next steps assume pnpm, so we always emit a `pnpm@*` value.
+ */
+function detectPackageManager(): string {
+  const ua = process.env.npm_config_user_agent;
+  if (ua) {
+    const m = ua.match(/pnpm\/(\d+\.\d+\.\d+)/);
+    if (m) return `pnpm@${m[1]}`;
+  }
+  // Recent pnpm 9 LTS — kept conservative; users with a newer pnpm
+  // installed will see a Corepack mismatch warning but installs work.
+  return "pnpm@9.15.4";
 }
 
 function pnpmWorkspaceYaml(): string {

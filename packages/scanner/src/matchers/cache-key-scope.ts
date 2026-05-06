@@ -10,6 +10,23 @@ export const cacheKeyScopeMatcher: MatcherPlugin = {
   slug: "cache-key-scope",
   description: "Cache keys that may lack user/team scoping — cross-tenant risk",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `const cached = await redis.get(\`feature:\${name}\`);`,
+    `await redis.set(\`config:\${name}\`, value);`,
+    `await redis.hget(\`map:\${k}\`, field);`,
+    `await redis.hset(\`map:\${k}\`, field, value);`,
+    `await redis.setex(\`token:\${name}\`, 60, value);`,
+    `await redis.get("global-counter");`,
+    `await redis.set("singleton", value);`,
+    `await cache.get(\`feature:\${flag}\`);`,
+    `await cache.set(\`feature:\${flag}\`, value);`,
+    `cache.has(\`flag:\${name}\`);`,
+    `cache.get("global-counter");`,
+    `cache.set("singleton", payload);`,
+    `const cacheKey = \`feature:\${name}\`;`,
+    `const cache_key = \`feature:\${name}\`;`,
+    `await store.get(\`feature:flag:\${id}\`);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];

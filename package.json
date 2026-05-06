@@ -18,7 +18,7 @@
     "bundle": "pnpm --filter deepsec bundle",
     "deepsec": "tsx packages/deepsec/src/cli.ts",
     "test": "vitest run",
-    "test:unit": "vitest run --project core --project scanner --project processor",
+    "test:unit": "vitest run --project core --project scanner --project processor --project cli",
     "test:e2e": "vitest run --project e2e",
     "test:e2e:live": "LIVE_AGENT=1 vitest run --project e2e",
     "test:bundle": "pnpm bundle && vitest run --project e2e e2e/bundle.test.ts",

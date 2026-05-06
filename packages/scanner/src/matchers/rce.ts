@@ -6,6 +6,19 @@ export const rceMatcher: MatcherPlugin = {
   slug: "rce",
   description: "exec, spawn, eval, Function constructor with potential user input",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `child_process.exec(cmd);`,
+    `exec(\`ls \${dir}\`);`,
+    `execSync("whoami");`,
+    `spawn("sh", ["-c", cmd]);`,
+    `spawnSync("git", ["status"]);`,
+    `eval(userInput);`,
+    `new Function("return " + body)();`,
+    `const cp = require("child_process");`,
+    `import { exec } from "child_process";`,
+    `vm.runInNewContext(code, ctx);`,
+    `vm.runInThisContext(snippet);`,
+  ],
   match(content, _filePath) {
     return regexMatcher(
       "rce",

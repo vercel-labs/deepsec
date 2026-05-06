@@ -12,6 +12,20 @@ export const oauthFlowMatcher: MatcherPlugin = {
     "**/app/api/**/*.{ts,tsx}",
     "**/api/**/*.{ts,tsx}",
   ],
+  examples: [
+    `const redirect_uri = req.query.redirect_uri;`,
+    `params.append("redirect_uri", url);`,
+    `body.set("grant_type", "authorization_code");`,
+    `const grantType = "authorization_code";`,
+    `params.set("code_verifier", verifier);`,
+    `const code_challenge = sha256(code_verifier);`,
+    `const u = "https://idp/cb?state=" + s + "&redirect=" + r;`,
+    `// redirect handler with state= param parsing`,
+    `const url = "https://app/cb?code=" + c;`,
+    `if (qs.includes("&code=")) handle();`,
+    `// access_token in redirect URL`,
+    `// access_token returned via callback URL token=`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 
@@ -27,10 +41,19 @@ export const oauthFlowMatcher: MatcherPlugin = {
         { regex: /redirect_uri/, label: "OAuth redirect_uri handling" },
         { regex: /authorization_code|grant_type/, label: "OAuth authorization code flow" },
         { regex: /code_verifier|code_challenge/, label: "PKCE flow" },
-        { regex: /state=.*redirect|redirect.*state=/, label: "OAuth state + redirect" },
+        {
+          regex: /state=.{0,80}redirect|redirect.{0,80}state=/,
+          label: "OAuth state + redirect",
+        },
         { regex: /\?code=|&code=/, label: "Authorization code in URL" },
-        { regex: /access_token.*redirect|redirect.*access_token/, label: "Token in redirect URL" },
-        { regex: /callback.*token|token.*callback/, label: "Token in callback" },
+        {
+          regex: /access_token.{0,80}redirect|redirect.{0,80}access_token/,
+          label: "Token in redirect URL",
+        },
+        {
+          regex: /callback.{0,80}token|token.{0,80}callback/,
+          label: "Token in callback",
+        },
       ],
       content,
     );

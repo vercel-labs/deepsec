@@ -18,6 +18,16 @@ export const soqlInjectionMatcher: MatcherPlugin = {
   slug: "soql-injection",
   description: "Salesforce SOQL built with template/string interpolation",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  requires: { tech: ["apex", "salesforce"] },
+  examples: [
+    `import jsforce from "jsforce";\nawait conn.query(\`SELECT Id FROM Account WHERE Name = '\${name}'\`);`,
+    `import jsforce from "jsforce";\nawait conn.queryAll(\`SELECT Id FROM Lead WHERE Email = '\${email}'\`);`,
+    `import jsforce from "jsforce";\nawait conn.query("SELECT Id FROM Account WHERE Id = " + id);`,
+    `import { Connection } from "@jsforce/jsforce-node";\nawait sf.query(\`SELECT Id FROM Account WHERE Id = '\${id}'\`);`,
+    `import jsforce from "jsforce";\nawait tooling.query(\`SELECT Id FROM ApexClass WHERE Name = '\${name}'\`);`,
+    `import { something } from "@salesforce/api";\nconst soql = \`SELECT Id FROM Account WHERE Name = '\${name}'\`;`,
+    `import jsforce from "jsforce";\nawait sfConn.queryMore(\`SELECT Id FROM Lead WHERE Status = '\${status}'\`);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

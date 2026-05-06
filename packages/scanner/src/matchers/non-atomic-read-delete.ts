@@ -11,6 +11,22 @@ export const nonAtomicReadDeleteMatcher: MatcherPlugin = {
   slug: "non-atomic-read-delete",
   description: "Non-atomic read-then-delete/update — TOCTOU race conditions",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `const cached = await redis.get(key);
+if (!cached) return null;
+await redis.del(key);`,
+    `const value = await redis.hget(bucket, field);
+await redis.hdel(bucket, field);`,
+    `const session = await redis.hgetall(\`session:\${id}\`);
+await redis.set(\`session:\${id}\`, "expired");`,
+    `const row = await db.findFirst({ where: { id } });
+await db.deleteMany({ where: { id: row.id } });`,
+    `const r = await client.findUnique({ where: { id } });
+await client.destroy(r.id);`,
+    `// SELECT something
+const r = await query("SELECT * FROM tokens WHERE id = $1", [id]);
+await query("DELETE FROM tokens WHERE id = $1", [id]);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];

@@ -104,7 +104,7 @@ backend you're using.
 
 | Var | Used by | Purpose |
 |---|---|---|
-| `AI_GATEWAY_API_KEY` | all AI commands | Shortcut. Expands at CLI startup into `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` — one key covers both Claude and Codex through Vercel AI Gateway. Any of those four vars set explicitly takes precedence. |
+| `AI_GATEWAY_API_KEY` | all AI commands | Shortcut. Expands at CLI startup into `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` — one key covers both Claude and Codex through Vercel AI Gateway. Any of those four vars set explicitly takes precedence. Falls back to `VERCEL_OIDC_TOKEN` (from `vercel env pull`) when unset, so users already authenticated for Sandbox don't need a separate gateway key. |
 | `ANTHROPIC_AUTH_TOKEN` | `process`, `revalidate`, `triage` (Claude backend) | API token for the Claude Agent SDK. AI Gateway-issued or Anthropic-issued. Set this if you don't use `AI_GATEWAY_API_KEY`. |
 | `ANTHROPIC_BASE_URL` | same | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh`. Set to `https://api.anthropic.com` for direct Anthropic. |
 

@@ -11,6 +11,16 @@ export const envExposureMatcher: MatcherPlugin = {
   slug: "env-exposure",
   description: "Environment variable patterns that may expose secrets to clients",
   filePatterns: ["**/*.{ts,tsx,js,jsx}", "**/.env", "**/.env.*", "**/next.config.*"],
+  examples: [
+    `const k = process.env.NEXT_PUBLIC_API_SECRET;`,
+    `const t = process.env.NEXT_PUBLIC_AUTH_TOKEN;`,
+    `const p = process.env.NEXT_PUBLIC_USER_PASSWORD;`,
+    `const c = process.env.NEXT_PUBLIC_OAUTH_CREDENTIAL;`,
+    `const k = process.env.NEXT_PUBLIC_STRIPE_KEY;`,
+    `"use client";\nconst s = process.env.API_SECRET;`,
+    `'use client';\nconst k = process.env.PRIVATE_KEY;`,
+    `"use client";\nconst t = process.env.AUTH_TOKEN;`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     if (/node_modules/.test(filePath)) return [];

@@ -22,6 +22,16 @@ export const k8sSecretReferenceMatcher: MatcherPlugin = {
   slug: "k8s-secret-reference",
   description: "K8s manifest references a Secret (secretKeyRef, secretName, ExternalSecret, etc.)",
   filePatterns: ["**/*.yaml", "**/*.yml"],
+  examples: [
+    `env:\n  - name: DB_PASSWORD\n    valueFrom:\n      secretKeyRef:\n        name: db\n        key: password`,
+    `volumes:\n  - name: certs\n    secret:\n      secretName: tls-certs`,
+    `apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\ntype: Opaque`,
+    `apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: db`,
+    `metadata:\n  annotations:\n    vault.hashicorp.com/agent-inject: "true"`,
+    `spec:\n  containers:\n    - image: ghcr.io/example/secrets-init-container:v1\n      name: init`,
+    `apiVersion: v1\nkind: Secret\nstringData:\n  password: hunter2-very-secret`,
+    `env:\n  - name: API_TOKEN\n    value: "AKIAIOSFODNN7EXAMPLE_aws_access_key"`,
+  ],
   match(content, filePath) {
     // Avoid scanning gitignored / generated yaml (tests, vendored charts)
     if (/(?:^|\/)(?:node_modules|vendor|charts|\.github)\//.test(filePath)) return [];

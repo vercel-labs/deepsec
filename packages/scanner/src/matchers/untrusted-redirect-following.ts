@@ -23,6 +23,19 @@ export const untrustedRedirectFollowingMatcher: MatcherPlugin = {
   slug: "untrusted-redirect-following",
   description: "Server-side fetch follows redirects — SSRF bypass risk if URL is caller-influenced",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  examples: [
+    `await fetch(targetUrl, { redirect: "follow" });`,
+    `await fetch(callbackUrl);`,
+    `const res = await fetch(redirectUrl);`,
+    `const r = await fetch(webhookUrl);`,
+    `await axios.get(companyUrl);`,
+    `await axios.post(websiteUrl, payload);`,
+    `await got(domainUrl);`,
+    `await got(imageUrl);
+got.get(imageUrl);`,
+    `await fetch(fetchUrl, { method: "GET" });`,
+    `await fetch(returnTo, { method: "GET" });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

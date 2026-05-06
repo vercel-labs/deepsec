@@ -6,6 +6,14 @@ export const algorithmConfusionMatcher: MatcherPlugin = {
   slug: "algorithm-confusion",
   description: "JWT verification without algorithm pinning — algorithm confusion attack risk",
   filePatterns: ["**/*.{ts,tsx,js,jsx,lua}"],
+  examples: [
+    `const decoded = jwt.verify(token, secret);`,
+    `const result = await jwtVerify(token, key);`,
+    `const claims = verifyJwt(token, publicKey);`,
+    `local ok = jwt_obj:verify(secret, token)`,
+    `jwt.verify(token, key, { algorithms: ["RS256"] });`,
+    `await jwtVerify(token, jwks, { algorithm: "HS256" });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

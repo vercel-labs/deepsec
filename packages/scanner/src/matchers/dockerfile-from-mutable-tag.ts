@@ -11,6 +11,15 @@ export const dockerfileFromMutableTagMatcher: MatcherPlugin = {
   slug: "dockerfile-from-mutable-tag",
   description: "FROM line uses a mutable tag (no @sha256 digest pin)",
   filePatterns: ["**/Dockerfile", "**/Dockerfile.*", "**/*.Dockerfile"],
+  requires: { tech: ["docker"] },
+  examples: [
+    `FROM node:20`,
+    `FROM python:3.11-slim`,
+    `FROM ubuntu:22.04`,
+    `FROM alpine`,
+    `FROM debian:bookworm AS builder`,
+    `FROM --platform=linux/amd64 golang:1.21`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

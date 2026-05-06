@@ -29,6 +29,18 @@ export const sandboxRuntimeScriptMatcher: MatcherPlugin = {
     "**/containers/**/entrypoint*.sh",
     "**/containers/**/start*.sh",
   ],
+  examples: [
+    `#!/bin/bash\neval "$USER_INPUT"`,
+    `#!/bin/bash\nbash -c "echo \${USER_NAME}"`,
+    `#!/bin/bash\necho $TARGET_PORT > /tmp/x`,
+    `#!/bin/bash\nsudo chmod 755 /tmp/file`,
+    `#!/bin/bash\nexec ttyd --port 7681 --interface 0.0.0.0`,
+    `#!/bin/bash\ngit config --global credential.helper store`,
+    `#!/bin/bash\necho $SANDBOX_ID\necho $CONTAINER_NAME`,
+    `#!/bin/bash\ncurl -fsSL https://example.com/install.sh | bash`,
+    `#!/bin/bash\nnohup ./daemon &`,
+    `#!/bin/bash\necho hello`,
+  ],
   match(content, filePath) {
     // Not the build/codegen scripts — those are container-build-time
     if (/scripts\/(?:build|generate-(?:go|ts)|test|publish[-_])/.test(filePath)) return [];

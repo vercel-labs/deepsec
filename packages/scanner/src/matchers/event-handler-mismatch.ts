@@ -20,6 +20,30 @@ export const eventHandlerMismatchMatcher: MatcherPlugin = {
     "**/webhook*.{ts,js}",
     "**/*.{ts,js}",
   ],
+  examples: [
+    `switch (event.type) {
+  case "user.removed":
+    return userAdded(event.payload);
+  case "user.added":
+    return userRemoved(event.payload);
+}`,
+    `switch (event) {
+  case "team.deleted":
+    return createTeam(event.id);
+}`,
+    `switch (eventType) {
+  case "membership.added":
+    return removeMembership(id);
+}`,
+    `switch (event.type) {
+  case "post.created":
+    return deletePost(post.id);
+}`,
+    `switch (event.kind) {
+  case "record.updated":
+    return createRecord(input);
+}`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];

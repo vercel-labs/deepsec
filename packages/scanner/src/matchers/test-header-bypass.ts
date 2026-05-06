@@ -10,6 +10,18 @@ export const testHeaderBypassMatcher: MatcherPlugin = {
   slug: "test-header-bypass",
   description: "Test/debug headers that bypass security checks in production",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `if (req.headers["x-automated-test"]) skip();`,
+    `if (req.headers["x-test-bypass"]) return next();`,
+    `if (headers.get("x-debug")) bypass();`,
+    `if (req.headers["x-internal"]) skipAuth();`,
+    `if (req.headers["x-bypass"]) disable();`,
+    `if (req.headers["x-skip-auth"]) return next();`,
+    `if (req.headers["x-no-rate-limit"]) skip();`,
+    `if (req.headers["x-admin"]) bypass();`,
+    `if ("test" === headers["x-mode"]) return true;`,
+    `if (headers["x-something"] === "test") skip();`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\//.test(filePath)) return [];
@@ -26,8 +38,8 @@ export const testHeaderBypassMatcher: MatcherPlugin = {
       { regex: /x-skip-auth/i, label: "x-skip-auth header" },
       { regex: /x-no-rate-limit/i, label: "x-no-rate-limit header" },
       { regex: /x-admin/i, label: "x-admin header" },
-      { regex: /['"]test['"].*===.*headers/i, label: "test value in header check" },
-      { regex: /headers.*['"]test['"]/i, label: "header compared to test" },
+      { regex: /['"]test['"].{0,40}===.{0,40}headers/i, label: "test value in header check" },
+      { regex: /headers.{0,80}['"]test['"]/i, label: "header compared to test" },
     ];
 
     for (let i = 0; i < lines.length; i++) {

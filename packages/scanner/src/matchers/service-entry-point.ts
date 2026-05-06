@@ -18,6 +18,19 @@ export const serviceEntryPointMatcher: MatcherPlugin = {
     "**/services/**/src/handler.ts",
     "**/services/**/src/handlers/**/*.ts",
   ],
+  examples: [
+    `export default (event) => process(event);`,
+    `export default async (event) => handle(event);`,
+    `export default async function handler(event) { return ok(); }`,
+    `const c = new EventConsumer();`,
+    `import { eventConsumer } from "./bus";`,
+    `const ep = createEndpoint(spec);`,
+    `registerEndpoint(api, def);`,
+    `const router = createRouter();`,
+    `await handleRequest(req);`,
+    `const r = routeHandler(req);`,
+    `export const POST = withSchema(schema, handler);`,
+  ],
   match(content, filePath) {
     // Skip test files
     if (/\.(test|spec)\./i.test(filePath)) return [];

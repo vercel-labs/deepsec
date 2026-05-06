@@ -15,6 +15,13 @@ export const webhookHandlerMatcher: MatcherPlugin = {
     "**/api/**/route.{ts,js}",
     "**/services/**/src/**/*.ts",
   ],
+  examples: [
+    `export async function POST(req) { /* webhook */ return ok(); }`,
+    `export const handler = async (req) => { /* webhook */ };`,
+    `// webhook route\nexport function POST(req) { return ok(); }`,
+    `export async function webhookHandler(req) { return ok(); }`,
+    `export const webhookRoute = (req) => process(req);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

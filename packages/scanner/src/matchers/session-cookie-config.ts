@@ -17,6 +17,32 @@ export const sessionCookieConfigMatcher: MatcherPlugin = {
   slug: "session-cookie-config",
   description: "Session/auth cookie configuration — verify httpOnly + sameSite + secure",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  examples: [
+    `import { cookies } from "next/headers";
+cookies().set("session", token, { httpOnly: true });`,
+    `import { cookies } from "next/headers";
+cookies().set({ name: "auth", value: token });`,
+    `import session from "iron-session";
+res.cookie("auth", token, { secure: true });`,
+    `import { betterAuth } from "better-auth";
+response.cookie("session", token);`,
+    `import NextAuth from "next-auth";
+const auth = new NextAuth({ providers: [] });`,
+    `import { Lucia } from "lucia";
+const lucia = new Lucia(adapter, {
+  sessionCookie: { attributes: { secure: true } },
+});`,
+    `import { betterAuth } from "better-auth";
+export const auth = betterAuth({
+  cookieOptions: { secure: true, httpOnly: true },
+});`,
+    `import session from "iron-session";
+const ironOptions = { cookieName: "session", password: "x" };`,
+    `import { ironSession } from "iron-session/express";
+ironSession({ cookieName: "session", password: "x" });`,
+    `import { cookies } from "next/headers";
+res.setHeader("Set-Cookie", \`session=\${token}; HttpOnly\`);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

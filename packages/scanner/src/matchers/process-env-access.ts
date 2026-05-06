@@ -11,6 +11,13 @@ export const processEnvAccessMatcher: MatcherPlugin = {
   slug: "process-env-access",
   description: "Direct process.env access — check for fallbacks, leaks, and misuse",
   filePatterns: ["**/*.{ts,tsx,js,jsx}", "**/*.lua", "**/*.go"],
+  examples: [
+    `const url = process.env.DATABASE_URL;`,
+    `const key = process.env.API_KEY ?? "fallback";`,
+    `if (process.env.NODE_ENV === "development") doStuff();`,
+    `const cfg = process.env["MY_VAR"];`,
+    `const secret = process.env['SESSION_SECRET'];`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec|mock|stub)\./i.test(filePath)) return [];
     if (/node_modules|\.next|dist\/|\.d\.ts$/.test(filePath)) return [];

@@ -14,6 +14,26 @@ export const unverifiedLookupMatcher: MatcherPlugin = {
     "**/app/api/**/*.ts",
     "**/src/**/*.ts",
   ],
+  examples: [
+    `const project = await getProjectById(projectId);
+return Response.json(project);`,
+    `const team = await getTeamById(teamId);
+return Response.json(team);`,
+    `const user = await getUserById(userId);
+return Response.json(user);`,
+    `const deployment = await getDeploymentById(id);
+return Response.json(deployment);`,
+    `const installation = await getInstallationById(id);
+return Response.json(installation);`,
+    `const data = await db.findUnique({ where: { id } });
+return Response.json(data);`,
+    `const data = await db.findFirst({ where: { id } });
+return Response.json(data);`,
+    `const r = await repo.findOneById(id);
+return Response.json(r);`,
+    `const r = await repo.findByUid(uid);
+return Response.json(r);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

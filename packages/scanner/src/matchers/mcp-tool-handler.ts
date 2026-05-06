@@ -17,6 +17,19 @@ export const mcpToolHandlerMatcher: MatcherPlugin = {
   slug: "mcp-tool-handler",
   description: "MCP server tool handlers — verify per-tool authz + input validation",
   filePatterns: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.mjs"],
+  requires: { tech: ["mcp"] },
+  examples: [
+    `import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";\nserver.tool("read_file", schema, async (args) => ({}));`,
+    `import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";\nregisterTool(server, { name: "exec" });`,
+    `import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";\nserver.setRequestHandler(CallToolRequestSchema, async (req) => ({}));`,
+    `import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";\nserver.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));`,
+    `import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";\nconst server = new McpServer({ name: "x", version: "1" });`,
+    `import { McpAgent } from "@modelcontextprotocol/sdk/server/index.js";\nconst agent = new McpAgent({ name: "x" });`,
+    `import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";\nserver.resource("memo", uri, async () => ({}));`,
+    `import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";\nserver.prompt("greet", schema, async (args) => ({}));`,
+    `import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";\nregisterResource(server, { uri: "x" });`,
+    `import { McpServer } from "@modelcontextprotocol/sdk/server/index.js";\nregisterPrompt(server, { name: "x" });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

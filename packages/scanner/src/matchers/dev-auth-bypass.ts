@@ -12,6 +12,25 @@ export const devAuthBypassMatcher: MatcherPlugin = {
   description:
     "Development auth bypasses — dev endpoints, NODE_ENV guards, test tokens in production",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `app.post("/auth/dev", (req, res) => {
+  res.json({ token: "dev-token" });
+});`,
+    `router.get("/dev/login", handler);`,
+    `app.post("/test/auth/login", handler);`,
+    `if (NODE_ENV === "development") return skipAuthMiddleware();`,
+    `if (NODE_ENV === "test") return mockAuthResponse();`,
+    `function shouldBypassAuth() { return skipAuthHandler() && NODE_ENV; }`,
+    `if (isDev) {
+  ctx.user = { id: 1, role: "admin" };
+}`,
+    `if (IS_TEST) return adminUser;`,
+    `const token = headers.get("test-token") || "";`,
+    `if (apiKey === "test_api_key_12345") return ok();`,
+    `const session = createMockSession({ userId: 1 });`,
+    `await autoLogin(req);`,
+    `useFakeAuth(req);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     if (/node_modules/.test(filePath)) return [];
@@ -27,11 +46,12 @@ export const devAuthBypassMatcher: MatcherPlugin = {
       },
       // NODE_ENV guards around auth
       {
-        regex: /NODE_ENV.*(?:development|test).*(?:skip|bypass|disable|return|mock).*auth/i,
+        regex:
+          /NODE_ENV.{0,40}(?:development|test).{0,80}(?:skip|bypass|disable|return|mock).{0,40}auth/i,
         label: "Auth skipped in development/test — check production guard",
       },
       {
-        regex: /(?:skip|bypass|disable|mock).*auth.*NODE_ENV/i,
+        regex: /(?:skip|bypass|disable|mock).{0,40}auth.{0,80}NODE_ENV/i,
         label: "Auth bypass gated by NODE_ENV — check production guard",
       },
       // Explicit dev bypasses

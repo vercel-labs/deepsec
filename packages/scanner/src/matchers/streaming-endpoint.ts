@@ -15,6 +15,19 @@ export const streamingEndpointMatcher: MatcherPlugin = {
     "**/api/**/*.{ts,tsx,js,jsx}",
     "**/app/**/*.{ts,tsx,js,jsx}",
   ],
+  examples: [
+    `const result = streamText({ model, messages });`,
+    `const stream = streamObject({ model, schema, prompt });`,
+    `const out = await generateText({ model, prompt });`,
+    `return new StreamingTextResponse(stream);`,
+    `const stream = new ReadableStream({ start(c) { c.enqueue("hi"); } });`,
+    `const tx = new TransformStream();`,
+    `const res = await openai.chat.completions.create({ model: "gpt-4", stream: true });`,
+    `const r = await client.chat.completions.create({ model, messages, stream: true });`,
+    `fetch("/api/chat", { method: "POST" });`,
+    `app.post("/api/completion", handler);`,
+    `await fetch("/api/generate", { method: "POST" });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     if (/node_modules/.test(filePath)) return [];
@@ -33,10 +46,13 @@ export const streamingEndpointMatcher: MatcherPlugin = {
       { regex: /TransformStream/, label: "TransformStream — streaming pipeline" },
       // OpenAI/Anthropic direct
       {
-        regex: /openai.*stream.*true|stream:\s*true/i,
+        regex: /openai.{0,80}stream.{0,40}true|stream:\s*true/i,
         label: "LLM API call with streaming enabled",
       },
-      { regex: /\.chat\.completions\.create.*stream/i, label: "OpenAI chat completion stream" },
+      {
+        regex: /\.chat\.completions\.create[^)]{0,200}stream/i,
+        label: "OpenAI chat completion stream",
+      },
       // Chat/completion endpoints
       {
         regex: /\/api\/chat|\/api\/completion|\/api\/generate/i,

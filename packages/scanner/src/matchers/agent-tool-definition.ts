@@ -18,6 +18,17 @@ export const agentToolDefinitionMatcher: MatcherPlugin = {
     "**/*tool*.{ts,tsx,js,jsx}",
     "**/*agent*.{ts,tsx,js,jsx}",
   ],
+  examples: [
+    `const myTool = tool({\n  description: "do thing",\n  parameters: z.object({}),\n  execute: async () => ({}),\n});`,
+    `const t = createTool({ name: "x", execute: async () => ({}) });`,
+    `const t = defineTool({ name: "x" });`,
+    `import { exec } from "child_process";\nexec(userInput);`,
+    `eval(userInput);`,
+    `import fs from "fs";\nfs.writeFile(path, data, () => {});`,
+    `await fetch(url);`,
+    `import { sandbox } from "sandbox";\nawait sandbox.runCode(code);`,
+    `import { DynamicTool } from "langchain/tools";\nconst t = new DynamicTool({ name: "x" });`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     if (/node_modules/.test(filePath)) return [];

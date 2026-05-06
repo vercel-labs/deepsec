@@ -16,6 +16,15 @@ export const trpcPublicProcedureMatcher: MatcherPlugin = {
   description:
     "tRPC publicProcedure used in a router that looks authenticated — verify it should not be authedProcedure",
   filePatterns: ["**/*.ts", "**/*.tsx"],
+  requires: { tech: ["trpc"] },
+  examples: [
+    `export const listUsers = publicProcedure.query(({ ctx }) => {\n  return ctx.prisma.user.findMany({ where: { id: ctx.session.user.id } });\n});`,
+    `publicProcedure.input(z.object({})).mutation(({ ctx }) => {\n  return ctx.user.id;\n});`,
+    `publicProcedure.input(schema).query(async ({ ctx, input }) => {\n  const userId = ctx.userId;\n  return userId;\n});`,
+    `publicProcedure.use(async ({ ctx, next }) => {\n  if (!ctx.session) throw new Error();\n  return next();\n});`,
+    `export const getMe = publicProcedure.query(({ ctx }) => {\n  return ctx.currentUser;\n});`,
+    `publicProcedure.mutation(async ({ ctx }) => {\n  return getSession(ctx);\n});`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\.(ts|tsx)$/.test(filePath)) return [];
     if (/\.d\.ts$/.test(filePath)) return [];

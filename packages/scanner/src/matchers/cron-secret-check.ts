@@ -12,6 +12,30 @@ export const cronSecretCheckMatcher: MatcherPlugin = {
     "**/api/cron*/**/*.{ts,tsx,js,jsx}",
     "**/app/api/**/route.{ts,tsx}",
   ],
+  examples: [
+    `// CRON_SECRET check on cron route
+export async function GET(req: Request) {
+  if (req.headers.get("authorization") !== \`Bearer \${process.env.CRON_SECRET}\`) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  return new Response("ok");
+}`,
+    `// CRON_SECRET handler
+export const POST = async (req) => {
+  const secret = process.env.CRON_SECRET;
+  if (req.headers.get("x-cron-secret") !== secret) {
+    return new Response("nope", { status: 401 });
+  }
+  return Response.json({ ok: true });
+};`,
+    `// cron auth via CRON_SECRET
+export async function GET(req) {
+  const auth = req.headers.get("authorization");
+  if (auth !== \`Bearer \${process.env.CRON_SECRET}\`) return new Response(null, { status: 401 });
+  await runCron();
+  return new Response("done");
+}`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
     // Only match files in cron paths or files that reference CRON_SECRET

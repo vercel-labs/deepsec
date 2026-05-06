@@ -1,9 +1,15 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "@deepsec/core";
 import type { Sandbox } from "@vercel/sandbox";
+import * as tar from "tar";
 import { DATA_DIR } from "./setup.js";
+
+// Sandbox results are JSON file records, run metadata, and reports —
+// nothing else. Lock the extract to these extensions so a tampered or
+// buggy tarball can't smuggle anything else onto the host. If the
+// sandbox legitimately needs to return a new file type, add it here.
+const ALLOWED_EXTENSIONS = new Set([".json", ".md", ".csv"]);
 
 const SETUP_MARKER = "/tmp/deepsec-setup-done";
 
@@ -115,32 +121,45 @@ export async function downloadResults(
   return count;
 }
 
-async function extractTarballLocally(tarPath: string, destDir: string): Promise<number> {
-  // Use `tar -xzvf` and count emitted lines for "files extracted" feedback.
-  return await new Promise<number>((resolve, reject) => {
-    const child = spawn("tar", ["-xzvf", tarPath, "-C", destDir], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let extracted = 0;
-    let stderr = "";
-    let stdoutBuf = "";
-    child.stdout.on("data", (c: Buffer) => {
-      stdoutBuf += c.toString();
-      let nl: number;
-      while ((nl = stdoutBuf.indexOf("\n")) !== -1) {
-        const line = stdoutBuf.slice(0, nl);
-        stdoutBuf = stdoutBuf.slice(nl + 1);
-        if (line && !line.endsWith("/")) extracted++;
+export async function extractTarballLocally(tarPath: string, destDir: string): Promise<number> {
+  // Two-pass: list to validate, then extract. The list pass is hard
+  // "all or nothing" — if any entry is disallowed (wrong type or
+  // extension), we throw before a single byte hits disk, so callers
+  // never see a half-populated destDir on rejection. Cost is reading
+  // the gzip stream twice; sandbox-result tarballs are small, so this
+  // is negligible vs. the upload/download time.
+  //
+  // `strict: true` upgrades parser warnings (absolute paths, `..`
+  // segments, malformed pax headers) into thrown errors, so the list
+  // pass also catches anything tar's own safety would otherwise just
+  // log-and-skip. The extract pass runs with default safety; we know
+  // the archive is clean by then.
+  const violations: string[] = [];
+  let fileCount = 0;
+  await tar.list({
+    file: tarPath,
+    strict: true,
+    onentry: (entry) => {
+      if (entry.type === "Directory") return;
+      if (entry.type !== "File") {
+        violations.push(`"${entry.path}" has type ${entry.type}`);
+        return;
       }
-    });
-    child.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`tar -xzf exited ${code}: ${stderr.slice(0, 500)}`));
-      } else {
-        resolve(extracted);
+      const ext = path.extname(entry.path).toLowerCase();
+      if (!ALLOWED_EXTENSIONS.has(ext)) {
+        violations.push(`"${entry.path}" has extension ${ext || "(none)"}`);
+        return;
       }
-    });
+      fileCount++;
+    },
   });
+  if (violations.length > 0) {
+    const preview = violations.slice(0, 5).join("\n  ");
+    const more = violations.length > 5 ? `\n  …and ${violations.length - 5} more` : "";
+    throw new Error(
+      `Refusing sandbox results tarball: ${violations.length} disallowed entr${violations.length === 1 ? "y" : "ies"}:\n  ${preview}${more}\nAllowed: regular files with extensions ${[...ALLOWED_EXTENSIONS].sort().join(", ")}.`,
+    );
+  }
+  await tar.extract({ file: tarPath, cwd: destDir });
+  return fileCount;
 }

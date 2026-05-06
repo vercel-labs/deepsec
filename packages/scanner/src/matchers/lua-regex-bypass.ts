@@ -6,6 +6,14 @@ export const luaRegexBypassMatcher: MatcherPlugin = {
   slug: "lua-regex-bypass",
   description: "Lua regex patterns validating URLs/hosts — potential bypass via greedy wildcards",
   filePatterns: ["**/*.lua"],
+  examples: [
+    `local m = ngx.re.match(host, "^https://api\\\\.example\\\\.com")`,
+    `if string.match(target, "^https://trusted") then end`,
+    `local ok = string.find(host, "internal.host")`,
+    `local valid_url = host:match(".+%.example%.com$")`,
+    `if redirect_target:match(".*allowed.com.*") then end`,
+    `local ok = ngx.re.match(host, "https?://[^/]+\\\\.com$")`,
+  ],
   match(content, filePath) {
     if (/_test\.lua$|_spec\.lua$/.test(filePath)) return [];
 

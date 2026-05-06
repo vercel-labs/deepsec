@@ -13,7 +13,34 @@ Both are usable on the free tier for evaluation.
 
 ## AI Gateway
 
-### Get a key
+Two ways to authenticate. Pick whichever fits — both produce the same
+runtime behavior.
+
+| Where you're running | Use this |
+|---|---|
+| Local development, already linked to Vercel | OIDC token (Option A) |
+| CI, external infra, or anywhere `vercel env pull` isn't practical | API key (Option B) |
+
+Full reference:
+[AI Gateway authentication](https://vercel.com/docs/ai-gateway/authentication-and-byok#quick-start).
+
+### Option A: OIDC token
+
+If you're already using Vercel Sandbox, this is automatic — the same
+`vercel env pull` that authenticates the sandbox also authenticates
+the gateway. Otherwise:
+
+```bash
+# In your scanning workspace:
+npx vercel link              # link this directory to a Vercel project
+npx vercel env pull          # writes VERCEL_OIDC_TOKEN to .env.local
+```
+
+deepsec auto-refreshes the token when it's near expiry (via
+`@vercel/oidc`), but the underlying refresh requires `.vercel/project.json`
+in the workspace — so re-run `vercel env pull` if refresh fails.
+
+### Option B: API key
 
 1. Open the [AI Gateway API Keys page](https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys)
    in your Vercel dashboard.
@@ -21,24 +48,22 @@ Both are usable on the free tier for evaluation.
 3. Copy the key (it starts with `vck_…`). Keys never expire unless
    you revoke them.
 
-Full reference:
-[AI Gateway authentication](https://vercel.com/docs/ai-gateway/authentication-and-byok#quick-start).
-
-### Wire it into deepsec
-
 Edit `.env.local` in your scanning workspace:
 
 ```bash
 AI_GATEWAY_API_KEY=vck_…
 ```
 
-That's it. deepsec expands this at startup into the four vars the
-agent SDKs read (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`,
-`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`), so the same key covers both
-Claude (`--agent claude-agent-sdk`, the default) and Codex
-(`--agent codex`). Any of those four vars you set explicitly takes
-precedence over the gateway expansion — useful for mixing direct
-Anthropic with gateway-routed OpenAI, etc.
+### How it works
+
+deepsec expands whichever credential it finds (the API key first, the
+OIDC token as fallback) at startup into the four vars the agent SDKs
+read (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`,
+`OPENAI_BASE_URL`), so a single credential covers both Claude
+(`--agent claude-agent-sdk`, the default) and Codex (`--agent codex`).
+Any of those four vars you set explicitly takes precedence over the
+expansion — useful for mixing direct Anthropic with gateway-routed
+OpenAI, etc.
 
 ### BYOK (optional)
 
@@ -85,6 +110,10 @@ The token expires after **12 hours**; re-run `vercel env pull` when
 you hit auth errors. The Vercel project you link to is just the auth
 scope — it can be any project on your team.
 
+If you go this route, you don't need a separate AI Gateway API key:
+the same OIDC token authenticates the gateway automatically. See
+[AI Gateway → Option A](#option-a-oidc-token).
+
 ### Option B: access token (API key)
 
 Use when OIDC isn't viable: external CI/CD, non-Vercel hosting, jobs
@@ -124,7 +153,7 @@ vars (access token).
 
 | Symptom | Likely cause |
 |---|---|
-| `401` from `process` / `revalidate` | `AI_GATEWAY_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) not loaded — confirm `.env.local` is in the cwd deepsec runs from. |
+| `401` from `process` / `revalidate` | No gateway credential loaded — set `AI_GATEWAY_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`), or run `vercel env pull` to get a `VERCEL_OIDC_TOKEN`. Confirm `.env.local` is in the cwd deepsec runs from. If you're using OIDC, the token may have expired (12 h) — re-pull. |
 | Sandbox spawn fails with auth error | OIDC token expired (12 h) — re-run `vercel env pull`. Or fall back to access-token mode. |
 | `Missing AI credentials for --agent claude-agent-sdk` | Set `AI_GATEWAY_API_KEY` / `ANTHROPIC_AUTH_TOKEN` in `.env.local`, or `claude login` for non-sandbox subscription auth. |
 | `Missing AI credentials for --agent codex` | Set `AI_GATEWAY_API_KEY` / `OPENAI_API_KEY` in `.env.local`, or `codex login` for non-sandbox subscription auth. |

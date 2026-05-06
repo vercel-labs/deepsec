@@ -6,6 +6,15 @@ export const pathTraversalMatcher: MatcherPlugin = {
   slug: "path-traversal",
   description: "File system operations with user-controlled paths",
   filePatterns: ["**/*.{ts,tsx,js,jsx}"],
+  examples: [
+    `readFile(req.body.path, cb);`,
+    `readFileSync(params.file);`,
+    "readFile(`${root}/${req.body.path}`);",
+    `writeFile(req.body.target, data, cb);`,
+    "writeFileSync(`/data/${request.body.name}`, blob);",
+    `path.join(root, req.body.subdir);`,
+    `path.resolve(base, params.dir);`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

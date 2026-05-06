@@ -441,12 +441,18 @@ interface CodexUsage {
  *   - `output_tokens` = total output (visible + reasoning)
  *   - `reasoning_output_tokens` = subset, informational only — already
  *     included in output_tokens, so DON'T double-count.
+ *
+ * Our internal `inputTokens` follows the Anthropic convention: uncached
+ * input only. Subtract the cached portion so downstream rollups (cost,
+ * cache hit rate) don't double-count it.
  */
 function mapUsage(usage: CodexUsage) {
+  const cached = usage.cached_input_tokens ?? 0;
+  const totalInput = usage.input_tokens ?? 0;
   return {
-    inputTokens: usage.input_tokens ?? 0,
+    inputTokens: Math.max(0, totalInput - cached),
     outputTokens: usage.output_tokens ?? 0,
-    cacheReadInputTokens: usage.cached_input_tokens ?? 0,
+    cacheReadInputTokens: cached,
     cacheCreationInputTokens: 0,
   };
 }

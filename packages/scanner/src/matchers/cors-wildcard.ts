@@ -6,6 +6,15 @@ export const corsWildcardMatcher: MatcherPlugin = {
   slug: "cors-wildcard",
   description: "CORS wildcard or dynamic origin reflection without validation",
   filePatterns: ["**/*.{ts,tsx,js,jsx,lua,go,conf}"],
+  examples: [
+    `res.setHeader("Access-Control-Allow-Origin", "*");`,
+    `headers: { "Access-Control-Allow-Origin": "*" }`,
+    `res.setHeader("Access-Control-Allow-Origin", req.headers.origin);`,
+    `headers["Access-Control-Allow-Origin"] = origin;`,
+    `headers["Access-Control-Allow-Credentials"] = "true"; headers["Access-Control-Allow-Origin"] = origin;`,
+    `app.use(cors({ origin: true, credentials: true }));`,
+    `add_header Access-Control-Allow-Origin $http_origin;`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 

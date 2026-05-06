@@ -20,6 +20,12 @@ export const tfSecretInDataMatcher: MatcherPlugin = {
   slug: "tf-secret-in-data",
   description: "kubernetes_secret resource with hardcoded plaintext value in data block",
   filePatterns: ["**/*.tf"],
+  requires: { tech: ["terraform"] },
+  examples: [
+    `resource "kubernetes_secret" "db" {\n  metadata { name = "db" }\n  data = {\n    password = "supersecret-plaintext-value"\n  }\n}`,
+    `resource "kubernetes_secret_v1" "api" {\n  metadata { name = "api" }\n  data = {\n    api_key = "AKIAIOSFODNN7EXAMPLE"\n  }\n}`,
+    `resource "kubernetes_secret" "tokens" {\n  metadata { name = "tokens" }\n  data = {\n    token = "REDACTED-plaintext-token-value-goes-here"\n  }\n}`,
+  ],
   match(content) {
     const lines = content.split("\n");
     const hitLines: number[] = [];

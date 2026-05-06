@@ -13,6 +13,32 @@ export const debugEndpointMatcher: MatcherPlugin = {
     "**/api/**/*.{ts,tsx,js}",
     "**/app/api/**/*.{ts,tsx}",
   ],
+  examples: [
+    `// debug endpoint for inspecting state
+export async function GET(req: Request) {
+  return Response.json({ env: process.env });
+}`,
+    `// test endpoint — internal use only
+export const POST = async (req) => {
+  return new Response("ok");
+};`,
+    `// dev only handler
+export function DELETE() {
+  return new Response(null, { status: 204 });
+}`,
+    `// uses x-debug header to dump internals
+export async function PUT(req) {
+  if (req.headers.get("x-debug")) return Response.json(state);
+  return new Response("ok");
+}`,
+    `// development only — do not ship
+if (process.env.NODE_ENV !== 'production') {
+  console.log("debug");
+}
+export async function GET() { return new Response("ok"); }`,
+    `// x-internal toggles debug responses
+export const GET = async (req) => new Response("hi");`,
+  ],
   match(content, filePath) {
     if (/\.(test|spec)\./i.test(filePath)) return [];
 
