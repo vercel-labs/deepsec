@@ -7,7 +7,7 @@ export interface RunMeta {
   createdAt: string;
   completedAt?: string;
   type: "scan" | "process" | "revalidate";
-  phase: "running" | "done" | "error";
+  phase: "running" | "done" | "partial" | "error";
   scannerConfig?: {
     matcherSlugs: string[];
   };
@@ -20,6 +20,7 @@ export interface RunMeta {
     filesScanned?: number;
     candidatesFound?: number;
     filesProcessed?: number;
+    filesFailed?: number;
     findingsCount?: number;
     totalCostUsd?: number;
     totalInputTokens?: number;

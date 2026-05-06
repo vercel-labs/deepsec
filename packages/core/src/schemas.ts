@@ -161,7 +161,7 @@ export const runMetaSchema = z.object({
   createdAt: z.string(),
   completedAt: z.string().optional(),
   type: z.enum(["scan", "process", "revalidate"]),
-  phase: z.enum(["running", "done", "error"]),
+  phase: z.enum(["running", "done", "partial", "error"]),
   scannerConfig: z.object({ matcherSlugs: z.array(z.string()) }).optional(),
   processorConfig: z
     .object({
@@ -174,6 +174,7 @@ export const runMetaSchema = z.object({
     filesScanned: z.number().optional(),
     candidatesFound: z.number().optional(),
     filesProcessed: z.number().optional(),
+    filesFailed: z.number().optional(),
     findingsCount: z.number().optional(),
     totalCostUsd: z.number().optional(),
     totalInputTokens: z.number().optional(),

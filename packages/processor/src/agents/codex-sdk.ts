@@ -560,6 +560,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     let toolUseCount = 0;
     let sdkMeta: Partial<BatchMeta> = {};
     let lastError = "";
+    let hadErrors = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
@@ -573,6 +574,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         toolUseCount = 0;
         sdkMeta = {};
         lastError = "";
+        hadErrors = false;
       }
 
       try {
@@ -632,6 +634,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
 
             case "turn.failed":
               lastError = event.error?.message ?? "turn.failed";
+              hadErrors = true;
               yield {
                 type: "error" as const,
                 message: `Codex turn failed: ${lastError.slice(0, 300)}`,
@@ -640,6 +643,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
 
             case "error":
               lastError = event.message;
+              hadErrors = true;
               yield {
                 type: "error" as const,
                 message: `Codex stream error: ${lastError.slice(0, 300)}`,
@@ -649,6 +653,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         }
       } catch (sdkErr) {
         lastError = sdkErr instanceof Error ? sdkErr.message : String(sdkErr);
+        hadErrors = true;
         yield {
           type: "error" as const,
           message: `Codex SDK error: ${lastError.slice(0, 300)}`,
@@ -696,6 +701,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     const wasSilent = (sdkMeta.usage?.outputTokens ?? 0) === 0;
     const stderrTail = wasSilent ? readStderrTail(invocation.stderrLog) : undefined;
     if (wasSilent && stderrTail) {
+      hadErrors = true;
       yield {
         type: "error" as const,
         message: `Codex silent-exit stderr: ${stderrTail.slice(0, 1500)}`,
@@ -737,6 +743,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         durationMs,
         ...sdkMeta,
         refusal,
+        hadErrors,
       },
     };
   }

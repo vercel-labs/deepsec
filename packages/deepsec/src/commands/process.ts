@@ -148,8 +148,13 @@ export async function processCommand(opts: {
     onProgress: logProgress,
   });
 
-  console.log(`${GREEN}Processing complete.${RESET} Run: ${BOLD}${result.runId}${RESET}`);
+  const phaseColor = result.phase === "partial" ? YELLOW : GREEN;
+  const phaseLabel = result.phase === "partial" ? "Processing partial." : "Processing complete.";
+  console.log(`${phaseColor}${phaseLabel}${RESET} Run: ${BOLD}${result.runId}${RESET}`);
   console.log(`  Analyses: ${result.analysisCount}`);
+  if (result.failedCount > 0) {
+    console.log(`  Failed/Retryable: ${result.failedCount}`);
+  }
   console.log(`  Findings: ${result.findingCount}`);
   console.log();
   console.log(`Next:`);

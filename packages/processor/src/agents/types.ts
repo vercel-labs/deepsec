@@ -39,6 +39,11 @@ export interface BatchMeta {
    * Empty/undefined for non-codex backends and successful codex runs.
    */
   codexStderr?: string;
+  /**
+   * True when the agent backend emitted one or more runtime errors while
+   * handling the batch (quota/rate-limit/provider failures etc).
+   */
+  hadErrors?: boolean;
 }
 
 export interface InvestigateOutput {
