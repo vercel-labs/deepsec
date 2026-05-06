@@ -15,6 +15,7 @@ import {
   readProjectConfig,
   readRunMeta,
   registerActiveRun,
+  SEVERITY_ORDER,
   writeFileRecord,
   writeRunMeta,
 } from "@deepsec/core";
@@ -805,15 +806,6 @@ export async function process(params: {
 }
 
 // --- Revalidation ---
-
-const SEVERITY_ORDER: Record<Severity, number> = {
-  CRITICAL: 0,
-  HIGH: 1,
-  MEDIUM: 2,
-  HIGH_BUG: 3,
-  BUG: 4,
-  LOW: 5,
-};
 
 export async function revalidate(params: {
   projectId: string;
