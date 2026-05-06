@@ -92,6 +92,16 @@ export interface AnalysisEntry {
 export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "HIGH_BUG" | "BUG" | "LOW";
 export type Confidence = "high" | "medium" | "low";
 
+/** Severity rank, lower is more severe. Used by `--min-severity` filter and severity sort. */
+export const SEVERITY_ORDER: Record<Severity, number> = {
+  CRITICAL: 0,
+  HIGH: 1,
+  MEDIUM: 2,
+  HIGH_BUG: 3,
+  BUG: 4,
+  LOW: 5,
+};
+
 export type RevalidationVerdict = "true-positive" | "false-positive" | "fixed" | "uncertain";
 
 export interface Revalidation {

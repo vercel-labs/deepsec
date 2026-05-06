@@ -6,6 +6,7 @@ import {
   getRegistry,
   loadAllFileRecords,
   readProjectConfig,
+  SEVERITY_ORDER,
   writeFileRecord,
 } from "@deepsec/core";
 
@@ -151,15 +152,6 @@ interface EnrichProgress {
   current?: number;
   total?: number;
 }
-
-const SEVERITY_ORDER: Record<Severity, number> = {
-  CRITICAL: 0,
-  HIGH: 1,
-  HIGH_BUG: 2,
-  MEDIUM: 3,
-  BUG: 4,
-  LOW: 5,
-};
 
 export async function enrich(params: {
   projectId: string;
