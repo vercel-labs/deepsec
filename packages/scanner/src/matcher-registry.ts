@@ -16,9 +16,11 @@ export class MatcherRegistry {
   }
 
   getBySlugs(slugs: string[]): MatcherPlugin[] {
-    return slugs
-      .map((s) => this.matchers.get(s))
-      .filter((m): m is MatcherPlugin => m !== undefined);
+    const missing = slugs.filter((slug) => !this.matchers.has(slug));
+    if (missing.length > 0) {
+      throw new Error(`Unknown matcher slug(s): ${missing.join(", ")}`);
+    }
+    return slugs.map((slug) => this.matchers.get(slug)!);
   }
 
   slugs(): string[] {

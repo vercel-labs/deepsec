@@ -86,4 +86,14 @@ describe("scan e2e", () => {
     const meta = JSON.parse(fs.readFileSync(runPath, "utf-8"));
     expect(meta.scannerConfig.matcherSlugs).toEqual(["xss", "rce"]);
   });
+
+  it("throws when matcher filter includes an unknown slug", async () => {
+    await expect(
+      scan({
+        projectId: PROJECT_ID,
+        root: FIXTURES,
+        matcherSlugs: ["xss", "does-not-exist"],
+      }),
+    ).rejects.toThrow(/Unknown matcher slug\(s\): does-not-exist/);
+  });
 });
