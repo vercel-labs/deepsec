@@ -79,6 +79,7 @@ export async function processCommand(opts: {
   runId?: string;
   agent?: string;
   model?: string;
+  ollama?: boolean;
   maxTurns?: number;
   /** Commander yields `true` when bare; string (unparsed) when an arg is provided */
   reinvestigate?: boolean | string;
@@ -100,6 +101,7 @@ export async function processCommand(opts: {
   ignore?: boolean;
   commentOut?: string;
 }) {
+  if (opts.ollama) process.env.DEEPSEC_OLLAMA = "1";
   const isDirectMode =
     opts.diff !== undefined ||
     !!opts.diffStaged ||

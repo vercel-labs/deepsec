@@ -68,6 +68,13 @@ function pickSandboxMode(): "danger-full-access" | "workspace-write" {
  */
 const CUSTOM_PROVIDER_ID = "ai_gateway";
 
+// Set by the `--ollama` CLI flag (DEEPSEC_OLLAMA=1). Explicit opt-in
+// only; we don't autodetect Ollama from the model name.
+function ollamaRequested(): boolean {
+  const v = process.env.DEEPSEC_OLLAMA?.trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
 /**
  * The codex CLI persists thread state to `$CODEX_HOME/sessions/` (defaulting
  * to `~/.codex`). Multiple concurrent codex CLI processes within one host
@@ -160,6 +167,10 @@ let cachedPaths: { wrapper: string; realBin: string } | null = null;
 
 function resolveCodexPaths(): { wrapper: string; realBin: string } | null {
   if (cachedPaths) return cachedPaths;
+  // codex SDK calls plain spawn() with no shell:true. On Windows that
+  // rejects .sh (EFTYPE) and Node's BatBadBut fix rejects .cmd
+  // (EINVAL). Fall through to codex.exe; stderr capture goes inert.
+  if (process.platform === "win32") return null;
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
     // Wrapper sits next to the source. After tsc, the .js lives in dist/
@@ -225,6 +236,8 @@ const CODEX_ENV_ALLOWLIST = new Set<string>([
   "RUST_BACKTRACE",
   // Codex itself
   "CODEX_HOME",
+  // OLLAMA_API_KEY is forwarded explicitly via `extras` only in Ollama mode.
+  "OLLAMA_HOST",
   // Our wrapper
   "CODEX_REAL_BIN",
   "CODEX_STDERR_LOG",
@@ -276,9 +289,11 @@ function buildCodexInvocation(): CodexInvocation {
   // (no token but the user has run `codex login` on this machine — let
   // codex use its default openai provider against their session). Sandbox
   // workers always go gateway; the preflight ensures a token is present
-  // before we ever get here in that path.
+  // before we ever get here in that path. `--ollama` is a third mode
+  // that bypasses both and selects codex's built-in `ollama` provider.
+  const ollamaMode = ollamaRequested();
   const haveApiToken = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  const subscriptionHome = haveApiToken ? null : findCodexSubscriptionAuth();
+  const subscriptionHome = ollamaMode || haveApiToken ? null : findCodexSubscriptionAuth();
 
   const codexHome = makeCodexHome();
   if (subscriptionHome) {
@@ -310,6 +325,19 @@ function buildCodexInvocation(): CodexInvocation {
     // delete is needed.
     const env = buildCodexEnv(extras);
     const options: CodexOptions = { env };
+    if (codexPathOverride) options.codexPathOverride = codexPathOverride;
+    return { options, stderrLog, codexHome };
+  }
+
+  if (ollamaMode) {
+    // codex 0.125 ships a built-in `ollama` provider; selecting it is
+    // the SDK equivalent of `codex --oss`. The provider routes
+    // local-daemon vs Ollama Cloud via the model name's `:cloud` suffix.
+    if (process.env.OLLAMA_API_KEY) extras.OLLAMA_API_KEY = process.env.OLLAMA_API_KEY;
+    const options: CodexOptions = {
+      config: { model_provider: "ollama" },
+      env: buildCodexEnv(extras),
+    };
     if (codexPathOverride) options.codexPathOverride = codexPathOverride;
     return { options, stderrLog, codexHome };
   }

@@ -36,6 +36,27 @@ pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
 default backend project-wide via `defaultAgent` in
 [`deepsec.config.ts`](configuration.md).
 
+## Ollama (`--ollama`)
+
+`process` and `revalidate` take `--ollama` to flip the codex backend
+onto codex's built-in `ollama` provider, which is the same path codex
+uses for `codex --oss`. The model name controls where the request
+goes: a `:cloud` suffix hits Ollama Cloud (needs `OLLAMA_API_KEY`),
+anything else hits your local daemon at `http://localhost:11434`
+(override with `OLLAMA_HOST`).
+
+```bash
+# Ollama Cloud (turbo)
+OLLAMA_API_KEY=... pnpm deepsec process --agent codex \
+  --model gpt-oss:120b-cloud --ollama
+
+# Local Ollama daemon (run `ollama serve` first)
+pnpm deepsec process --agent codex --model gpt-oss:120b --ollama
+```
+
+Same flag works on `revalidate`. `DEEPSEC_OLLAMA=1` is the env-var
+equivalent if you'd rather not retype the flag.
+
 ## Why these defaults
 
 ### `claude-opus-4-7` for `process` and `revalidate`

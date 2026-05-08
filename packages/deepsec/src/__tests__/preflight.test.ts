@@ -115,6 +115,17 @@ describe("assertAgentCredential", () => {
     expect(() => assertAgentCredential("codex")).toThrow(/AI_GATEWAY_API_KEY/);
   });
 
+  it("passes for codex with no creds when DEEPSEC_OLLAMA is set", () => {
+    const prev = process.env.DEEPSEC_OLLAMA;
+    process.env.DEEPSEC_OLLAMA = "1";
+    try {
+      expect(() => assertAgentCredential("codex")).not.toThrow();
+    } finally {
+      if (prev === undefined) delete process.env.DEEPSEC_OLLAMA;
+      else process.env.DEEPSEC_OLLAMA = prev;
+    }
+  });
+
   it("skips the credential check for custom plugin agents", () => {
     // Tests use this so a stub agent registered via plugins[] doesn't
     // require fake ANTHROPIC_AUTH_TOKEN env vars.

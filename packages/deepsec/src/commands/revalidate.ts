@@ -58,6 +58,7 @@ export async function revalidateCommand(opts: {
   runId?: string;
   agent?: string;
   model?: string;
+  ollama?: boolean;
   maxTurns?: number;
   minSeverity?: string;
   force?: boolean;
@@ -70,6 +71,7 @@ export async function revalidateCommand(opts: {
   onlySlugs?: string;
   skipSlugs?: string;
 }) {
+  if (opts.ollama) process.env.DEEPSEC_OLLAMA = "1";
   const projectId = resolveProjectId(opts.projectId);
   const _project = readProjectConfig(projectId);
   const agentType = resolveAgentType(opts.agent);

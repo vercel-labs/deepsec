@@ -165,6 +165,9 @@ export function assertAgentCredential(
   const openai = process.env.OPENAI_API_KEY;
 
   if (isCodex(agentType)) {
+    // --ollama bypasses OpenAI/AI Gateway; codex's built-in ollama provider handles its own auth.
+    const ollama = process.env.DEEPSEC_OLLAMA?.trim().toLowerCase();
+    if (ollama === "1" || ollama === "true") return;
     // Codex prefers OPENAI_API_KEY; AI Gateway issues a single token that
     // authenticates both backends, so an ANTHROPIC token is also accepted.
     if (openai || anthropic) return;
@@ -173,6 +176,7 @@ export function assertAgentCredential(
       `Missing AI credentials for --agent codex.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…   (or OPENAI_API_KEY=…)\n` +
+        `  Or use --ollama for local Ollama or Ollama Cloud (OLLAMA_API_KEY).\n` +
         `  Setup: ${SETUP_DOC_URL}`,
     );
   }

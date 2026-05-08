@@ -138,6 +138,10 @@ program
     "--model <model>",
     "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex)",
   )
+  .option(
+    "--ollama",
+    "Route the codex backend at Ollama instead of AI Gateway. Uses Ollama Cloud (https://ollama.com/v1) when OLLAMA_API_KEY is set, the local daemon (http://localhost:11434/v1) otherwise. Codex backend only.",
+  )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
     "--reinvestigate [n]",
@@ -197,6 +201,10 @@ program
   .option(
     "--model <model>",
     "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex)",
+  )
+  .option(
+    "--ollama",
+    "Route the codex backend at Ollama instead of AI Gateway. Uses Ollama Cloud (https://ollama.com/v1) when OLLAMA_API_KEY is set, the local daemon (http://localhost:11434/v1) otherwise. Codex backend only.",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
