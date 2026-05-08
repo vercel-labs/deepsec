@@ -1,5 +1,5 @@
 ---
-name: writing-deepsec-matchers
+name: deepsec-writing-matchers
 description: Add custom regex matchers to deepsec to catch entry-point shapes and org-specific patterns the built-in set misses. Activates when the user wants to extend deepsec's coverage for their codebase.
 ---
 

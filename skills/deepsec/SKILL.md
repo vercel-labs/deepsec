@@ -22,8 +22,8 @@ For specific subtasks, prefer the focused sibling skills:
 | User intent | Skill |
 |---|---|
 | First scan, install, getting started | `deepsec-getting-started` |
-| Add a regex matcher for a missed pattern | `writing-deepsec-matchers` |
-| Author a plugin (matchers/notifiers/ownership/people/executor) | `writing-deepsec-plugins` |
+| Add a regex matcher for a missed pattern | `deepsec-writing-matchers` |
+| Author a plugin (matchers/notifiers/ownership/people/executor) | `deepsec-writing-plugins` |
 | PR review / CI gating with `process --diff` | `deepsec-pr-review` |
 | `deepsec.config.ts` reference | `deepsec-configuration` |
 | Pick an agent / model, handle refusals | `deepsec-models` |
@@ -77,14 +77,14 @@ pnpm deepsec export --format md-dir --out ./findings
 ## How to answer common questions
 
 - **"How do I run a scan?"** → `deepsec-getting-started`.
-- **"How do I add a matcher?"** → `writing-deepsec-matchers`.
+- **"How do I add a matcher?"** → `deepsec-writing-matchers`.
 - **"How do I review PRs in CI?"** → `deepsec-pr-review`.
 - **"What goes in `deepsec.config.ts`?"** → `deepsec-configuration`.
 - **"Claude or Codex? Which model?"** → `deepsec-models`.
 - **"How do I get an AI Gateway / Sandbox token?"** → `deepsec-sandbox-setup`.
 - **"What's in `data/<id>/files/foo.json`?"** → `deepsec-data-layout`.
 - **"What does deepsec actually do under the hood?"** → `deepsec-architecture`.
-- **"How do I write a plugin?"** → `writing-deepsec-plugins`.
+- **"How do I write a plugin?"** → `deepsec-writing-plugins`.
 
 ## Hard rules
 

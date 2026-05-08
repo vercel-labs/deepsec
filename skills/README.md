@@ -19,8 +19,8 @@ npx skills add vercel-labs/deepsec --skill writing-deepsec-matchers
 |---|---|
 | [`deepsec`](deepsec/SKILL.md) | Umbrella — any deepsec question. Routes to the focused skills below. |
 | [`deepsec-getting-started`](deepsec-getting-started/SKILL.md) | First scan, install, INFO.md, calibration pass. |
-| [`writing-deepsec-matchers`](writing-deepsec-matchers/SKILL.md) | Add a regex matcher to catch entry-points or org-specific shapes the built-ins miss. |
-| [`writing-deepsec-plugins`](writing-deepsec-plugins/SKILL.md) | Author a plugin (matchers, notifiers, ownership, people, executor). |
+| [`deepsec-writing-matchers`](deepsec-writing-matchers/SKILL.md) | Add a regex matcher to catch entry-points or org-specific shapes the built-ins miss. |
+| [`deepsec-writing-plugins`](deepsec-writing-plugins/SKILL.md) | Author a plugin (matchers, notifiers, ownership, people, executor). |
 | [`deepsec-pr-review`](deepsec-pr-review/SKILL.md) | `process --diff` for CI gating + a hardened GitHub Actions workflow. |
 | [`deepsec-configuration`](deepsec-configuration/SKILL.md) | `deepsec.config.ts` and `data/<id>/config.json` reference. |
 | [`deepsec-models`](deepsec-models/SKILL.md) | Pick agent (Claude/Codex), model, handle refusals, drop in future models. |

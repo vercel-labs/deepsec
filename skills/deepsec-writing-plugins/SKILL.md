@@ -1,5 +1,5 @@
 ---
-name: writing-deepsec-plugins
+name: deepsec-writing-plugins
 description: Author a deepsec plugin — the contract for matchers, notifiers, ownership providers, people directories, and remote executors. Activates when the user wants to package matchers for sharing or wire deepsec into Slack, GitHub Issues, CODEOWNERS, an internal directory, or remote infrastructure.
 ---
 
