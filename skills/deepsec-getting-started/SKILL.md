@@ -182,7 +182,7 @@ projects; auto-resolution only kicks in when there's exactly one.
 
 ## Where to go next
 
-- **Add custom matchers** for entry-point shapes the defaults miss → `writing-deepsec-matchers`.
+- **Add custom matchers** for entry-point shapes the defaults miss → `deepsec-writing-matchers`.
 - **Configure projects, plugins, matcher filtering** → `deepsec-configuration`.
 - **Pick agent / model / handle refusals** → `deepsec-models`.
 - **CI / PR review** → `deepsec-pr-review`.

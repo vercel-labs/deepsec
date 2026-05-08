@@ -143,7 +143,7 @@ The CLI calls `loadConfig()` before parsing args, builds a
 module-level singleton (`getRegistry()`). All internal code consults
 the registry rather than hard-coding integrations.
 
-See the `writing-deepsec-plugins` skill for authoring details.
+See the `deepsec-writing-plugins` skill for authoring details.
 
 ## Distributed execution (Vercel Sandbox)
 

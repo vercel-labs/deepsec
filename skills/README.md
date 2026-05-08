@@ -10,7 +10,7 @@ npx skills add vercel-labs/deepsec
 Or pin a single skill:
 
 ```bash
-npx skills add vercel-labs/deepsec --skill writing-deepsec-matchers
+npx skills add vercel-labs/deepsec --skill deepsec-writing-matchers
 ```
 
 ## What's in here

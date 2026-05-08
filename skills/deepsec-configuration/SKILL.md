@@ -114,7 +114,7 @@ plugins: [genericPlugin(), orgPlugin()]
 - **`ownership`, `people`, `executor`** — last-write-wins.
   `orgPlugin()`'s provider replaces `genericPlugin()`'s.
 
-See the `writing-deepsec-plugins` skill for the full plugin contract.
+See the `deepsec-writing-plugins` skill for the full plugin contract.
 
 ## Per-project config files
 
@@ -182,7 +182,7 @@ For credential setup, see the `deepsec-sandbox-setup` skill.
 
 - **Don't put org-specific code in `deepsec.config.ts`.** If it has
   the literal name of an internal helper or service, factor it into a
-  plugin instead. See `writing-deepsec-plugins`.
+  plugin instead. See `deepsec-writing-plugins`.
 - **Don't override the data directory** with `dataDir` unless you're
   doing something unusual — the relative-path default makes
   multi-machine sync simpler.

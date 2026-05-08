@@ -58,7 +58,7 @@ export default defineConfig({
 
 ## Slot 1: matchers (most common)
 
-Same shape as a built-in matcher. See `writing-deepsec-matchers` for
+Same shape as a built-in matcher. See `deepsec-writing-matchers` for
 how to author one.
 
 ```ts
