@@ -15,18 +15,18 @@ npx skills add vercel-labs/deepsec --skill deepsec-writing-matchers
 
 ## What's in here
 
-| Skill | When it activates |
-|---|---|
-| [`deepsec`](deepsec/SKILL.md) | Umbrella — any deepsec question. Routes to the focused skills below. |
-| [`deepsec-getting-started`](deepsec-getting-started/SKILL.md) | First scan, install, INFO.md, calibration pass. |
-| [`deepsec-writing-matchers`](deepsec-writing-matchers/SKILL.md) | Add a regex matcher to catch entry-points or org-specific shapes the built-ins miss. |
-| [`deepsec-writing-plugins`](deepsec-writing-plugins/SKILL.md) | Author a plugin (matchers, notifiers, ownership, people, executor). |
-| [`deepsec-pr-review`](deepsec-pr-review/SKILL.md) | `process --diff` for CI gating + a hardened GitHub Actions workflow. |
-| [`deepsec-configuration`](deepsec-configuration/SKILL.md) | `deepsec.config.ts` and `data/<id>/config.json` reference. |
-| [`deepsec-models`](deepsec-models/SKILL.md) | Pick agent (Claude/Codex), model, handle refusals, drop in future models. |
-| [`deepsec-sandbox-setup`](deepsec-sandbox-setup/SKILL.md) | AI Gateway + Vercel Sandbox auth, BYOK, quota recovery, troubleshooting. |
-| [`deepsec-data-layout`](deepsec-data-layout/SKILL.md) | `data/<id>/` schema — FileRecord, RunMeta, Finding, AnalysisEntry. jq recipes. |
-| [`deepsec-architecture`](deepsec-architecture/SKILL.md) | Pipeline internals, append-only model, sandbox credential brokering, design decisions. |
+| Skill                                                           | When it activates                                                                      |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [`deepsec`](deepsec/SKILL.md)                                   | Umbrella — any deepsec question. Routes to the focused skills below.                   |
+| [`deepsec-getting-started`](deepsec-getting-started/SKILL.md)   | First scan, install, INFO.md, calibration pass.                                        |
+| [`deepsec-writing-matchers`](deepsec-writing-matchers/SKILL.md) | Add a regex matcher to catch entry-points or org-specific shapes the built-ins miss.   |
+| [`deepsec-writing-plugins`](deepsec-writing-plugins/SKILL.md)   | Author a plugin (matchers, notifiers, ownership, people, executor).                    |
+| [`deepsec-pr-review`](deepsec-pr-review/SKILL.md)               | `process --diff` for CI gating + a hardened GitHub Actions workflow.                   |
+| [`deepsec-configuration`](deepsec-configuration/SKILL.md)       | `deepsec.config.ts` and `data/<id>/config.json` reference.                             |
+| [`deepsec-models`](deepsec-models/SKILL.md)                     | Pick agent (Claude/Codex), model, handle refusals, drop in future models.              |
+| [`deepsec-sandbox-setup`](deepsec-sandbox-setup/SKILL.md)       | AI Gateway + Vercel Sandbox auth, BYOK, quota recovery, troubleshooting.               |
+| [`deepsec-data-layout`](deepsec-data-layout/SKILL.md)           | `data/<id>/` schema — FileRecord, RunMeta, Finding, AnalysisEntry. jq recipes.         |
+| [`deepsec-architecture`](deepsec-architecture/SKILL.md)         | Pipeline internals, append-only model, sandbox credential brokering, design decisions. |
 
 ## How these are scoped
 
