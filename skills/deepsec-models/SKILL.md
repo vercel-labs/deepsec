@@ -1,0 +1,159 @@
+---
+name: deepsec-models
+description: Pick a deepsec backend (Claude vs Codex) and model, understand defaults, refusal handling, and how to drop in a future model. Activates when the user asks which agent to use, how to set --model, or about a refusal in the run output.
+---
+
+# Choosing a deepsec backend and model
+
+deepsec talks to LLMs through two interchangeable backends:
+
+| Backend            | Default model         | Used by                  |
+|--------------------|-----------------------|--------------------------|
+| `codex` (default)  | `gpt-5.5`             | `process`, `revalidate`  |
+| `claude`           | `claude-opus-4-7`     | `process`, `revalidate`  |
+| `claude` (triage)  | `claude-sonnet-4-6`   | `triage` (Claude-only)   |
+
+Both backends route through [Vercel AI Gateway](https://vercel.com/ai-gateway)
+by default — a single token covers Claude **and** Codex. To use
+Anthropic or OpenAI directly, point `ANTHROPIC_BASE_URL` /
+`OPENAI_BASE_URL` at the provider.
+
+## CLI selection
+
+```bash
+# Codex (default), default model:
+pnpm deepsec process --project-id my-app
+
+# Claude with a specific model:
+pnpm deepsec process --project-id my-app --agent claude --model claude-sonnet-4-6
+
+# Codex backend, specific model:
+pnpm deepsec process --project-id my-app --agent codex --model gpt-5.4
+
+# Triage uses Claude; pass a cheaper model if desired:
+pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
+```
+
+`--agent` and `--model` are accepted on `revalidate` too. Set the
+default backend project-wide via `defaultAgent` in `deepsec.config.ts`
+(see the `deepsec-configuration` skill).
+
+## Why these defaults
+
+### `claude-opus-4-7` for `process` / `revalidate` (when on Claude)
+
+Investigating a candidate site is a multi-step reasoning task: trace
+control flow, recognize an auth boundary, decide whether input is
+attacker-controlled, judge severity. Stronger reasoning models pay for
+themselves in lower FP rate, even at higher per-call cost. Opus is the
+strongest of the Claude family at this kind of code reasoning.
+
+If cost matters more than precision (a 10k-file repo, a quick triaged
+starter list), drop to `claude-sonnet-4-6` — same prompt, ~3× cheaper,
+~10–20% higher FP rate.
+
+### `gpt-5.5` for the Codex backend
+
+Codex is the OpenAI-flavored agent loop: grep-heavy, fast, runs in a
+strict read-only sandbox. `gpt-5.5` is the right balance of reasoning
+and cost for that loop. `gpt-5.5-pro` is the most careful Codex
+option at significantly higher cost; `gpt-5.4` and below are fine for
+follow-up reinvestigation passes.
+
+### `claude-sonnet-4-6` for `triage`
+
+Triage buckets findings into P0/P1/P2/skip without re-reading the code
+— it just looks at the finding text. Cheap task; Opus is overkill.
+Sonnet keeps `triage` at ~1¢/finding.
+
+## Claude vs Codex — strengths
+
+| Strength | Claude (Opus) | Codex (gpt-5.5) |
+|---|---|---|
+| Reasoning about authorization shapes and cross-file flows | Strong | Good |
+| Grep-heavy investigations | Good | Strong (strict sandbox helps) |
+| Cost | $$$ | $ |
+| Sandbox isolation by default | No (read-only via tool config) | Yes (strict) |
+
+A useful pattern: run Claude first, then re-process unconvincing
+findings with `--agent codex --reinvestigate` for a second opinion.
+Findings dedupe across agents.
+
+## Refusals
+
+Models occasionally refuse to investigate a candidate — usually when
+source contains an exploit pattern they read as harmful, or when a
+path trips a content filter. After every batch, deepsec issues a
+follow-up turn:
+
+> Looking back at the investigation: was there anything you declined
+> to fully analyze, refused to look at, or skipped because the content
+> or the task felt uncomfortable or out of scope?
+
+The agent answers in a structured JSON shape (see `parseRefusalReport`
+in `packages/processor/src/agents/shared.ts`). If `refused: true`:
+
+- The batch gets a `refusal` record in run metadata.
+- The per-batch log line shows a ⚠️ `refusal` marker.
+- The `refusal` field on the FileRecord sticks around for audit.
+
+**No silent skips.**
+
+Claude Opus and `gpt-5.5` refuse less than 1% of batches in practice.
+A refused batch produces no false negatives — affected files stay
+`pending` (revalidation keeps the original verdict), so re-running
+`--reinvestigate` against the other backend picks up the dropped
+sites. Findings dedupe across agents, so you don't pay twice.
+
+If a single file consistently triggers a refusal (>5% of batches),
+it's usually one path with a hard-to-disambiguate exploit pattern.
+Add it to `config.json:ignorePaths`, or run that file alone with
+`--batch-size 1` so the refusal doesn't take a batch of otherwise-fine
+files down with it.
+
+## Future models (Anthropic Mythos, gpt-6, …)
+
+The model is a flag, not a baked-in choice. Point `--model` at the new
+identifier:
+
+```bash
+pnpm deepsec process --project-id my-app --model anthropic-mythos-1
+pnpm deepsec process --project-id my-app --agent codex --model gpt-6
+```
+
+Two small integration points if the new model is on Codex:
+
+1. **The model identifier** — whatever string the provider's SDK
+   accepts. deepsec passes it through unchanged. **No code change
+   needed to use a new model on either backend.**
+2. **Pricing for the cost-per-batch readout.** The Claude Agent SDK
+   reports cost natively, so new Claude-family models drop in with
+   zero code changes. Codex doesn't, so add a line to
+   `MODEL_PRICING_USD_PER_M_TOKENS` in
+   `packages/processor/src/agents/codex-sdk.ts` for each new
+   OpenAI/Codex model. Without it, the batch still runs — the cost
+   readout is simply omitted.
+
+When a new model becomes the right default, change the relevant entry
+in `packages/deepsec/src/agent-defaults.ts` (one string per backend)
+and the `DEFAULT_MODEL` constant in the corresponding agent file.
+
+Existing data and findings are unaffected — deepsec records which
+agent + model produced each finding, so a model change shows up
+cleanly in `analysisHistory` of any re-investigated file.
+
+A useful pattern when a new model lands: re-run `process` with
+`--reinvestigate <N>` (a wave marker) against existing high-severity
+findings to see whether the new model overturns verdicts. The wave
+marker tags the new analysis without losing the old one.
+
+## Hard rules
+
+- **Don't lower from Opus → Sonnet on first scans of a new repo.** FP
+  rate on Sonnet is materially higher; the false leads cost more in
+  human triage time than the model savings.
+- **`triage` is Claude-only.** `--agent codex` is rejected for that
+  command.
+- **Don't combine `--reinvestigate` with the same agent + model** that
+  produced the original findings — you'll just re-run identical
+  investigations. Switch agents or models for a real second opinion.
