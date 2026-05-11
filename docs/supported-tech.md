@@ -160,8 +160,17 @@ dedicated matchers (gRPC service impl already partially covered).
 
 ## Rust
 
+### Framework-gated matchers
 Detection emits tags (`actix`, `axum`, `rocket`, `warp`, `tide`, `poem`,
-`tonic`, `lambda-rs`) but dedicated matchers are roadmap.
+`tonic`, `lambda-rs`); the matching `rs-actix-route`, `rs-axum-route`,
+`rs-rocket-route`, `rs-warp-filter`, `rs-tide-route`, `rs-poem-route`,
+`rs-tonic-grpc`, and `rs-lambda-runtime` matchers activate only when
+their tag is detected.
+
+### Generic Rust (`rust`)
+Always-on Rust matchers regardless of framework: `rs-sql-raw`,
+`rs-command-injection`, `rs-path-traversal`, `rs-ssrf`,
+`rs-tls-no-verify`, `rs-untrusted-deserialization`.
 
 ## JVM (Java / Kotlin)
 
