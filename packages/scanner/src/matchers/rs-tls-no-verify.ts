@@ -13,6 +13,7 @@ export const rsTlsNoVerifyMatcher: MatcherPlugin = {
     `let client = reqwest::Client::builder().danger_accept_invalid_hostnames(true).build()?;`,
     `let cfg = ClientConfig::builder().with_safe_defaults().dangerous_configuration();`,
     `impl ServerCertVerifier for NoVerify {}`,
+    `impl rustls::client::ServerCertVerifier for NoVerify {}`,
     `builder.set_verify(SslVerifyMode::NONE);`,
   ],
   match(content, filePath) {
@@ -34,7 +35,7 @@ export const rsTlsNoVerifyMatcher: MatcherPlugin = {
           label: "rustls dangerous_configuration",
         },
         {
-          regex: /\bimpl\s+ServerCertVerifier\b/,
+          regex: /\bimpl\s+(?:\w+::)*ServerCertVerifier\b/,
           label: "hand-rolled ServerCertVerifier",
         },
         {

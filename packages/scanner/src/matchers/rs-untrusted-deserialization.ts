@@ -5,7 +5,7 @@ export const rsUntrustedDeserializationMatcher: MatcherPlugin = {
   noiseTier: "normal" as const,
   slug: "rs-untrusted-deserialization",
   description:
-    "Rust binary/streaming deserializers without explicit size limits — bincode, rmp_serde, serde_json::from_reader, ciborium, postcard",
+    "Rust binary/streaming deserializers (bincode, rmp_serde, serde_json::from_reader, ciborium, postcard) without explicit size limits. Review for unbounded untrusted payloads — internal-trust-boundary callsites are expected false positives",
   filePatterns: ["**/*.rs"],
   requires: { tech: ["rust"] },
   examples: [

@@ -13,7 +13,7 @@ export const rsPathTraversalMatcher: MatcherPlugin = {
     `let path = dest.join(entry.path()?);`,
     `target.push(header.path()?);`,
     `for entry in archive.entries()? { let p = root.join(entry.path()?); }`,
-    `let dest = output_dir.join(zip_entry.name());`,
+    `let dest = output_dir.join(header.path()?);`,
   ],
   match(content, filePath) {
     if (/\/(tests|examples|benches)\//.test(filePath)) return [];
@@ -32,10 +32,6 @@ export const rsPathTraversalMatcher: MatcherPlugin = {
         {
           regex: /\.push\s*\(\s*[^)]*\b(?:entry|header)\.(?:name|path)\s*\(/,
           label: "PathBuf::push(entry/header.path())",
-        },
-        {
-          regex: /\.join\s*\([^)]*\b(?:zip|tar|archive)[_a-zA-Z]*\b/,
-          label: ".join(...) with zip/tar/archive identifier",
         },
       ],
       content,

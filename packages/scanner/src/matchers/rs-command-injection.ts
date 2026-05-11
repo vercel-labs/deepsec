@@ -9,8 +9,9 @@ export const rsCommandInjectionMatcher: MatcherPlugin = {
   requires: { tech: ["rust"] },
   examples: [
     `let output = std::process::Command::new("ls").arg(dir).output()?;`,
-    `let child = Command::new("git").arg("clone").arg(repo_url).spawn()?;`,
+    `let child = std::process::Command::new("git").arg("clone").arg(repo_url).spawn()?;`,
     `tokio::process::Command::new("sh").arg("-c").arg(user_input).status().await?;`,
+    `let child = process::Command::new("rsync").arg(src).arg(dst).spawn()?;`,
     `Command::new("bash").arg("-c").arg(cmd).output()?;`,
     `let out = std::process::Command::new("pwsh").args(&args).output()?;`,
   ],
@@ -29,12 +30,12 @@ export const rsCommandInjectionMatcher: MatcherPlugin = {
           label: "tokio::process::Command::new",
         },
         {
-          regex: /\bCommand::new\s*\(\s*"(?:sh|bash|zsh|cmd|powershell|pwsh)"/,
-          label: "Command::new with shell interpreter",
+          regex: /(?<!::)\bprocess::Command::new\s*\(/,
+          label: "process::Command::new",
         },
         {
-          regex: /\bCommand::new\s*\(/,
-          label: "Command::new",
+          regex: /\bCommand::new\s*\(\s*"(?:sh|bash|zsh|cmd|powershell|pwsh)"/,
+          label: "Command::new with shell interpreter",
         },
       ],
       content,

@@ -15,6 +15,7 @@ export const rsSsrfMatcher: MatcherPlugin = {
     `let url = Url::parse(&format!("https://{}/v1", target))?;`,
     `let req = Request::builder().uri(&format!("https://{}/api", host)).body(())?;`,
     `let resp = surf::get(base.to_string() + path).await?;`,
+    `let resp = client.get(&format!("https://{}/api", host)).send().await?;`,
   ],
   match(content, filePath) {
     if (/\/(tests|examples|benches)\//.test(filePath)) return [];
@@ -28,7 +29,8 @@ export const rsSsrfMatcher: MatcherPlugin = {
           label: "http client verb with format! URL",
         },
         {
-          regex: /\.(?:get|post|put|patch|delete|head)\s*\(\s*&?format!\s*\(/,
+          regex:
+            /\b(?:client|http|reqwest|ureq|surf|isahc|web|api)\.(?:get|post|put|patch|delete|head)\s*\(\s*&?format!\s*\(/,
           label: "client.verb(&format!(...))",
         },
         {
@@ -36,7 +38,8 @@ export const rsSsrfMatcher: MatcherPlugin = {
           label: "http client verb with concatenated URL",
         },
         {
-          regex: /\.(?:get|post|put|patch|delete|head)\s*\(.*?\+\s*\w/,
+          regex:
+            /\b(?:client|http|reqwest|ureq|surf|isahc|web|api)\.(?:get|post|put|patch|delete|head)\s*\(.*?\+\s*\w/,
           label: "client.verb(... + path)",
         },
         {
