@@ -262,7 +262,8 @@ describe("parseInvestigateResults", () => {
   const batch = [{ filePath: "a.ts" } as any, { filePath: "b.ts" } as any];
 
   it("matches results to batch files; fills missing with empty findings", () => {
-    const text = '```json\n[{"filePath":"a.ts","findings":[{"severity":"HIGH"}]}]\n```';
+    const text =
+      '```json\n[{"filePath":"a.ts","findings":[{"severity":"HIGH","vulnSlug":"x","title":"t","description":"d","lineNumbers":[1],"recommendation":"r","confidence":"high"}]}]\n```';
     const out = parseInvestigateResults(text, batch);
     expect(out.find((r) => r.filePath === "a.ts")?.findings.length).toBe(1);
     expect(out.find((r) => r.filePath === "b.ts")?.findings).toEqual([]);
@@ -284,6 +285,24 @@ describe("parseInvestigateResults", () => {
       /not an array/,
     );
   });
+
+  it("throws when a finding has invalid severity", () => {
+    const text =
+      '```json\n[{"filePath":"a.ts","findings":[{"severity":"INVALID","vulnSlug":"x","title":"t","description":"d","lineNumbers":[1],"recommendation":"r","confidence":"high"}]}]\n```';
+    expect(() => parseInvestigateResults(text, batch)).toThrow(/schema validation/);
+  });
+
+  it("throws when a finding has invalid confidence", () => {
+    const text =
+      '```json\n[{"filePath":"a.ts","findings":[{"severity":"HIGH","vulnSlug":"x","title":"t","description":"d","lineNumbers":[1],"recommendation":"r","confidence":"INVALID"}]}]\n```';
+    expect(() => parseInvestigateResults(text, batch)).toThrow(/schema validation/);
+  });
+
+  it("throws when a finding is missing a required field", () => {
+    const text =
+      '```json\n[{"filePath":"a.ts","findings":[{"severity":"HIGH","vulnSlug":"x"}]}]\n```';
+    expect(() => parseInvestigateResults(text, batch)).toThrow(/schema validation/);
+  });
 });
 
 describe("parseRevalidateVerdicts", () => {
@@ -297,5 +316,11 @@ describe("parseRevalidateVerdicts", () => {
 
   it("throws on parse failure", () => {
     expect(() => parseRevalidateVerdicts("garbage")).toThrow(/wasn't parseable JSON/);
+  });
+
+  it("throws when verdict is invalid", () => {
+    const text =
+      '```json\n[{"filePath":"a.ts","title":"x","verdict":"INVALID","reasoning":"r"}]\n```';
+    expect(() => parseRevalidateVerdicts(text)).toThrow(/schema validation/);
   });
 });

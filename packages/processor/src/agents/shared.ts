@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import type { FileRecord, Finding, RefusalReport } from "@deepsec/core";
+import type { FileRecord, RefusalReport } from "@deepsec/core";
+import { findingSchema } from "@deepsec/core";
+import { z } from "zod";
 import type { InvestigateResult, RevalidateVerdict } from "./types.js";
 
 // --- Retry / backoff -------------------------------------------------------
@@ -418,15 +420,23 @@ export function parseInvestigateResults(
     throw new Error(`Agent produced JSON but not an array of file findings. Got: ${typeof parsed}`);
   }
 
-  const typedParsed = parsed as Array<{ filePath: string; findings: Finding[] }>;
+  const investigateResultSchema = z.object({
+    filePath: z.string(),
+    findings: z.array(findingSchema),
+  });
+  const validation = z.array(investigateResultSchema).safeParse(parsed);
+  if (!validation.success) {
+    throw new Error(`Agent findings failed schema validation: ${validation.error.message}`);
+  }
+
   const results: InvestigateResult[] = [];
   const batchPaths = new Set(batch.map((r) => r.filePath));
 
-  for (const entry of typedParsed) {
+  for (const entry of validation.data) {
     if (batchPaths.has(entry.filePath)) {
       results.push({
         filePath: entry.filePath,
-        findings: entry.findings || [],
+        findings: entry.findings,
       });
       batchPaths.delete(entry.filePath);
     }
@@ -568,5 +578,19 @@ export function parseRevalidateVerdicts(resultText: string): RevalidateVerdict[]
   if (!Array.isArray(parsed)) {
     throw new Error(`Agent produced revalidation JSON but not an array. Got: ${typeof parsed}`);
   }
-  return parsed as RevalidateVerdict[];
+
+  const revalidateVerdictSchema = z.object({
+    filePath: z.string(),
+    title: z.string(),
+    verdict: z.enum(["true-positive", "false-positive", "fixed", "uncertain"]),
+    reasoning: z.string(),
+    adjustedSeverity: z.enum(["CRITICAL", "HIGH", "MEDIUM", "HIGH_BUG", "BUG"]).optional(),
+  });
+  const validation = z.array(revalidateVerdictSchema).safeParse(parsed);
+  if (!validation.success) {
+    throw new Error(
+      `Agent revalidation verdicts failed schema validation: ${validation.error.message}`,
+    );
+  }
+  return validation.data as RevalidateVerdict[];
 }

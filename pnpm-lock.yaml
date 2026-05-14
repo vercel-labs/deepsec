@@ -90,7 +90,7 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.119
-        version: 0.2.123(zod@4.4.1)
+        version: 0.2.123(zod@3.25.76)
       '@deepsec/core':
         specifier: workspace:*
         version: link:../core
@@ -103,6 +103,9 @@ importers:
       '@openai/codex-sdk':
         specifier: ^0.125.0
         version: 0.125.0
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
 
   packages/scanner:
     dependencies:
@@ -182,6 +185,29 @@ packages:
     dev: false
     optional: true
 
+  /@anthropic-ai/claude-agent-sdk@0.2.123(zod@3.25.76):
+    resolution: {integrity: sha512-a4TysYoR9DBdkM9Uwh4J5ub7TwKmRPe5hFiWh4En+IKC+qkk5UFkxFM22c//cZjYZKynHX0ah2t6LUqb+najYA==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      zod: ^4.0.0
+    dependencies:
+      '@anthropic-ai/sdk': 0.81.0(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
+      zod: 3.25.76
+    optionalDependencies:
+      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.2.123
+      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.2.123
+      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.2.123
+      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.2.123
+      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.2.123
+      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.2.123
+      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.2.123
+      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.2.123
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - supports-color
+    dev: false
+
   /@anthropic-ai/claude-agent-sdk@0.2.123(zod@4.4.1):
     resolution: {integrity: sha512-a4TysYoR9DBdkM9Uwh4J5ub7TwKmRPe5hFiWh4En+IKC+qkk5UFkxFM22c//cZjYZKynHX0ah2t6LUqb+najYA==}
     engines: {node: '>=18.0.0'}
@@ -203,6 +229,19 @@ packages:
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
+    dev: false
+
+  /@anthropic-ai/sdk@0.81.0(zod@3.25.76):
+    resolution: {integrity: sha512-D4K5PvEV6wPiRtVlVsJHIUhHAmOZ6IT/I9rKlTf84gR7GyyAurPJK7z9BOf/AZqC5d1DhYQGJNKRmV+q8dGhgw==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+    dependencies:
+      json-schema-to-ts: 3.1.1
+      zod: 3.25.76
     dev: false
 
   /@anthropic-ai/sdk@0.81.0(zod@4.4.1):
@@ -825,6 +864,37 @@ packages:
   /@jridgewell/sourcemap-codec@1.5.5:
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
     dev: true
+
+  /@modelcontextprotocol/sdk@1.29.0(zod@3.25.76):
+    resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@cfworker/json-schema': ^4.1.1
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@cfworker/json-schema':
+        optional: true
+    dependencies:
+      '@hono/node-server': 1.19.14(hono@4.12.16)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.0.8
+      express: 5.2.1
+      express-rate-limit: 8.4.1(express@5.2.1)
+      hono: 4.12.16
+      jose: 6.2.3
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.2(zod@3.25.76)
+    transitivePeerDependencies:
+      - supports-color
+    dev: false
 
   /@modelcontextprotocol/sdk@1.29.0(zod@4.4.1):
     resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
@@ -3155,6 +3225,14 @@ packages:
       y18n: 5.0.8
       yargs-parser: 21.1.1
     dev: true
+
+  /zod-to-json-schema@3.25.2(zod@3.25.76):
+    resolution: {integrity: sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==}
+    peerDependencies:
+      zod: ^3.25.28 || ^4
+    dependencies:
+      zod: 3.25.76
+    dev: false
 
   /zod-to-json-schema@3.25.2(zod@4.4.1):
     resolution: {integrity: sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==}

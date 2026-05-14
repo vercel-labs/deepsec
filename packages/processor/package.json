@@ -13,6 +13,7 @@
     "@openai/codex": "^0.125.0",
     "@openai/codex-sdk": "^0.125.0",
     "@deepsec/core": "workspace:*",
-    "@deepsec/scanner": "workspace:*"
+    "@deepsec/scanner": "workspace:*",
+    "zod": "^3.24.0"
   }
 }

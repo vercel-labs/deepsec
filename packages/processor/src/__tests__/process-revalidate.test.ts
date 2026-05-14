@@ -123,6 +123,54 @@ describe("processor with stub agent", () => {
     expect(rec.lockedByRunId).toBeFalsy();
   });
 
+  it("process() prefers config project declaration over legacy data files", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    fx.writeRecord(pendingRecord(fx.projectId, "app.ts"));
+
+    fs.writeFileSync(path.join(fx.dataRoot, fx.projectId, "INFO.md"), "from info.md");
+    fs.writeFileSync(
+      path.join(fx.dataRoot, fx.projectId, "config.json"),
+      JSON.stringify({ promptAppend: "from config.json" }),
+    );
+
+    const stub = new StubAgent({
+      investigateImpl: async function* (params) {
+        return {
+          results: params.batch.map((rec) => ({
+            filePath: rec.filePath,
+            findings: [],
+          })),
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+
+    setLoadedConfig(
+      defineConfig({
+        projects: [
+          {
+            id: fx.projectId,
+            root: fx.targetRoot,
+            infoMarkdown: "from config ts",
+            promptAppend: "from config ts",
+          },
+        ],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+
+    const prompt = stub.calls.investigateCalls[0].promptTemplate;
+    expect(prompt).toContain("from config ts");
+    expect(prompt).not.toContain("from info.md");
+    expect(prompt).not.toContain("from config.json");
+  });
+
   it("process() respects --limit", async () => {
     const fx = setupProject({ files: ["a.ts", "b.ts", "c.ts"] });
     fx.writeRecord(pendingRecord(fx.projectId, "a.ts"));

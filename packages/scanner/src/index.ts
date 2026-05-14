@@ -7,7 +7,9 @@ import {
   createRunMeta,
   dataDir,
   ensureProject,
+  getConfig,
   getRegistry,
+  loadAllFileRecords,
   readFileRecord,
   writeFileRecord,
   writeRunMeta,
@@ -267,12 +269,17 @@ export class RegexScannerDriver implements ScannerDriver {
         const _stat = fs.statSync(path.join(root, relPath));
         const hash = crypto.createHash("sha256").update(content).digest("hex");
 
+        // If content changed since the last scan, previous findings are stale.
+        // Preserve analysisHistory but reset current findings so the file
+        // gets reprocessed.
+        if (record.fileHash && record.fileHash !== hash) {
+          record.findings = [];
+          record.status = "pending";
+        }
+
         record.lastScannedAt = new Date().toISOString();
         record.lastScannedRunId = runId;
         record.fileHash = hash;
-
-        // Only reset to pending if not already analyzed
-        // (re-scanning doesn't invalidate previous analysis)
 
         yield {
           type: "file_scanned",
@@ -290,6 +297,36 @@ export class RegexScannerDriver implements ScannerDriver {
         matcherIndex: mi + 1,
         matcherTotal,
       };
+    }
+
+    // Handle files that were previously recorded but not touched this scan:
+    // either deleted from disk or no longer matching any pattern. Clear their
+    // candidates and findings so they don't continue to appear as active.
+    const allExisting = loadAllFileRecords(projectId);
+    for (const existing of allExisting) {
+      if (upserted.has(existing.filePath)) continue;
+
+      const absPath = path.join(root, existing.filePath);
+      const stillExists = fs.existsSync(absPath) && fs.statSync(absPath).isFile();
+      let newHash = "";
+      if (stillExists) {
+        try {
+          newHash = crypto
+            .createHash("sha256")
+            .update(fs.readFileSync(absPath, "utf-8").replaceAll("\r\n", "\n"))
+            .digest("hex");
+        } catch {
+          // unreadable
+        }
+      }
+
+      existing.candidates = [];
+      existing.findings = [];
+      existing.status = "pending";
+      existing.fileHash = newHash;
+      existing.lastScannedAt = new Date().toISOString();
+      existing.lastScannedRunId = runId;
+      writeFileRecord(existing);
     }
 
     // Write all upserted records to disk
@@ -367,9 +404,19 @@ export async function scan(params: {
   languageStats: LanguageStats[];
 }> {
   const registry = buildMergedRegistry();
-  const allSelected = params.matcherSlugs
+  let allSelected = params.matcherSlugs
     ? registry.getBySlugs(params.matcherSlugs)
     : registry.getAll();
+
+  if (!params.matcherSlugs) {
+    const cfg = getConfig()?.matchers;
+    if (cfg?.only && cfg.only.length > 0) {
+      allSelected = registry.getBySlugs(cfg.only);
+    } else if (cfg?.exclude && cfg.exclude.length > 0) {
+      const excludeSet = new Set(cfg.exclude);
+      allSelected = allSelected.filter((m) => !excludeSet.has(m.slug));
+    }
+  }
 
   if (allSelected.length === 0) {
     throw new Error("No matchers selected");
@@ -550,9 +597,19 @@ export async function scanFiles(params: {
   skippedMatchers: string[];
 }> {
   const registry = buildMergedRegistry();
-  const allSelected = params.matcherSlugs
+  let allSelected = params.matcherSlugs
     ? registry.getBySlugs(params.matcherSlugs)
     : registry.getAll();
+
+  if (!params.matcherSlugs) {
+    const cfg = getConfig()?.matchers;
+    if (cfg?.only && cfg.only.length > 0) {
+      allSelected = registry.getBySlugs(cfg.only);
+    } else if (cfg?.exclude && cfg.exclude.length > 0) {
+      const excludeSet = new Set(cfg.exclude);
+      allSelected = allSelected.filter((m) => !excludeSet.has(m.slug));
+    }
+  }
 
   if (allSelected.length === 0) {
     throw new Error("No matchers selected");
@@ -634,8 +691,9 @@ export async function scanFiles(params: {
 
     // Load-or-create the FileRecord. Existing candidates from prior scans
     // are preserved — we merge new matches in, never overwrite.
+    const existing = readFileRecord(params.projectId, relPath);
     const record =
-      readFileRecord(params.projectId, relPath) ??
+      existing ??
       ({
         filePath: relPath,
         projectId: params.projectId,
@@ -665,6 +723,12 @@ export async function scanFiles(params: {
           if (!exists) record.candidates.push(m);
         }
       }
+    }
+
+    // If content changed since the last scan, previous findings are stale.
+    if (existing && existing.fileHash !== hash) {
+      record.findings = [];
+      record.status = "pending";
     }
 
     record.lastScannedAt = new Date().toISOString();
