@@ -32,12 +32,14 @@ describe("assertAgentCredential", () => {
   beforeEach(() => {
     saved = {
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       CLAUDE_HOME: process.env.CLAUDE_HOME,
       CODEX_HOME: process.env.CODEX_HOME,
       PATH: process.env.PATH,
     };
     delete process.env.ANTHROPIC_AUTH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENAI_API_KEY;
     // Point CLAUDE_HOME / CODEX_HOME and PATH at empty tmp dirs so the
     // suite is hermetic — the dev running tests may have a real
@@ -65,9 +67,14 @@ describe("assertAgentCredential", () => {
     expect(() => assertAgentCredential("claude-agent-sdk")).not.toThrow();
   });
 
+  it("passes for claude-agent-sdk when direct Anthropic API key is set", () => {
+    process.env.ANTHROPIC_API_KEY = "x";
+    expect(() => assertAgentCredential("claude-agent-sdk")).not.toThrow();
+  });
+
   it("throws actionable message for claude-agent-sdk when no token and no claude CLI", () => {
     expect(() => assertAgentCredential("claude-agent-sdk")).toThrow(/--agent claude/);
-    expect(() => assertAgentCredential("claude-agent-sdk")).toThrow(/ANTHROPIC_AUTH_TOKEN/);
+    expect(() => assertAgentCredential("claude-agent-sdk")).toThrow(/ANTHROPIC_API_KEY/);
     expect(() => assertAgentCredential("claude-agent-sdk")).toThrow(/AI_GATEWAY_API_KEY/);
     expect(() => assertAgentCredential("claude-agent-sdk")).toThrow(
       /https:\/\/github\.com\/vercel-labs\/deepsec\/blob\/main\/docs\/vercel-setup\.md/,

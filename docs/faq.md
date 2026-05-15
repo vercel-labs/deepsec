@@ -70,12 +70,11 @@ the gateway.
 
 ```bash
 # Direct Anthropic
-ANTHROPIC_AUTH_TOKEN=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 
 # AI Gateway (recommended)
-ANTHROPIC_AUTH_TOKEN=vck_...
-ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh
+AI_GATEWAY_API_KEY=vck_...
 ```
 
 If `claude` or `codex` is already logged in on this machine, non-sandbox

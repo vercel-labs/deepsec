@@ -62,7 +62,7 @@ If the second command fails with `Missing AI credentials` or a `401`, see [Troub
 
 ### How it works
 
-deepsec expands whichever credential it finds (the API key first, the OIDC token as fallback) at startup into the four vars the agent SDKs read (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`), so a single credential covers both Codex (`--agent codex`, the default) and Claude (`--agent claude`).
+deepsec expands whichever gateway credential it finds (the API key first, the OIDC token as fallback) at startup into the four vars the agent SDKs read (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`), so a single gateway credential covers both Codex (`--agent codex`, the default) and Claude (`--agent claude`). For direct Anthropic, set `ANTHROPIC_API_KEY` instead.
 
 Any of those four vars you set explicitly takes precedence over the expansion — useful for mixing direct Anthropic with gateway-routed OpenAI, etc.
 
@@ -113,11 +113,11 @@ If you have your own Anthropic / OpenAI agreement, two options:
 
 **Through the gateway (recommended)** — configure [Bring Your Own Key (BYOK)](https://vercel.com/docs/ai-gateway/authentication-and-byok#bring-your-own-key-byok) at the team level. No gateway markup, with failover and observability on top.
 
-**Bypass the gateway entirely** — set the explicit base URL + token pairs in `.env.local`:
+**Bypass the gateway entirely** — set direct provider credentials in `.env.local`:
 
 ```bash
 # Anthropic direct
-ANTHROPIC_AUTH_TOKEN=sk-ant-…
+ANTHROPIC_API_KEY=sk-ant-…
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 
 # OpenAI direct
@@ -125,7 +125,7 @@ OPENAI_API_KEY=sk-…
 # (OPENAI_BASE_URL defaults to api.openai.com — only set it for proxies)
 ```
 
-Mix freely — gateway for Claude, direct for OpenAI, etc. The explicit values always win over the `AI_GATEWAY_API_KEY` expansion.
+Mix freely — gateway for Claude, direct Anthropic, direct OpenAI, etc. The explicit values always win over the `AI_GATEWAY_API_KEY` expansion.
 
 ---
 

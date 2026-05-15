@@ -37,8 +37,9 @@ Open `.env.local` and pick one of:
   expires after 12 hours; re-pull when you hit auth errors. Convenient
   if you're already using Vercel Sandbox (same token unlocks both).
 
-Prefer Anthropic directly? Set `ANTHROPIC_AUTH_TOKEN=sk-ant-…` and
-`ANTHROPIC_BASE_URL=https://api.anthropic.com` instead. If `claude` or
+Prefer Anthropic directly? Set `ANTHROPIC_API_KEY=sk-ant-…` instead.
+Add `ANTHROPIC_BASE_URL=https://api.anthropic.com` only if you need the
+base URL to be explicit. If `claude` or
 `codex` is already logged in on this machine, non-sandbox runs
 (`process` / `revalidate` / `triage`) skip the token and reuse the
 subscription. See [vercel-setup.md](vercel-setup.md).

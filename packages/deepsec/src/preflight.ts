@@ -162,6 +162,7 @@ export function assertAgentCredential(
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
 
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   const openai = process.env.OPENAI_API_KEY;
 
   if (isCodex(agentType)) {
@@ -177,14 +178,14 @@ export function assertAgentCredential(
     );
   }
 
-  if (anthropic) return;
+  if (anthropic || anthropicApiKey) return;
   if (!options.inSandbox && hasLocalClaudeAgent()) return;
   const displayAgent =
     agentType === "claude-agent-sdk" || agentType === undefined ? "claude" : agentType;
   throw new Error(
     `Missing AI credentials for --agent ${displayAgent}.\n` +
       `\n` +
-      `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…   (or ANTHROPIC_AUTH_TOKEN=…)\n` +
+      `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…   (or ANTHROPIC_API_KEY=… for direct Anthropic)\n` +
       `  Setup: ${SETUP_DOC_URL}`,
   );
 }

@@ -82,8 +82,9 @@ AI_GATEWAY_API_KEY=vck_...
 
 See [docs/vercel-setup.md](docs/vercel-setup.md) for getting a key and
 for the Vercel Sandbox setup. To bypass the gateway, set
-`ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` (or the OpenAI pair)
-explicitly. Explicit values always win over the `AI_GATEWAY_API_KEY`
+`ANTHROPIC_API_KEY` (plus `ANTHROPIC_BASE_URL=https://api.anthropic.com`
+only when you need an explicit direct Anthropic base URL) or the OpenAI
+pair explicitly. Explicit values always win over the `AI_GATEWAY_API_KEY`
 expansion.
 
 If a `process` or `revalidate` run halts because the upstream credential
