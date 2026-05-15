@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadAllFileRecords, readFileRecord, readRunMeta } from "@deepsec/core";
+import {
+  defineConfig,
+  loadAllFileRecords,
+  readFileRecord,
+  readRunMeta,
+  setLoadedConfig,
+  writeFileRecord,
+} from "@deepsec/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { scanFiles } from "../index.js";
 
@@ -102,5 +109,67 @@ describe("scanFiles()", () => {
     await scanFiles({ projectId, root, filePaths: ["src/x.ts"] });
     const after = readFileRecord(projectId, "src/x.ts")!;
     expect(after.candidates.length).toBe(candCountBefore);
+  });
+
+  it("resets findings and status when file content changes", async () => {
+    const { root, projectId } = makeProject({
+      "src/x.ts": 'const q = "SELECT * FROM users WHERE id = " + req.query.id;\n',
+    });
+
+    await scanFiles({ projectId, root, filePaths: ["src/x.ts"] });
+    const first = readFileRecord(projectId, "src/x.ts")!;
+    first.status = "analyzed";
+    first.findings = [
+      {
+        severity: "HIGH",
+        vulnSlug: "sql-injection",
+        title: "t",
+        description: "d",
+        lineNumbers: [1],
+        recommendation: "r",
+        confidence: "high",
+      },
+    ];
+    writeFileRecord(first);
+
+    // Change file content
+    fs.writeFileSync(path.join(root, "src/x.ts"), "const x = 1;\n");
+
+    await scanFiles({ projectId, root, filePaths: ["src/x.ts"] });
+    const second = readFileRecord(projectId, "src/x.ts")!;
+    expect(second.status).toBe("pending");
+    expect(second.findings).toEqual([]);
+  });
+
+  it("applies config matchers.only", async () => {
+    const { root, projectId } = makeProject({
+      "src/x.ts": 'const q = "SELECT * FROM users WHERE id = " + req.query.id;\n',
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: projectId, root }],
+        matchers: { only: ["sql-injection"] },
+      }),
+    );
+
+    await scanFiles({ projectId, root, filePaths: ["src/x.ts"] });
+    const rec = readFileRecord(projectId, "src/x.ts")!;
+    expect(rec.candidates.some((c) => c.vulnSlug === "sql-injection")).toBe(true);
+  });
+
+  it("applies config matchers.exclude", async () => {
+    const { root, projectId } = makeProject({
+      "src/x.ts": 'const q = "SELECT * FROM users WHERE id = " + req.query.id;\n',
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: projectId, root }],
+        matchers: { exclude: ["sql-injection"] },
+      }),
+    );
+
+    await scanFiles({ projectId, root, filePaths: ["src/x.ts"] });
+    const rec = readFileRecord(projectId, "src/x.ts")!;
+    expect(rec.candidates).toEqual([]);
   });
 });

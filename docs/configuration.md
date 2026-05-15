@@ -89,8 +89,13 @@ Some legacy fields still live in `data/<id>/config.json`:
 }
 ```
 
-This is read by `scan` and by the AI agents. It overrides the same fields
-on the project declaration if both are present.
+This is read by `scan` and by the AI agents. The project declaration in
+`deepsec.config.ts` takes precedence over these legacy files when the same
+field is present in both. The fallback order is:
+
+1. `deepsec.config.ts` project declaration (`infoMarkdown`, `promptAppend`, `priorityPaths`)
+2. `data/<id>/config.json` / `data/<id>/INFO.md`
+3. Defaults / omitted
 
 ## Environment variables
 
@@ -115,7 +120,7 @@ backend you're using.
 | `OPENAI_API_KEY` | `--agent codex` | Codex SDK token. Unset is fine if `AI_GATEWAY_API_KEY` is set, or if Codex routes through AI Gateway with the Anthropic token. |
 | `OPENAI_BASE_URL` | `--agent codex` | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh/v1`. |
 | `DEEPSEC_AGENT_DEBUG` | both backends | Set to `1` to enable verbose agent logging. |
-| `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Equivalent to `dataDir` in config. |
+| `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Takes precedence over `dataDir` in config. |
 
 ### Plugin-specific
 

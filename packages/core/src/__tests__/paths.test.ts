@@ -1,6 +1,7 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { dataDir, fileRecordPath, filesDir, runMetaPath, runsDir } from "../paths.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { defineConfig, setLoadedConfig } from "../config.js";
+import { dataDir, fileRecordPath, filesDir, getDataRoot, runMetaPath, runsDir } from "../paths.js";
 
 describe("paths", () => {
   // path.join uses native separators (\\ on Windows, / elsewhere). Build
@@ -26,6 +27,33 @@ describe("paths", () => {
   // Path-traversal protection — any segment that could escape the per-project
   // mirror (`..`, absolute paths, separators, null bytes) must throw, since
   // these are the documented sandbox-round-trip and CLI-flag attack vectors.
+  describe("getDataRoot", () => {
+    afterEach(() => {
+      delete process.env.DEEPSEC_DATA_ROOT;
+      setLoadedConfig(defineConfig({ projects: [] }));
+    });
+
+    it("defaults to 'data'", () => {
+      expect(getDataRoot()).toBe("data");
+    });
+
+    it("respects DEEPSEC_DATA_ROOT env var", () => {
+      process.env.DEEPSEC_DATA_ROOT = "/custom/data";
+      expect(getDataRoot()).toBe("/custom/data");
+    });
+
+    it("respects config dataDir when env var is absent", () => {
+      setLoadedConfig(defineConfig({ projects: [], dataDir: "/cfg/data" }));
+      expect(getDataRoot()).toBe("/cfg/data");
+    });
+
+    it("prefers env var over config dataDir", () => {
+      process.env.DEEPSEC_DATA_ROOT = "/env/data";
+      setLoadedConfig(defineConfig({ projects: [], dataDir: "/cfg/data" }));
+      expect(getDataRoot()).toBe("/env/data");
+    });
+  });
+
   describe("path traversal", () => {
     it("dataDir rejects '..' projectId", () => {
       expect(() => dataDir("..")).toThrow(/Invalid projectId/);

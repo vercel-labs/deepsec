@@ -1,7 +1,8 @@
 import path from "node:path";
+import { getConfig } from "./config.js";
 
 export function getDataRoot(): string {
-  return process.env.DEEPSEC_DATA_ROOT || "data";
+  return process.env.DEEPSEC_DATA_ROOT || getConfig()?.dataDir || "data";
 }
 
 // Reject empty, '.', '..', absolute paths, null bytes, and any path

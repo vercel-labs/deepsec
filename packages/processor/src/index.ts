@@ -7,6 +7,7 @@ import {
   createRunMeta,
   dataDir,
   defaultConcurrency,
+  findProject,
   getRegistry,
   loadAllFileRecords,
   readFileRecord,
@@ -179,13 +180,20 @@ export async function process(params: {
     manifestFilePaths = new Set(raw as string[]);
   }
 
-  // Load project INFO.md if it exists
+  // Resolve project context with clear precedence:
+  //   1. deepsec.config.ts project declaration (modern source of truth)
+  //   2. Legacy data/<id>/INFO.md and data/<id>/config.json
+  const projectDecl = findProject(projectId);
+
   const infoPath = path.join(dataDir(projectId), "INFO.md");
   let projectInfo = "";
   try {
     projectInfo = fs.readFileSync(infoPath, "utf-8");
   } catch {
     // No INFO.md — that's fine
+  }
+  if (projectDecl?.infoMarkdown !== undefined) {
+    projectInfo = projectDecl.infoMarkdown;
   }
 
   // Load project config.json for prompt customization and priority
@@ -198,6 +206,12 @@ export async function process(params: {
     projectConfig = JSON.parse(fs.readFileSync(projectConfigJsonPath, "utf-8"));
   } catch {
     // No config.json — that's fine
+  }
+  if (projectDecl?.promptAppend !== undefined) {
+    projectConfig.promptAppend = projectDecl.promptAppend;
+  }
+  if (projectDecl?.priorityPaths !== undefined) {
+    projectConfig.priorityPaths = projectDecl.priorityPaths;
   }
 
   // Tech detection result drives per-batch threat highlights. Read once
@@ -837,11 +851,16 @@ export async function revalidate(params: {
     manifestFilePaths = new Set(raw as string[]);
   }
 
+  const projectDecl = findProject(projectId);
+
   const infoPath = path.join(dataDir(projectId), "INFO.md");
   let projectInfo = "";
   try {
     projectInfo = fs.readFileSync(infoPath, "utf-8");
   } catch {}
+  if (projectDecl?.infoMarkdown !== undefined) {
+    projectInfo = projectDecl.infoMarkdown;
+  }
 
   const model = (config.model as string) ?? "claude-opus-4-7";
 
