@@ -37,7 +37,7 @@ export interface UploadBundle {
 // --- Sandbox env vars ---
 
 // Routing / debug knobs the agent reads inside the sandbox. AI credential
-// env vars (ANTHROPIC_AUTH_TOKEN, OPENAI_API_KEY, AI_GATEWAY_API_KEY) are
+// env vars (ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY, AI_GATEWAY_API_KEY) are
 // deliberately absent — they're brokered via firewall header injection
 // (see resolveBrokeredCredentials + buildWorkerNetworkPolicy below) so a
 // compromised in-VM agent can't read them out of /proc/<pid>/environ.
@@ -66,11 +66,11 @@ interface BrokeredCredentials {
 /**
  * Resolve the orchestrator-side AI credentials that will be brokered into
  * the sandbox. AI Gateway issues one token per team that authenticates both
- * Claude and OpenAI traffic, so when only ANTHROPIC_AUTH_TOKEN is set and
- * the worker is going to run codex, fall it back as the OpenAI token.
+ * Claude and OpenAI traffic, so when only an Anthropic token is set and the
+ * worker is going to run codex, fall it back as the OpenAI token.
  */
 export function resolveBrokeredCredentials(agentType: string | undefined): BrokeredCredentials {
-  const anthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  const anthropicToken = process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY;
   const explicitOpenai = process.env.OPENAI_API_KEY;
   // Only borrow ANTHROPIC for OPENAI on the codex path — and only when the
   // user hasn't pinned an explicit OpenAI key. Outside codex this fallback

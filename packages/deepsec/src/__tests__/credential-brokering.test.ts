@@ -3,6 +3,7 @@ import { buildSandboxEnv, resolveBrokeredCredentials } from "../sandbox/setup.js
 
 const TOUCHED_KEYS = [
   "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
   "ANTHROPIC_BASE_URL",
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
@@ -32,6 +33,20 @@ describe("credential brokering", () => {
       const c = resolveBrokeredCredentials("claude-agent-sdk");
       expect(c.anthropicToken).toBe("vck_real");
       expect(c.openaiToken).toBeUndefined();
+    });
+
+    it("captures direct ANTHROPIC_API_KEY from the orchestrator env", () => {
+      process.env.ANTHROPIC_API_KEY = "sk-ant-real";
+      const c = resolveBrokeredCredentials("claude-agent-sdk");
+      expect(c.anthropicToken).toBe("sk-ant-real");
+      expect(c.openaiToken).toBeUndefined();
+    });
+
+    it("prefers ANTHROPIC_AUTH_TOKEN over direct ANTHROPIC_API_KEY", () => {
+      process.env.ANTHROPIC_AUTH_TOKEN = "vck_real";
+      process.env.ANTHROPIC_API_KEY = "sk-ant-real";
+      const c = resolveBrokeredCredentials("claude-agent-sdk");
+      expect(c.anthropicToken).toBe("vck_real");
     });
 
     it("falls back to ANTHROPIC token for OpenAI on the codex path", () => {
