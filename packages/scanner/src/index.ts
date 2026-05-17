@@ -9,6 +9,7 @@ import {
   ensureProject,
   getDataRoot,
   getRegistry,
+  projectConfigSchema,
   readFileRecord,
   writeFileRecord,
   writeRunMeta,
@@ -166,7 +167,7 @@ function appendDeepsecDataIgnoreGlobs(
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const projectDir = path.join(absDataRoot, entry.name);
-    if (!fs.existsSync(path.join(projectDir, "project.json"))) continue;
+    if (!isDeepsecProjectDir(projectDir, entry.name)) continue;
     const relProject = escapeGlob(`${relDataRoot}/${entry.name}`, { magicalBraces: true });
     globs.push(
       `${relProject}/files/**`,
@@ -175,6 +176,16 @@ function appendDeepsecDataIgnoreGlobs(
       `${relProject}/project.json`,
       `${relProject}/tech.json`,
     );
+  }
+}
+
+function isDeepsecProjectDir(projectDir: string, projectId: string): boolean {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(projectDir, "project.json"), "utf-8"));
+    const parsed = projectConfigSchema.safeParse(raw);
+    return parsed.success && parsed.data.projectId === projectId;
+  } catch {
+    return false;
   }
 }
 

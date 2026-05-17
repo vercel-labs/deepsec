@@ -116,7 +116,14 @@ describe("scan e2e", () => {
       );
       const rootMirrorDir = path.join(root, "data", "other-project", "files", "src");
       fs.mkdirSync(rootMirrorDir, { recursive: true });
-      fs.writeFileSync(path.join(root, "data", "other-project", "project.json"), "{}");
+      fs.writeFileSync(
+        path.join(root, "data", "other-project", "project.json"),
+        JSON.stringify({
+          projectId: "other-project",
+          rootPath: root,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
       fs.writeFileSync(
         path.join(rootMirrorDir, "generated.ts"),
         'const stripe = "sk_live_" + "rootmirrorgenerated";\n',

@@ -101,12 +101,37 @@ describe("resolveFiles()", () => {
       else process.env.DEEPSEC_DATA_ROOT = oldDataRoot;
     });
 
-    write(root, "data{prod,dev}/app/project.json", "{}");
+    write(
+      root,
+      "data{prod,dev}/app/project.json",
+      JSON.stringify({
+        projectId: "app",
+        rootPath: root,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
     write(root, "data{prod,dev}/app/files/src/generated.ts.json", "{}");
-    write(root, "data{prod,dev}/other/project.json", "{}");
+    write(
+      root,
+      "data{prod,dev}/other/project.json",
+      JSON.stringify({
+        projectId: "other",
+        rootPath: root,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
     write(root, "data{prod,dev}/other/files/src/generated.ts.json", "{}");
-    write(root, "data/legacy/project.json", "{}");
+    write(
+      root,
+      "data/legacy/project.json",
+      JSON.stringify({
+        projectId: "legacy",
+        rootPath: root,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
     write(root, "data/legacy/files/src/generated.ts.json", "{}");
+    write(root, "data/users/project.json", JSON.stringify({ name: "app users" }));
     write(root, "data/users/files/real.ts", "1\n");
 
     const { filePaths } = resolveFiles({
