@@ -162,7 +162,7 @@ export function deepsecDataIgnoreGlobs(root: string): string[] {
     if (!entry.isDirectory()) continue;
     const projectDir = path.join(dataRoot, entry.name);
     if (!fs.existsSync(path.join(projectDir, "project.json"))) continue;
-    const relProject = escapeGlob(`${relDataRoot}/${entry.name}`);
+    const relProject = escapeGlob(`${relDataRoot}/${entry.name}`, { magicalBraces: true });
     globs.push(
       `${relProject}/files/**`,
       `${relProject}/runs/**`,

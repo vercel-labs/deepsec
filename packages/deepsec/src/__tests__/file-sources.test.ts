@@ -95,23 +95,23 @@ describe("resolveFiles()", () => {
   it("filters generated deepsec data records from explicit file lists", () => {
     const root = tempRepo();
     const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;
-    process.env.DEEPSEC_DATA_ROOT = path.join(root, "data[prod]");
+    process.env.DEEPSEC_DATA_ROOT = path.join(root, "data{prod,dev}");
     cleanups.push(() => {
       if (oldDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
       else process.env.DEEPSEC_DATA_ROOT = oldDataRoot;
     });
 
-    write(root, "data[prod]/app/project.json", "{}");
-    write(root, "data[prod]/app/files/src/generated.ts.json", "{}");
-    write(root, "data[prod]/other/project.json", "{}");
-    write(root, "data[prod]/other/files/src/generated.ts.json", "{}");
+    write(root, "data{prod,dev}/app/project.json", "{}");
+    write(root, "data{prod,dev}/app/files/src/generated.ts.json", "{}");
+    write(root, "data{prod,dev}/other/project.json", "{}");
+    write(root, "data{prod,dev}/other/files/src/generated.ts.json", "{}");
     write(root, "data/users/files/real.ts", "1\n");
 
     const { filePaths } = resolveFiles({
       rootPath: root,
       files: [
-        "data[prod]/app/files/src/generated.ts.json",
-        "data[prod]/other/files/src/generated.ts.json",
+        "data{prod,dev}/app/files/src/generated.ts.json",
+        "data{prod,dev}/other/files/src/generated.ts.json",
         "data/users/files/real.ts",
       ],
     });
