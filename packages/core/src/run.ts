@@ -38,11 +38,13 @@ function detectGithubUrl(rootPath: string): string | undefined {
     const remote = execSync("git remote get-url origin", {
       cwd: rootPath,
       encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000,
     }).trim();
     const branch = execSync("git rev-parse --abbrev-ref HEAD", {
       cwd: rootPath,
       encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000,
     }).trim();
     // Convert SSH to HTTPS

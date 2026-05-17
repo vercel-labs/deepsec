@@ -24,6 +24,7 @@ function getRepoFromGitRemote(rootPath: string): string | null {
     const url = execSync("git remote get-url origin", {
       cwd: rootPath,
       encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
     }).trim();
 
