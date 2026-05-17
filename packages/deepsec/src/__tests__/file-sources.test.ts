@@ -105,6 +105,8 @@ describe("resolveFiles()", () => {
     write(root, "data{prod,dev}/app/files/src/generated.ts.json", "{}");
     write(root, "data{prod,dev}/other/project.json", "{}");
     write(root, "data{prod,dev}/other/files/src/generated.ts.json", "{}");
+    write(root, "data/legacy/project.json", "{}");
+    write(root, "data/legacy/files/src/generated.ts.json", "{}");
     write(root, "data/users/files/real.ts", "1\n");
 
     const { filePaths } = resolveFiles({
@@ -112,6 +114,7 @@ describe("resolveFiles()", () => {
       files: [
         "data{prod,dev}/app/files/src/generated.ts.json",
         "data{prod,dev}/other/files/src/generated.ts.json",
+        "data/legacy/files/src/generated.ts.json",
         "data/users/files/real.ts",
       ],
     });

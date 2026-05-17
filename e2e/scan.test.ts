@@ -90,7 +90,7 @@ describe("scan e2e", () => {
 
   it("does not scan generated deepsec data records", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-scan-root-"));
-    const dataRoot = path.join(root, "data");
+    const dataRoot = path.join(root, ".deepsec", "data");
     const projectId = "ignore-deepsec-data";
     const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;
     process.env.DEEPSEC_DATA_ROOT = dataRoot;
@@ -108,17 +108,22 @@ describe("scan e2e", () => {
           ],
         }),
       );
-      const rootDataDir = path.join(dataRoot, projectId, "files", "src");
-      fs.mkdirSync(rootDataDir, { recursive: true });
+      const activeDataDir = path.join(dataRoot, projectId, "files", "src");
+      fs.mkdirSync(activeDataDir, { recursive: true });
       fs.writeFileSync(
-        path.join(rootDataDir, "generated.json"),
-        JSON.stringify({
-          candidates: [{ snippet: 'const token = "REDACTED" + "root-data-output";' }],
-        }),
+        path.join(activeDataDir, "generated.ts"),
+        'const stripe = "sk_live_" + "activegeneratedaa";\n',
       );
-      const siblingDataDir = path.join(dataRoot, "other-project", "files", "src");
+      const rootMirrorDir = path.join(root, "data", "other-project", "files", "src");
+      fs.mkdirSync(rootMirrorDir, { recursive: true });
+      fs.writeFileSync(path.join(root, "data", "other-project", "project.json"), "{}");
+      fs.writeFileSync(
+        path.join(rootMirrorDir, "generated.ts"),
+        'const stripe = "sk_live_" + "rootmirrorgenerated";\n',
+      );
+      const siblingDataDir = path.join(dataRoot, "sibling-project", "files", "src");
       fs.mkdirSync(siblingDataDir, { recursive: true });
-      fs.writeFileSync(path.join(dataRoot, "other-project", "project.json"), "{}");
+      fs.writeFileSync(path.join(dataRoot, "sibling-project", "project.json"), "{}");
       fs.writeFileSync(
         path.join(siblingDataDir, "generated.json"),
         JSON.stringify({

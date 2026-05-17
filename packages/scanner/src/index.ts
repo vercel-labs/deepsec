@@ -137,30 +137,35 @@ export const IGNORE_DIRS = [
   "**/content/docs-wip/**",
 ];
 
-export function deepsecDataIgnoreGlobs(root: string): string[] {
-  const absRoot = path.resolve(root);
-  const dataRoot = path.resolve(getDataRoot());
-  const relDataRoot = path.relative(absRoot, dataRoot).replaceAll("\\", "/");
-  if (
-    !relDataRoot ||
-    relDataRoot === "." ||
-    relDataRoot.startsWith("../") ||
-    path.isAbsolute(relDataRoot)
-  ) {
-    return [];
-  }
+function relativeInsideRoot(root: string, target: string): string | null {
+  const rel = path.relative(root, target).replaceAll("\\", "/");
+  if (!rel || rel === "." || rel.startsWith("../") || path.isAbsolute(rel)) return null;
+  return rel;
+}
+
+function appendDeepsecDataIgnoreGlobs(
+  absRoot: string,
+  dataRoot: string,
+  seenDataRoots: Set<string>,
+  globs: string[],
+): void {
+  const absDataRoot = path.resolve(dataRoot);
+  if (seenDataRoots.has(absDataRoot)) return;
+  seenDataRoots.add(absDataRoot);
+
+  const relDataRoot = relativeInsideRoot(absRoot, absDataRoot);
+  if (!relDataRoot) return;
 
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(dataRoot, { withFileTypes: true });
+    entries = fs.readdirSync(absDataRoot, { withFileTypes: true });
   } catch {
-    return [];
+    return;
   }
 
-  const globs: string[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const projectDir = path.join(dataRoot, entry.name);
+    const projectDir = path.join(absDataRoot, entry.name);
     if (!fs.existsSync(path.join(projectDir, "project.json"))) continue;
     const relProject = escapeGlob(`${relDataRoot}/${entry.name}`, { magicalBraces: true });
     globs.push(
@@ -171,6 +176,18 @@ export function deepsecDataIgnoreGlobs(root: string): string[] {
       `${relProject}/tech.json`,
     );
   }
+}
+
+export function deepsecDataIgnoreGlobs(root: string): string[] {
+  const absRoot = path.resolve(root);
+  const globs: string[] = [];
+  const seenDataRoots = new Set<string>();
+
+  // Repos can contain both the active data root and root-level DeepSec mirrors.
+  // Only ignore subtrees that prove they are DeepSec projects via project.json.
+  appendDeepsecDataIgnoreGlobs(absRoot, path.resolve(getDataRoot()), seenDataRoots, globs);
+  appendDeepsecDataIgnoreGlobs(absRoot, path.join(absRoot, "data"), seenDataRoots, globs);
+
   return globs;
 }
 
