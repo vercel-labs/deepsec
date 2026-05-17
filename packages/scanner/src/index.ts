@@ -14,7 +14,7 @@ import {
   writeRunMeta,
 } from "@deepsec/core";
 import { glob, globSync } from "glob";
-import { minimatch } from "minimatch";
+import { escape as escapeGlob, minimatch } from "minimatch";
 import { type DetectedTech, detectTech, readTechJson, writeTechJson } from "./detect-tech.js";
 import type { MatcherRegistry } from "./matcher-registry.js";
 import { createDefaultRegistry } from "./matchers/index.js";
@@ -162,7 +162,7 @@ export function deepsecDataIgnoreGlobs(root: string): string[] {
     if (!entry.isDirectory()) continue;
     const projectDir = path.join(dataRoot, entry.name);
     if (!fs.existsSync(path.join(projectDir, "project.json"))) continue;
-    const relProject = `${relDataRoot}/${entry.name}`;
+    const relProject = escapeGlob(`${relDataRoot}/${entry.name}`);
     globs.push(
       `${relProject}/files/**`,
       `${relProject}/runs/**`,
