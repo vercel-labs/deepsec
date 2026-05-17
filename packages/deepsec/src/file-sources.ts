@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { IGNORE_DIRS } from "@deepsec/scanner";
+import { deepsecDataIgnoreGlobs, IGNORE_DIRS } from "@deepsec/scanner";
 import { minimatch } from "minimatch";
 
 /**
@@ -38,6 +38,7 @@ export function resolveFiles(opts: {
   }
 
   const absRoot = path.resolve(opts.rootPath);
+  const ignoreGlobs = [...IGNORE_DIRS, ...deepsecDataIgnoreGlobs(absRoot)];
   let raw: string[];
   let sourceLabel: string;
 
@@ -86,7 +87,7 @@ export function resolveFiles(opts: {
     if (!fs.existsSync(abs)) continue;
     if (!fs.statSync(abs).isFile()) continue;
 
-    if (!opts.noIgnore && matchesAnyGlob(rel, IGNORE_DIRS)) continue;
+    if (!opts.noIgnore && matchesAnyGlob(rel, ignoreGlobs)) continue;
 
     seen.add(rel);
     out.push(rel);

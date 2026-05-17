@@ -88,9 +88,10 @@ describe("scan e2e", () => {
     expect(meta.scannerConfig.matcherSlugs).toEqual(["xss", "rce"]);
   });
 
-  it("does not scan generated .deepsec data records", async () => {
+  it("does not scan generated deepsec data records", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-scan-root-"));
-    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-scan-data-"));
+    const dataRoot = path.join(root, "data");
+    const projectId = "ignore-deepsec-data";
     const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;
     process.env.DEEPSEC_DATA_ROOT = dataRoot;
     try {
@@ -107,7 +108,7 @@ describe("scan e2e", () => {
           ],
         }),
       );
-      const rootDataDir = path.join(root, "data", "app", "files", "src");
+      const rootDataDir = path.join(dataRoot, projectId, "files", "src");
       fs.mkdirSync(rootDataDir, { recursive: true });
       fs.writeFileSync(
         path.join(rootDataDir, "generated.json"),
@@ -115,20 +116,36 @@ describe("scan e2e", () => {
           candidates: [{ snippet: 'const token = "REDACTED" + "root-data-output";' }],
         }),
       );
+      const siblingDataDir = path.join(dataRoot, "other-project", "files", "src");
+      fs.mkdirSync(siblingDataDir, { recursive: true });
+      fs.writeFileSync(path.join(dataRoot, "other-project", "project.json"), "{}");
+      fs.writeFileSync(
+        path.join(siblingDataDir, "generated.json"),
+        JSON.stringify({
+          candidates: [{ snippet: 'const token = "REDACTED" + "sibling-output";' }],
+        }),
+      );
+      const realDataDir = path.join(root, "data", "users", "files");
+      fs.mkdirSync(realDataDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(realDataDir, "leak.ts"),
+        'const stripe = "sk_live_" + "abcdefghijklmnop";\n',
+      );
 
       const result = await scan({
-        projectId: "ignore-deepsec-data",
+        projectId,
         root,
         matcherSlugs: ["secrets-exposure"],
       });
 
-      expect(result.candidateCount).toBe(0);
-      expect(loadAllFileRecords("ignore-deepsec-data")).toEqual([]);
+      expect(result.candidateCount).toBe(1);
+      expect(loadAllFileRecords(projectId).map((r) => r.filePath)).toEqual([
+        "data/users/files/leak.ts",
+      ]);
     } finally {
       if (oldDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
       else process.env.DEEPSEC_DATA_ROOT = oldDataRoot;
       fs.rmSync(root, { recursive: true, force: true });
-      fs.rmSync(dataRoot, { recursive: true, force: true });
     }
   });
 });

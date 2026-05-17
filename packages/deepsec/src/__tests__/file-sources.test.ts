@@ -92,6 +92,33 @@ describe("resolveFiles()", () => {
     expect(filePaths).toEqual(["src/real.test.ts"]);
   });
 
+  it("filters generated deepsec data records from explicit file lists", () => {
+    const root = tempRepo();
+    const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;
+    process.env.DEEPSEC_DATA_ROOT = path.join(root, "data");
+    cleanups.push(() => {
+      if (oldDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+      else process.env.DEEPSEC_DATA_ROOT = oldDataRoot;
+    });
+
+    write(root, "data/app/project.json", "{}");
+    write(root, "data/app/files/src/generated.ts.json", "{}");
+    write(root, "data/other/project.json", "{}");
+    write(root, "data/other/files/src/generated.ts.json", "{}");
+    write(root, "data/users/files/real.ts", "1\n");
+
+    const { filePaths } = resolveFiles({
+      rootPath: root,
+      files: [
+        "data/app/files/src/generated.ts.json",
+        "data/other/files/src/generated.ts.json",
+        "data/users/files/real.ts",
+      ],
+    });
+
+    expect(filePaths).toEqual(["data/users/files/real.ts"]);
+  });
+
   it("--files accepts an explicit list and drops missing entries", () => {
     const root = tempRepo();
     write(root, "real.ts", "x\n");

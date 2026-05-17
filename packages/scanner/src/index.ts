@@ -7,6 +7,7 @@ import {
   createRunMeta,
   dataDir,
   ensureProject,
+  getDataRoot,
   getRegistry,
   readFileRecord,
   writeFileRecord,
@@ -116,11 +117,6 @@ export const IGNORE_DIRS = [
   "**/node_modules/**",
   "**/.git/**",
   "**/.deepsec/data/**",
-  "**/data/*/files/**",
-  "**/data/*/runs/**",
-  "**/data/*/reports/**",
-  "**/data/*/project.json",
-  "**/data/*/tech.json",
   "**/dist/**",
   "**/build/**",
   "**/.next/**",
@@ -141,6 +137,43 @@ export const IGNORE_DIRS = [
   "**/content/docs-wip/**",
 ];
 
+export function deepsecDataIgnoreGlobs(root: string): string[] {
+  const absRoot = path.resolve(root);
+  const dataRoot = path.resolve(getDataRoot());
+  const relDataRoot = path.relative(absRoot, dataRoot).replaceAll("\\", "/");
+  if (
+    !relDataRoot ||
+    relDataRoot === "." ||
+    relDataRoot.startsWith("../") ||
+    path.isAbsolute(relDataRoot)
+  ) {
+    return [];
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dataRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const globs: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const projectDir = path.join(dataRoot, entry.name);
+    if (!fs.existsSync(path.join(projectDir, "project.json"))) continue;
+    const relProject = `${relDataRoot}/${entry.name}`;
+    globs.push(
+      `${relProject}/files/**`,
+      `${relProject}/runs/**`,
+      `${relProject}/reports/**`,
+      `${relProject}/project.json`,
+      `${relProject}/tech.json`,
+    );
+  }
+  return globs;
+}
+
 export class RegexScannerDriver implements ScannerDriver {
   async *scan(params: {
     root: string;
@@ -151,7 +184,7 @@ export class RegexScannerDriver implements ScannerDriver {
     ignorePaths?: string[];
   }): AsyncGenerator<ScanProgress, FileRecord[]> {
     const { root, matchers, projectId, runId } = params;
-    const ignore = [...IGNORE_DIRS, ...(params.ignorePaths ?? [])];
+    const ignore = [...IGNORE_DIRS, ...deepsecDataIgnoreGlobs(root), ...(params.ignorePaths ?? [])];
     const upserted = new Map<string, FileRecord>();
 
     // Pre-glob: deduplicate file patterns across matchers
@@ -465,11 +498,7 @@ export async function scan(params: {
     "**/node_modules/**",
     "**/.git/**",
     "**/.deepsec/data/**",
-    "**/data/*/files/**",
-    "**/data/*/runs/**",
-    "**/data/*/reports/**",
-    "**/data/*/project.json",
-    "**/data/*/tech.json",
+    ...deepsecDataIgnoreGlobs(params.root),
     "**/dist/**",
     "**/build/**",
     "**/.next/**",
