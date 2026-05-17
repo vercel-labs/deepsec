@@ -23,6 +23,36 @@ const SEVERITY_BADGE: Record<Severity, string> = {
   LOW: "⚪ LOW",
 };
 
+function escapeMarkdownText(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/([`*_{}[\]()#+\-.!|])/g, "\\$1")
+    .replaceAll("@", "&#64;");
+}
+
+function inlineCode(value: string): string {
+  const normalized = value.replace(/\r?\n/g, " ");
+  if (!normalized.includes("`")) return `\`${normalized}\``;
+  return `\`\` ${normalized.replaceAll("`", "'")} \`\``;
+}
+
+function htmlEscape(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+    .replaceAll("@", "&#64;");
+}
+
+function htmlCode(value: string): string {
+  return `<code>${htmlEscape(value.replace(/\r?\n/g, " "))}</code>`;
+}
+
 /**
  * Render a PR-comment-shaped markdown string for the **net-new**
  * findings produced by a specific `process` run. Pre-existing findings
@@ -95,7 +125,7 @@ export function renderPrComment(params: {
   lines.push(tally);
   if (source) {
     lines.push("");
-    lines.push(`<sub>scope: \`${source}\` · run \`${runId}\`</sub>`);
+    lines.push(`<sub>scope: ${htmlCode(source)} · run ${htmlCode(runId)}</sub>`);
   }
   lines.push("");
 
@@ -103,19 +133,25 @@ export function renderPrComment(params: {
     const lineRef = finding.lineNumbers?.length
       ? `:L${finding.lineNumbers[0]}${finding.lineNumbers.length > 1 ? `-L${finding.lineNumbers[finding.lineNumbers.length - 1]}` : ""}`
       : "";
-    lines.push(`### ${SEVERITY_BADGE[finding.severity]} · \`${file.filePath}${lineRef}\``);
+    lines.push(
+      `### ${SEVERITY_BADGE[finding.severity]} · ${inlineCode(`${file.filePath}${lineRef}`)}`,
+    );
     lines.push("");
-    lines.push(`**${finding.title}**`);
+    lines.push(`**${escapeMarkdownText(finding.title)}**`);
     if (finding.vulnSlug) {
-      lines.push(`<sub>slug: \`${finding.vulnSlug}\` · confidence: ${finding.confidence}</sub>`);
+      lines.push(
+        `<sub>slug: ${htmlCode(finding.vulnSlug)} · confidence: ${htmlEscape(finding.confidence)}</sub>`,
+      );
     }
     lines.push("");
     if (finding.description) {
-      lines.push(truncate(finding.description, 600));
+      lines.push(escapeMarkdownText(truncate(finding.description, 600)));
       lines.push("");
     }
     if (finding.recommendation) {
-      lines.push(`**Recommendation:** ${truncate(finding.recommendation, 400)}`);
+      lines.push(
+        `**Recommendation:** ${escapeMarkdownText(truncate(finding.recommendation, 400))}`,
+      );
       lines.push("");
     }
     lines.push("---");

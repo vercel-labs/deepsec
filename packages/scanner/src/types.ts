@@ -21,6 +21,7 @@ export interface ScanProgress {
 }
 
 export interface ScannerDriver {
+  skippedFiles?: Array<{ filePath: string; reason: string }>;
   scan(params: {
     root: string;
     matchers: MatcherPlugin[];

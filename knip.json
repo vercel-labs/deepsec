@@ -22,5 +22,12 @@
     }
   },
   "ignore": ["fixtures/vulnerable-app/**", "samples/**", ".deepsec/**"],
-  "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk", "@openai/codex", "@openai/codex-sdk"]
+  "ignoreDependencies": [
+    "@anthropic-ai/claude-agent-sdk",
+    "@anthropic-ai/sdk",
+    "@modelcontextprotocol/sdk",
+    "@openai/codex",
+    "@openai/codex-sdk",
+    "zod"
+  ]
 }

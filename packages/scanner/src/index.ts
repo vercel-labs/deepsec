@@ -17,6 +17,7 @@ import { minimatch } from "minimatch";
 import { type DetectedTech, detectTech, readTechJson, writeTechJson } from "./detect-tech.js";
 import type { MatcherRegistry } from "./matcher-registry.js";
 import { createDefaultRegistry } from "./matchers/index.js";
+import { fileExistsUnderRoot, isSafeRelativeFilePath, readTextFileUnderRoot } from "./safe-read.js";
 import type { MatcherPlugin, ScannerDriver, ScanProgress } from "./types.js";
 
 export type { DetectedTech } from "./detect-tech.js";
@@ -46,6 +47,8 @@ export function evaluateGate(
   rootPath: string,
 ): boolean {
   if (!gate) return true;
+  const absRoot = path.resolve(rootPath);
+  const realRoot = fs.realpathSync(absRoot);
 
   if (gate.tech && gate.tech.length > 0) {
     const have = new Set(detected.tags);
@@ -63,18 +66,15 @@ export function evaluateGate(
             nodir: true,
             absolute: false,
           }) as string[])
-        : fs.existsSync(path.join(rootPath, pattern))
+        : fileExistsUnderRoot(absRoot, realRoot, pattern)
           ? [pattern]
           : [];
 
       for (const rel of candidates) {
+        if (!isSafeRelativeFilePath(rel) || !fileExistsUnderRoot(absRoot, realRoot, rel)) continue;
         if (!gate.sentinelContains) return true;
-        try {
-          const content = fs.readFileSync(path.join(rootPath, rel), "utf-8");
-          if (gate.sentinelContains(rel, content)) return true;
-        } catch {
-          // unreadable; treat as miss
-        }
+        const content = readTextFileUnderRoot(absRoot, realRoot, rel);
+        if (content !== null && gate.sentinelContains(rel, content)) return true;
       }
     }
   }
@@ -123,10 +123,7 @@ export const IGNORE_DIRS = [
   "**/__tests__/**",
   "**/*.test.{ts,tsx,js,jsx}",
   "**/*.spec.{ts,tsx,js,jsx}",
-  "**/test/**",
-  "**/tests/**",
   "**/fixtures/**",
-  "**/testserver/**",
   "**/*.d.ts",
   "**/jest-setup.*",
   "**/*.mdx",
@@ -136,6 +133,8 @@ export const IGNORE_DIRS = [
 ];
 
 export class RegexScannerDriver implements ScannerDriver {
+  skippedFiles: Array<{ filePath: string; reason: string }> = [];
+
   async *scan(params: {
     root: string;
     matchers: MatcherPlugin[];
@@ -145,8 +144,11 @@ export class RegexScannerDriver implements ScannerDriver {
     ignorePaths?: string[];
   }): AsyncGenerator<ScanProgress, FileRecord[]> {
     const { root, matchers, projectId, runId } = params;
+    const absRoot = path.resolve(root);
+    const realRoot = fs.realpathSync(absRoot);
     const ignore = [...IGNORE_DIRS, ...(params.ignorePaths ?? [])];
     const upserted = new Map<string, FileRecord>();
+    this.skippedFiles = [];
 
     // Pre-glob: deduplicate file patterns across matchers
     const patternKey = (patterns: string[]) => patterns.sort().join("|");
@@ -181,7 +183,17 @@ export class RegexScannerDriver implements ScannerDriver {
       // glob returns native separators on Windows ("src\api\foo.ts").
       // Record paths require POSIX separators (assertSafeFilePath rejects
       // "\"), so normalize once here before anything reads or writes records.
-      const files = rawFiles.map((f) => f.replaceAll("\\", "/"));
+      const files: string[] = [];
+      for (const f of rawFiles.map((file) => file.replaceAll("\\", "/"))) {
+        if (readTextFileUnderRoot(absRoot, realRoot, f) !== null) {
+          files.push(f);
+        } else if (!this.skippedFiles.some((s) => s.filePath === f)) {
+          this.skippedFiles.push({
+            filePath: f,
+            reason: "unreadable, unsafe, binary, or oversized",
+          });
+        }
+      }
       globCache.set(key, files);
       yield {
         type: "matcher_done" as const,
@@ -220,7 +232,7 @@ export class RegexScannerDriver implements ScannerDriver {
             // matchers are now into the normalized content, not the raw
             // file on disk — line numbers stay correct, but if a matcher
             // ever needs raw byte offsets it has to redo the read itself.
-            content = fs.readFileSync(path.join(root, relPath), "utf-8").replaceAll("\r\n", "\n");
+            content = readTextFileUnderRoot(absRoot, realRoot, relPath) ?? "";
             contentCache.set(relPath, content);
           } catch {
             contentCache.set(relPath, "");
@@ -264,7 +276,6 @@ export class RegexScannerDriver implements ScannerDriver {
           }
         }
 
-        const _stat = fs.statSync(path.join(root, relPath));
         const hash = crypto.createHash("sha256").update(content).digest("hex");
 
         record.lastScannedAt = new Date().toISOString();
@@ -365,6 +376,7 @@ export async function scan(params: {
    * are good candidates for the low-coverage warning the CLI surfaces.
    */
   languageStats: LanguageStats[];
+  skippedFiles: Array<{ filePath: string; reason: string }>;
 }> {
   const registry = buildMergedRegistry();
   const allSelected = params.matcherSlugs
@@ -450,6 +462,7 @@ export async function scan(params: {
   }
 
   const records = result.value as FileRecord[];
+  const skippedFiles = driver.skippedFiles ?? [];
 
   // Language stats: walk the source tree once for each known extension to
   // get the denominator (total source files), then count records to get
@@ -465,8 +478,6 @@ export async function scan(params: {
     "**/.turbo/**",
     "**/vendor/**",
     "**/__tests__/**",
-    "**/test/**",
-    "**/tests/**",
     "**/*.test.*",
     "**/*.spec.*",
     "**/fixtures/**",
@@ -504,6 +515,7 @@ export async function scan(params: {
 
   completeRun(params.projectId, meta.runId, "done", {
     filesScanned: records.length,
+    filesSkipped: skippedFiles.length,
     candidatesFound: records.reduce((s, r) => s + r.candidates.length, 0),
   });
 
@@ -514,6 +526,7 @@ export async function scan(params: {
     activeMatchers: matchers.map((m) => m.slug),
     skippedMatchers: skipped,
     languageStats,
+    skippedFiles,
   };
 }
 
@@ -545,6 +558,7 @@ export async function scanFiles(params: {
   runId: string;
   filesScanned: number;
   candidateCount: number;
+  skippedFiles: Array<{ filePath: string; reason: string }>;
   detected: DetectedTech;
   activeMatchers: string[];
   skippedMatchers: string[];
@@ -564,6 +578,7 @@ export async function scanFiles(params: {
   // scans don't re-walk the whole repo on every PR push. detectTech is
   // cheap but not free.
   const absRoot = path.resolve(params.root);
+  const realRoot = fs.realpathSync(absRoot);
   let detected = readTechJson(params.projectId);
   if (!detected) {
     detected = detectTech(absRoot);
@@ -610,26 +625,22 @@ export async function scanFiles(params: {
   }));
 
   let totalCandidates = 0;
+  let filesScanned = 0;
+  const skippedFiles: Array<{ filePath: string; reason: string }> = [];
   for (let fi = 0; fi < normalizedPaths.length; fi++) {
     const relPath = normalizedPaths[fi];
-    const absPath = path.join(absRoot, relPath);
-    if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+    const content = readTextFileUnderRoot(absRoot, realRoot, relPath);
+    if (content === null) {
+      skippedFiles.push({ filePath: relPath, reason: "unreadable, unsafe, binary, or oversized" });
       params.onProgress?.({
         type: "file_scanned",
-        message: `Skipping missing file: ${relPath}`,
+        message: `Skipping unreadable, unsafe, binary, or oversized file: ${relPath}`,
         filePath: relPath,
         matchCount: 0,
       });
       continue;
     }
 
-    let content = "";
-    try {
-      content = fs.readFileSync(absPath, "utf-8").replaceAll("\r\n", "\n");
-    } catch {
-      // Unreadable (binary, permissions); still write a record so process
-      // can decide what to do, but with empty hash.
-    }
     const hash = content ? crypto.createHash("sha256").update(content).digest("hex") : "";
 
     // Load-or-create the FileRecord. Existing candidates from prior scans
@@ -671,6 +682,7 @@ export async function scanFiles(params: {
     record.lastScannedRunId = meta.runId;
     record.fileHash = hash;
     writeFileRecord(record);
+    filesScanned++;
 
     totalCandidates += fileMatches;
     params.onProgress?.({
@@ -682,14 +694,16 @@ export async function scanFiles(params: {
   }
 
   completeRun(params.projectId, meta.runId, "done", {
-    filesScanned: normalizedPaths.length,
+    filesScanned,
+    filesSkipped: skippedFiles.length,
     candidatesFound: totalCandidates,
   });
 
   return {
     runId: meta.runId,
-    filesScanned: normalizedPaths.length,
+    filesScanned,
     candidateCount: totalCandidates,
+    skippedFiles,
     detected,
     activeMatchers: matchers.map((m) => m.slug),
     skippedMatchers: skipped,

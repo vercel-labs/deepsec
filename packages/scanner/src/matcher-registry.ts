@@ -3,7 +3,13 @@ import type { MatcherPlugin } from "./types.js";
 export class MatcherRegistry {
   private matchers = new Map<string, MatcherPlugin>();
 
-  register(plugin: MatcherPlugin): void {
+  register(plugin: MatcherPlugin, opts: { allowOverride?: boolean } = {}): void {
+    if (this.matchers.has(plugin.slug) && !opts.allowOverride && !plugin.allowOverride) {
+      throw new Error(
+        `Matcher slug ${JSON.stringify(plugin.slug)} is already registered. ` +
+          `Use a namespaced slug or set allowOverride: true explicitly.`,
+      );
+    }
     this.matchers.set(plugin.slug, plugin);
   }
 

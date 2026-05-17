@@ -13,7 +13,7 @@ name: Release
 #        Organization or user:  vercel-labs
 #        Repository:            deepsec
 #        Workflow filename:     release.yml
-#        Environment name:      (leave blank)
+#        Environment name:      npm-release
 #   4. Save. From this point on, this workflow can publish without a token.
 #
 # Once a Trusted Publisher is set, an npm 2FA "automation" requirement is
@@ -41,12 +41,11 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  build-package:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write  # required for npm OIDC trusted publishing + provenance
+    outputs:
+      publish: ${{ steps.ver.outputs.publish }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -87,29 +86,67 @@ jobs:
       - if: steps.ver.outputs.publish == 'true'
         run: pnpm install --frozen-lockfile
 
-      # Trusted Publishing requires npm CLI ≥ 11.5.1. Node 24 LTS ships a
-      # recent npm but the patch level drifts; upgrade to latest to be safe.
+      # Run validation and assemble the tarball before the OIDC publish job.
+      # The publish job below only uploads this immutable artifact; it does
+      # not install dependencies, build, or execute package lifecycle scripts
+      # while id-token:write is available.
       - if: steps.ver.outputs.publish == 'true'
-        run: npm install -g npm@latest
+        run: pnpm -w validate
+
+      - if: steps.ver.outputs.publish == 'true'
+        working-directory: packages/deepsec
+        run: npm pack --ignore-scripts
+
+      - if: steps.ver.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deepsec-npm-package
+          path: packages/deepsec/deepsec-*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: build-package
+    if: needs.build-package.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write  # required for npm OIDC trusted publishing + provenance
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: deepsec-npm-package
+          path: package
 
       # `npm publish` runs the package's prepublishOnly hook (`pnpm -w validate`)
-      # and then prepack (`pnpm bundle`) — full validation + fresh bundle ship
-      # together. With `id-token: write` set above and a Trusted Publisher
-      # configured for `deepsec` on npmjs.com (see comment at top of file),
-      # npm exchanges the GitHub OIDC token for a publish credential at
-      # publish time. No NPM_TOKEN / NODE_AUTH_TOKEN secret is consulted.
+      # and then prepack when publishing from a package directory. This job
+      # publishes the tarball assembled in build-package instead, and passes
+      # --ignore-scripts so no package lifecycle code executes while the OIDC
+      # token permission is in scope. With `id-token: write` set above and a
+      # Trusted Publisher configured for `deepsec` on npmjs.com (see comment
+      # at top of file), npm exchanges the GitHub OIDC token for a publish
+      # credential at publish time. No NPM_TOKEN / NODE_AUTH_TOKEN secret is
+      # consulted.
       #
       # `--provenance` attaches a signed attestation linking the published
       # tarball to this exact workflow run + commit SHA. Requires:
       #   - the GitHub repo to be PUBLIC (npm 422s on private/internal repos),
       #   - `id-token: write` on this job (set above),
-      #   - npm CLI ≥ 9.5 (the `npm install -g npm@latest` step above ensures
-      #     a recent enough release).
+      #   - npm CLI ≥ 11.5.1 for Trusted Publishing (verified below).
       # The attestation is published to npm's transparency log and shows up
       # on the package's npmjs.com page as a "Provenance" badge. We chose
       # the CLI flag over `publishConfig.provenance` so an accidental
       # laptop-side `npm publish` doesn't try to emit provenance without
       # an OIDC token.
-      - if: steps.ver.outputs.publish == 'true'
-        working-directory: packages/deepsec
-        run: npm publish --access public --provenance
+      - name: Verify npm supports trusted publishing
+        run: |
+          set -euo pipefail
+          node -e "const v=require('child_process').execFileSync('npm',['--version'],{encoding:'utf8'}).trim().split('.').map(Number); if (v[0] < 11 || (v[0] === 11 && v[1] < 5)) { throw new Error('npm >= 11.5.1 is required for trusted publishing, got '+v.join('.')) }"
+
+      - run: npm publish package/deepsec-*.tgz --access public --provenance --ignore-scripts

@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "@deepsec/core";
+import {
+  dirExistsUnderRoot,
+  fileExistsUnderRoot,
+  listDirUnderRoot,
+  readTextFileUnderRoot,
+} from "./safe-read.js";
 
 /**
  * Outcome of inspecting a project root for known tech. Tags are normalized
@@ -19,8 +25,9 @@ export interface DetectedTech {
 /** Read a file as utf-8, or null if missing/unreadable. Cached per call. */
 function readSafe(rootPath: string, rel: string, cache: Map<string, string | null>): string | null {
   if (cache.has(rel)) return cache.get(rel) ?? null;
+  const absRoot = path.resolve(rootPath);
   try {
-    const content = fs.readFileSync(path.join(rootPath, rel), "utf-8");
+    const content = readTextFileUnderRoot(absRoot, fs.realpathSync(absRoot), rel);
     cache.set(rel, content);
     return content;
   } catch {
@@ -30,8 +37,18 @@ function readSafe(rootPath: string, rel: string, cache: Map<string, string | nul
 }
 
 function exists(rootPath: string, rel: string): boolean {
+  const absRoot = path.resolve(rootPath);
   try {
-    return fs.existsSync(path.join(rootPath, rel));
+    return fileExistsUnderRoot(absRoot, fs.realpathSync(absRoot), rel);
+  } catch {
+    return false;
+  }
+}
+
+function dirExists(rootPath: string, rel: string): boolean {
+  const absRoot = path.resolve(rootPath);
+  try {
+    return dirExistsUnderRoot(absRoot, fs.realpathSync(absRoot), rel);
   } catch {
     return false;
   }
@@ -43,8 +60,9 @@ function exists(rootPath: string, rel: string): boolean {
  * routes/ dir?" checks without pulling in glob.
  */
 function listDir(rootPath: string, rel: string): string[] {
+  const absRoot = path.resolve(rootPath);
   try {
-    return fs.readdirSync(path.join(rootPath, rel));
+    return listDirUnderRoot(absRoot, fs.realpathSync(absRoot), rel);
   } catch {
     return [];
   }
@@ -312,7 +330,7 @@ const detectors: Detector[] = [
 
   // --- Salesforce / Apex ---
   (root) => {
-    if (exists(root, "sfdx-project.json") || exists(root, "force-app"))
+    if (exists(root, "sfdx-project.json") || dirExists(root, "force-app"))
       return ["apex", "salesforce"];
     return [];
   },
@@ -373,9 +391,9 @@ const detectors: Detector[] = [
     const tags: string[] = [];
     if (exists(root, "Dockerfile") || listDir(root, ".").some((f) => f === "Dockerfile"))
       tags.push("docker");
-    if (exists(root, "terraform") || listDir(root, ".").some((f) => f.endsWith(".tf")))
+    if (dirExists(root, "terraform") || listDir(root, ".").some((f) => f.endsWith(".tf")))
       tags.push("terraform");
-    if (exists(root, ".github/workflows")) tags.push("github-actions");
+    if (dirExists(root, ".github/workflows")) tags.push("github-actions");
     return tags;
   },
 ];

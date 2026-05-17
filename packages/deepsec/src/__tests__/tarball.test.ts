@@ -45,12 +45,67 @@ describe("makeTarball — symlink filtering (git branch)", () => {
     expect(entries.some((e) => e.type === "SymbolicLink")).toBe(false);
   });
 
+  it("git: skips secret-shaped files even when git would include them", async () => {
+    execSync("git init -q", { cwd: tmp });
+
+    fs.writeFileSync(path.join(tmp, "ok.json"), '{"v":1}');
+    fs.writeFileSync(path.join(tmp, ".env"), "TOKEN=do-not-upload\n");
+    fs.writeFileSync(path.join(tmp, ".npmrc"), "//registry.npmjs.org/:_authToken=do-not-upload\n");
+
+    const stats = await makeTarball(tmp, []);
+    createdTars.push(stats.tarPath);
+    const entries = await listTarballEntriesFromFile(stats.tarPath);
+
+    expect(entries.some((e) => e.path.endsWith("ok.json"))).toBe(true);
+    expect(entries.some((e) => e.path.includes(".env"))).toBe(false);
+    expect(entries.some((e) => e.path.includes(".npmrc"))).toBe(false);
+  });
+
   it("returns bytes matching the on-disk tarball size", async () => {
     execSync("git init -q", { cwd: tmp });
     fs.writeFileSync(path.join(tmp, "a.json"), "{}");
     const stats = await makeTarball(tmp, []);
     createdTars.push(stats.tarPath);
     expect(fs.statSync(stats.tarPath).size).toBe(stats.bytes);
+  });
+
+  it("non-git: skips secret-shaped files with the same denylist", async () => {
+    fs.writeFileSync(path.join(tmp, "ok.json"), '{"v":1}');
+    fs.writeFileSync(path.join(tmp, ".netrc"), "machine example login token\n");
+    fs.writeFileSync(path.join(tmp, ".yarnrc"), "npmAuthToken: do-not-upload\n");
+    fs.mkdirSync(path.join(tmp, ".aws"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, ".aws", "credentials"), "[default]\nsecret=1\n");
+    fs.mkdirSync(path.join(tmp, ".ssh"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, ".ssh", "id_ecdsa"), "private-key\n");
+    fs.mkdirSync(path.join(tmp, ".config", "gcloud"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, ".config", "gcloud", "application_default_credentials.json"),
+      "{}",
+    );
+    fs.writeFileSync(path.join(tmp, "kubeconfig"), "apiVersion: v1\n");
+
+    const stats = await makeTarball(tmp, []);
+    createdTars.push(stats.tarPath);
+    const entries = await listTarballEntriesFromFile(stats.tarPath);
+    const paths = entries.map((e) => e.path);
+
+    expect(paths).toContain("ok.json");
+    expect(paths.some((p) => p.includes(".netrc"))).toBe(false);
+    expect(paths.some((p) => p.includes(".yarnrc"))).toBe(false);
+    expect(paths.some((p) => p.includes("credentials"))).toBe(false);
+    expect(paths.some((p) => p.includes("id_ecdsa"))).toBe(false);
+    expect(paths.some((p) => p.includes("application_default_credentials"))).toBe(false);
+    expect(paths.some((p) => p.includes("kubeconfig"))).toBe(false);
+  });
+
+  it("non-git: creates a valid empty tarball when every file is excluded", async () => {
+    fs.writeFileSync(path.join(tmp, ".env"), "TOKEN=do-not-upload\n");
+
+    const stats = await makeTarball(tmp, []);
+    createdTars.push(stats.tarPath);
+    const entries = await listTarballEntriesFromFile(stats.tarPath);
+
+    expect(entries).toEqual([]);
   });
 });
 
@@ -86,6 +141,42 @@ describe("extractTarballLocally — strict allowlist", () => {
     fs.unlinkSync(stats.tarPath);
     expect(count).toBe(2);
     expect(fs.existsSync(path.join(destDir, "files", "record.ts.json"))).toBe(true);
+    expect(fs.existsSync(path.join(destDir, "reports", "report.md"))).toBe(true);
+  });
+
+  it("rejects report artifacts from process sandbox result tarballs", async () => {
+    const projectId = path.basename(destDir);
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-tar-report-"));
+    fs.mkdirSync(path.join(src, "files"));
+    fs.mkdirSync(path.join(src, "reports"));
+    fs.writeFileSync(
+      path.join(src, "files", "record.ts.json"),
+      JSON.stringify(validRecord(projectId, "record.ts")),
+    );
+    fs.writeFileSync(path.join(src, "reports", "report.md"), "# forged");
+    const stats = await makeTarball(src, []);
+    fs.rmSync(src, { recursive: true, force: true });
+
+    await expect(
+      extractTarballLocally(stats.tarPath, destDir, {
+        allowedFiles: ["record.ts"],
+        command: "process",
+      }),
+    ).rejects.toThrow(/report artifact not returned by process/);
+    fs.unlinkSync(stats.tarPath);
+    expect(fs.readdirSync(destDir)).toEqual([]);
+  });
+
+  it("accepts report artifacts only for sandbox report commands", async () => {
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-tar-report-ok-"));
+    fs.mkdirSync(path.join(src, "reports"));
+    fs.writeFileSync(path.join(src, "reports", "report.md"), "# ok");
+    const stats = await makeTarball(src, []);
+    fs.rmSync(src, { recursive: true, force: true });
+
+    const count = await extractTarballLocally(stats.tarPath, destDir, { command: "report" });
+    fs.unlinkSync(stats.tarPath);
+    expect(count).toBe(1);
     expect(fs.existsSync(path.join(destDir, "reports", "report.md"))).toBe(true);
   });
 
@@ -188,6 +279,28 @@ describe("extractTarballLocally — strict allowlist", () => {
     fs.rmSync(src, { recursive: true, force: true });
 
     await expect(extractTarballLocally(tarPath, destDir)).rejects.toThrow(/SymbolicLink|type/);
+  });
+
+  it("refuses file records outside the sandbox manifest allowlist", async () => {
+    const projectId = path.basename(destDir);
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-tar-manifest-"));
+    fs.mkdirSync(path.join(src, "files"), { recursive: true });
+    fs.writeFileSync(
+      path.join(src, "files", "allowed.ts.json"),
+      JSON.stringify(validRecord(projectId, "allowed.ts")),
+    );
+    fs.writeFileSync(
+      path.join(src, "files", "forged.ts.json"),
+      JSON.stringify(validRecord(projectId, "forged.ts")),
+    );
+    const stats = await makeTarball(src, []);
+    fs.rmSync(src, { recursive: true, force: true });
+
+    await expect(extractTarballLocally(stats.tarPath, destDir, ["allowed.ts"])).rejects.toThrow(
+      /outside this sandbox's manifest/,
+    );
+    fs.unlinkSync(stats.tarPath);
+    expect(fs.readdirSync(destDir)).toEqual([]);
   });
 });
 

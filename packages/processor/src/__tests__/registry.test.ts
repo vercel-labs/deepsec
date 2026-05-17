@@ -40,12 +40,22 @@ describe("AgentRegistry", () => {
     expect(registry.types()).toEqual(["agent-a", "agent-b"]);
   });
 
-  it("overwrites plugin with same type", () => {
+  it("rejects duplicate plugin types by default", () => {
     const registry = new AgentRegistry();
     const first = makeMockPlugin("agent");
     const second = makeMockPlugin("agent");
     registry.register(first);
-    registry.register(second);
+    expect(() => registry.register(second)).toThrow(/already registered/);
+    expect(registry.get("agent")).toBe(first);
+    expect(registry.types()).toEqual(["agent"]);
+  });
+
+  it("allows explicit duplicate overrides", () => {
+    const registry = new AgentRegistry();
+    const first = makeMockPlugin("agent");
+    const second = makeMockPlugin("agent");
+    registry.register(first);
+    registry.register(second, { allowOverride: true });
     expect(registry.get("agent")).toBe(second);
     expect(registry.types()).toEqual(["agent"]);
   });

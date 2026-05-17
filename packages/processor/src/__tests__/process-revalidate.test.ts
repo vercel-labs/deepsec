@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { defineConfig, type FileRecord, setLoadedConfig } from "@deepsec/core";
+import { defineConfig, type FileRecord, readRunMeta, setLoadedConfig } from "@deepsec/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { QuotaExhaustedError } from "../agents/shared.js";
 import { process as processProject, revalidate } from "../index.js";
@@ -839,5 +839,267 @@ describe("processor with stub agent", () => {
     });
 
     expect(stub.calls.revalidateCalls).toHaveLength(0);
+  });
+
+  it("revalidate() marks the run errored when the agent omits expected verdicts", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    const rec = pendingRecord(fx.projectId, "app.ts");
+    rec.status = "analyzed";
+    rec.findings = [
+      {
+        severity: "HIGH",
+        vulnSlug: "auth-bypass",
+        title: "missing auth",
+        description: "x",
+        lineNumbers: [1],
+        recommendation: "x",
+        confidence: "high",
+      },
+    ];
+    fx.writeRecord(rec);
+
+    const stub = new StubAgent({
+      async *revalidateImpl() {
+        return {
+          verdicts: [],
+          meta: {
+            durationMs: 1,
+            usage: {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+
+    expect(result.errorBatchCount).toBe(1);
+    expect(result.revalidated).toBe(0);
+    expect(readRunMeta(fx.projectId, result.runId).phase).toBe("error");
+    expect(fx.readRecord("app.ts").findings[0].revalidation).toBeUndefined();
+  });
+
+  it("revalidate() sends only findings selected by min severity and slug filters", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    const rec = pendingRecord(fx.projectId, "app.ts");
+    rec.status = "analyzed";
+    rec.findings = [
+      {
+        severity: "HIGH",
+        vulnSlug: "auth-bypass",
+        title: "eligible",
+        description: "x",
+        lineNumbers: [1],
+        recommendation: "x",
+        confidence: "high",
+      },
+      {
+        severity: "LOW",
+        vulnSlug: "debug-log",
+        title: "filtered out",
+        description: "x",
+        lineNumbers: [2],
+        recommendation: "x",
+        confidence: "medium",
+      },
+    ];
+    fx.writeRecord(rec);
+
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        expect(params.batch).toHaveLength(1);
+        expect(params.batch[0].findings.map((f) => f.title)).toEqual(["eligible"]);
+        return {
+          verdicts: [
+            {
+              filePath: "app.ts",
+              findingIndex: 0,
+              title: "eligible",
+              verdict: "true-positive" as const,
+              reasoning: "confirmed",
+            },
+          ],
+          meta: {
+            durationMs: 1,
+            usage: {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      minSeverity: "HIGH",
+      onlySlugs: ["auth-bypass"],
+    });
+
+    expect(result.errorBatchCount).toBe(0);
+    const after = fx.readRecord("app.ts");
+    expect(after.findings[0].revalidation?.verdict).toBe("true-positive");
+    expect(after.findings[1].revalidation).toBeUndefined();
+  });
+
+  it("revalidate() uses findingIndex to disambiguate duplicate titles", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    const rec = pendingRecord(fx.projectId, "app.ts");
+    rec.status = "analyzed";
+    rec.findings = [
+      {
+        severity: "HIGH",
+        vulnSlug: "first",
+        title: "same title",
+        description: "x",
+        lineNumbers: [1],
+        recommendation: "x",
+        confidence: "high",
+      },
+      {
+        severity: "HIGH",
+        vulnSlug: "second",
+        title: "same title",
+        description: "x",
+        lineNumbers: [2],
+        recommendation: "x",
+        confidence: "high",
+      },
+    ];
+    fx.writeRecord(rec);
+
+    const stub = new StubAgent({
+      async *revalidateImpl() {
+        return {
+          verdicts: [
+            {
+              filePath: "app.ts",
+              findingIndex: 0,
+              title: "same title",
+              verdict: "true-positive" as const,
+              reasoning: "first confirmed",
+            },
+            {
+              filePath: "app.ts",
+              findingIndex: 1,
+              title: "same title",
+              verdict: "false-positive" as const,
+              reasoning: "second mitigated",
+            },
+          ],
+          meta: {
+            durationMs: 1,
+            usage: {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+
+    expect(result.errorBatchCount).toBe(0);
+    const after = fx.readRecord("app.ts");
+    expect(after.findings[0].revalidation?.reasoning).toBe("first confirmed");
+    expect(after.findings[1].revalidation?.verdict).toBe("false-positive");
+  });
+
+  it("revalidate() accepts LOW adjustedSeverity and applies it", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    const rec = pendingRecord(fx.projectId, "app.ts");
+    rec.status = "analyzed";
+    rec.findings = [
+      {
+        severity: "HIGH",
+        vulnSlug: "weak-finding",
+        title: "overstated severity",
+        description: "x",
+        lineNumbers: [1],
+        recommendation: "x",
+        confidence: "medium",
+      },
+    ];
+    fx.writeRecord(rec);
+
+    const stub = new StubAgent({
+      async *revalidateImpl() {
+        return {
+          verdicts: [
+            {
+              filePath: "app.ts",
+              findingIndex: 0,
+              title: "overstated severity",
+              verdict: "true-positive" as const,
+              adjustedSeverity: "LOW" as const,
+              reasoning: "real but low impact",
+            },
+          ],
+          meta: {
+            durationMs: 1,
+            usage: {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+
+    expect(result.errorBatchCount).toBe(0);
+    const after = fx.readRecord("app.ts");
+    expect(after.findings[0].severity).toBe("LOW");
+    expect(after.findings[0].revalidation?.adjustedSeverity).toBe("LOW");
   });
 });

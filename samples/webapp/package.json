@@ -5,6 +5,6 @@
   "description": "deepsec workspace for the webapp sample.",
   "type": "module",
   "dependencies": {
-    "deepsec": "^0.1.0"
+    "deepsec": "^3.0.0"
   }
 }

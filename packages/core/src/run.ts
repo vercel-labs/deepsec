@@ -7,12 +7,180 @@ import {
   dataDir,
   fileRecordPath,
   filesDir,
+  getDataRoot,
   projectConfigPath,
   runMetaPath,
   runsDir,
 } from "./paths.js";
 import { fileRecordSchema, projectConfigSchema, runMetaSchema } from "./schemas.js";
 import type { FileRecord, ProjectConfig, RunMeta } from "./types.js";
+
+const SECRET_SLUGS = new Set([
+  "secrets-exposure",
+  "secrets-plaintext-exposure",
+  "secret-in-fallback",
+  "secret-in-log",
+  "secret-env-var",
+  "env-exposure",
+  "jwt-handling",
+  "algorithm-confusion",
+  "cron-secret-check",
+  "tf-secret-in-data",
+  "k8s-secret-reference",
+]);
+
+const CREDENTIAL_RE =
+  /(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|bearer|authorization|token)\s*[:=]\s*["']?[^"'\s]{8,}["']?|\bBearer\s+[A-Za-z0-9._~+/-]{16,}|sk_live_[A-Za-z0-9]{16,}|AIza[0-9A-Za-z_-]{16,}|ghp_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|vck_[A-Za-z0-9_-]{12,}/gi;
+const MAX_MODEL_TEXT_CHARS = 12_000;
+const MAX_MODEL_TITLE_CHARS = 300;
+const MAX_REFUSAL_RAW_CHARS = 2_000;
+
+function truncate(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}\n[truncated ${value.length - maxChars} chars]`;
+}
+
+function redactSensitiveText(value: string): string {
+  return value.replace(CREDENTIAL_RE, "[redacted: credential-shaped value]");
+}
+
+function sanitizeModelText(value: string, maxChars = MAX_MODEL_TEXT_CHARS): string {
+  return truncate(redactSensitiveText(value), maxChars);
+}
+
+function sanitizeFileRecord(record: FileRecord): FileRecord {
+  const parsed = fileRecordSchema.parse(record);
+  return {
+    ...parsed,
+    candidates: parsed.candidates.map((c) => ({
+      ...c,
+      snippet: SECRET_SLUGS.has(c.vulnSlug)
+        ? "[redacted: secret-bearing snippet]"
+        : redactSensitiveText(c.snippet),
+    })),
+    findings: parsed.findings.map((f) => ({
+      ...f,
+      vulnSlug: sanitizeModelText(f.vulnSlug, 120),
+      title: sanitizeModelText(f.title, MAX_MODEL_TITLE_CHARS),
+      description: sanitizeModelText(f.description),
+      recommendation: sanitizeModelText(f.recommendation),
+      triage: f.triage
+        ? {
+            ...f.triage,
+            reasoning: sanitizeModelText(f.triage.reasoning),
+          }
+        : f.triage,
+      revalidation: f.revalidation
+        ? {
+            ...f.revalidation,
+            reasoning: sanitizeModelText(f.revalidation.reasoning),
+          }
+        : f.revalidation,
+    })),
+    analysisHistory: parsed.analysisHistory.map((h) => ({
+      ...h,
+      codexStderr: h.codexStderr ? redactSensitiveText(h.codexStderr) : h.codexStderr,
+      refusal: h.refusal
+        ? {
+            ...h.refusal,
+            reason: h.refusal.reason
+              ? sanitizeModelText(h.refusal.reason, 1_000)
+              : h.refusal.reason,
+            skipped: h.refusal.skipped?.map((s) => ({
+              ...s,
+              reason: sanitizeModelText(s.reason, 1_000),
+            })),
+            raw: h.refusal.raw
+              ? sanitizeModelText(h.refusal.raw, MAX_REFUSAL_RAW_CHARS)
+              : h.refusal.raw,
+          }
+        : h.refusal,
+    })),
+  };
+}
+
+function pathIsInside(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function ensureDataDirectoryNoSymlinks(dirPath: string): void {
+  const dataRoot = path.resolve(getDataRoot());
+  const absDir = path.resolve(dirPath);
+  if (!pathIsInside(dataRoot, absDir)) {
+    throw new Error(`Refusing to write outside DEEPSEC_DATA_ROOT: ${absDir}`);
+  }
+
+  try {
+    const st = fs.lstatSync(dataRoot);
+    if (st.isSymbolicLink()) {
+      throw new Error(`Refusing to write through symlinked data directory: ${dataRoot}`);
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`Refusing to write through non-directory data path: ${dataRoot}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    fs.mkdirSync(dataRoot, { recursive: true });
+  }
+
+  let current = dataRoot;
+  for (const segment of path.relative(dataRoot, absDir).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    try {
+      const st = fs.lstatSync(current);
+      if (st.isSymbolicLink()) {
+        throw new Error(`Refusing to write through symlinked data directory: ${current}`);
+      }
+      if (!st.isDirectory()) {
+        throw new Error(`Refusing to write through non-directory data path: ${current}`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      fs.mkdirSync(current);
+    }
+  }
+}
+
+export function writeDataTextAtomic(filePath: string, data: string): void {
+  ensureDataDirectoryNoSymlinks(path.dirname(filePath));
+  const tmp = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`,
+  );
+  const fd = fs.openSync(tmp, "wx", 0o600);
+  let committed = false;
+  try {
+    fs.writeFileSync(fd, data, "utf-8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    fs.renameSync(tmp, filePath);
+    committed = true;
+  } finally {
+    if (!committed) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {}
+    }
+  }
+  try {
+    const dirFd = fs.openSync(path.dirname(filePath), "r");
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
+  } catch {
+    // Directory fsync is best-effort on platforms/filesystems that allow it.
+  }
+}
+
+function writeJsonAtomic(filePath: string, data: unknown): void {
+  writeDataTextAtomic(filePath, JSON.stringify(data, null, 2) + "\n");
+}
 
 /**
  * Default parallelism: leave one core for the OS / orchestrator. Used as
@@ -69,7 +237,7 @@ export function ensureProject(projectId: string, rootPath: string): ProjectConfi
       if (config.githubUrl) changed = true;
     }
     if (changed) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+      writeJsonAtomic(configPath, config);
     }
     return config;
   }
@@ -79,8 +247,7 @@ export function ensureProject(projectId: string, rootPath: string): ProjectConfi
     createdAt: new Date().toISOString(),
     githubUrl: detectGithubUrl(path.resolve(rootPath)),
   };
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  writeJsonAtomic(configPath, config);
   return config;
 }
 
@@ -115,9 +282,9 @@ export function createRunMeta(params: {
 }
 
 export function writeRunMeta(meta: RunMeta): void {
+  const parsed = runMetaSchema.parse(meta);
   const metaPath = runMetaPath(meta.projectId, meta.runId);
-  fs.mkdirSync(path.dirname(metaPath), { recursive: true });
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + "\n");
+  writeJsonAtomic(metaPath, parsed);
 }
 
 export function readRunMeta(projectId: string, runId: string): RunMeta {
@@ -170,9 +337,9 @@ export function readFileRecord(projectId: string, filePath: string): FileRecord 
 }
 
 export function writeFileRecord(record: FileRecord): void {
-  const p = fileRecordPath(record.projectId, record.filePath);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(record, null, 2) + "\n");
+  const sanitized = sanitizeFileRecord(record);
+  const p = fileRecordPath(sanitized.projectId, sanitized.filePath);
+  writeJsonAtomic(p, sanitized);
 }
 
 // --- Per-project process lock ---

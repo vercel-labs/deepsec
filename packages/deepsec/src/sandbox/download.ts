@@ -5,6 +5,7 @@ import type { Sandbox } from "@vercel/sandbox";
 import * as tar from "tar";
 import { mergeAfterExtract, snapshotFileRecords } from "./merge-records.js";
 import { DATA_DIR } from "./setup.js";
+import type { SandboxSubcommand } from "./types.js";
 
 // Sandbox results are JSON file records, run metadata, and reports —
 // nothing else. Lock the extract to these extensions so a tampered or
@@ -44,6 +45,41 @@ const MAX_ENTRIES = 50_000;
 const MAX_PER_FILE_BYTES = 32 * 1024 * 1024; // 32 MiB per record
 
 const SETUP_MARKER = "/tmp/deepsec-setup-done";
+const downloadLocks = new Map<string, Promise<void>>();
+
+function shellQuote(s: string): string {
+  return `'${s.replaceAll("'", "'\\''")}'`;
+}
+
+function ensurePlainDirectory(dir: string): void {
+  const parent = path.dirname(dir);
+  if (parent !== dir && !fs.existsSync(parent)) ensurePlainDirectory(parent);
+  try {
+    const st = fs.lstatSync(dir);
+    if (st.isSymbolicLink()) throw new Error(`Refusing to use symlinked data directory: ${dir}`);
+    if (!st.isDirectory()) throw new Error(`Refusing to use non-directory data path: ${dir}`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    fs.mkdirSync(dir);
+  }
+}
+
+async function withDownloadLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prior = downloadLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = prior.then(() => current);
+  downloadLocks.set(key, chained);
+  await prior;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (downloadLocks.get(key) === chained) downloadLocks.delete(key);
+  }
+}
 
 /**
  * Touch a marker file at the end of setup. The results download uses
@@ -74,7 +110,12 @@ export async function downloadResults(
   sandboxIndex: number,
   projectId: string,
   onLog: (msg: string) => void,
-  opts: { advanceMarker?: boolean; quiet?: boolean } = {},
+  opts: {
+    advanceMarker?: boolean;
+    quiet?: boolean;
+    allowedFiles?: string[];
+    command?: SandboxSubcommand;
+  } = {},
 ): Promise<number> {
   const remoteProjectDir = `${DATA_DIR}/${projectId}`;
   const remoteTarPath = `/tmp/deepsec-results-${sandboxIndex}.tar.gz`;
@@ -87,13 +128,24 @@ export async function downloadResults(
   // Build the tar of files newer than the setup marker.
   // Cannot use $(find -print0) — bash command substitution strips NUL bytes.
   // Instead detect emptiness separately, then pipe find directly to tar.
+  const cutoffMarker = `/tmp/deepsec-sync-cutoff-${sandboxIndex}-${Date.now()}`;
+  if (opts.advanceMarker) {
+    const touchCutoff = await sandbox.runCommand({ cmd: "touch", args: [cutoffMarker] });
+    if (touchCutoff.exitCode !== 0) {
+      throw new Error(`[sandbox-${sandboxIndex}] touch ${cutoffMarker} failed`);
+    }
+  }
+  const newerExpr = opts.advanceMarker
+    ? `-newer ${shellQuote(SETUP_MARKER)} ! -newer ${shellQuote(cutoffMarker)}`
+    : `-newer ${shellQuote(SETUP_MARKER)}`;
   const tarCmd = [
     "sh",
     "-c",
-    `cd ${remoteProjectDir} && ` +
-      `first=$(find . -newer ${SETUP_MARKER} -type f -print -quit); ` +
+    `cd ${shellQuote(remoteProjectDir)} && ` +
+      `first=$(find . ${newerExpr} -type f -print -quit); ` +
       `if [ -z "$first" ]; then echo "__NO_CHANGES__"; exit 0; fi; ` +
-      `find . -newer ${SETUP_MARKER} -type f -print0 | tar -czf ${remoteTarPath} --null -T -`,
+      `find . ${newerExpr} -type f -print0 | ` +
+      `tar -czf ${shellQuote(remoteTarPath)} --null -T -`,
   ];
 
   const tarResult = await sandbox.runCommand({
@@ -111,7 +163,7 @@ export async function downloadResults(
   if (tarStdout.includes("__NO_CHANGES__")) {
     log(`[sandbox-${sandboxIndex}] No changes to download.`);
     if (opts.advanceMarker) {
-      await sandbox.runCommand({ cmd: "touch", args: [SETUP_MARKER] });
+      await sandbox.runCommand({ cmd: "mv", args: [cutoffMarker, SETUP_MARKER] });
     }
     return 0;
   }
@@ -144,24 +196,36 @@ export async function downloadResults(
 
   // Extract locally into data/<projectId>/
   const localProjectDir = dataDir(projectId);
-  fs.mkdirSync(localProjectDir, { recursive: true });
+  ensurePlainDirectory(localProjectDir);
 
-  const count = await extractTarballLocally(localTarPath, localProjectDir);
   try {
-    fs.unlinkSync(localTarPath);
-  } catch {}
-  log(
-    `[sandbox-${sandboxIndex}] Extracted ${count} files into ${path.relative(process.cwd(), localProjectDir)}`,
-  );
+    const count = await withDownloadLock(localProjectDir, () =>
+      extractTarballLocally(localTarPath, localProjectDir, {
+        allowedFiles: opts.allowedFiles,
+        command: opts.command,
+      }),
+    );
+    log(
+      `[sandbox-${sandboxIndex}] Extracted ${count} files into ${path.relative(process.cwd(), localProjectDir)}`,
+    );
 
-  // Bump the marker after a successful sync so subsequent polls are deltas.
-  if (opts.advanceMarker) {
-    await sandbox.runCommand({ cmd: "touch", args: [SETUP_MARKER] });
+    // Bump the marker after a successful sync so subsequent polls are deltas.
+    if (opts.advanceMarker) {
+      await sandbox.runCommand({ cmd: "mv", args: [cutoffMarker, SETUP_MARKER] });
+    }
+    return count;
+  } finally {
+    try {
+      fs.unlinkSync(localTarPath);
+    } catch {}
   }
-  return count;
 }
 
-export async function extractTarballLocally(tarPath: string, destDir: string): Promise<number> {
+export async function extractTarballLocally(
+  tarPath: string,
+  destDir: string,
+  optsOrAllowedFiles?: string[] | { allowedFiles?: string[]; command?: SandboxSubcommand },
+): Promise<number> {
   // Two-pass: list to validate, then extract. The list pass is hard
   // "all or nothing" — if any entry is disallowed (wrong type or
   // extension), we throw before a single byte hits disk, so callers
@@ -175,6 +239,16 @@ export async function extractTarballLocally(tarPath: string, destDir: string): P
   // log-and-skip. The extract pass runs with default safety; we know
   // the archive is clean by then.
   const violations: string[] = [];
+  const opts = Array.isArray(optsOrAllowedFiles)
+    ? { allowedFiles: optsOrAllowedFiles }
+    : (optsOrAllowedFiles ?? {});
+  const command = opts.command;
+  const restrictReturnedNamespaces = command !== undefined;
+  const allowRunMetadata = !restrictReturnedNamespaces || command === "scan";
+  const allowReports = !restrictReturnedNamespaces || command === "report";
+  const allowedFileEntries = opts.allowedFiles
+    ? new Set(opts.allowedFiles.map((p) => `files/${p.replaceAll("\\", "/")}.json`))
+    : undefined;
   let fileCount = 0;
   let totalUncompressed = 0;
   await tar.list({
@@ -205,6 +279,18 @@ export async function extractTarballLocally(tarPath: string, destDir: string): P
       }
       if (!ALLOWED_ENTRY_PATTERNS.some((re) => re.test(norm))) {
         violations.push(`"${entry.path}" is outside files/, runs/, reports/`);
+        return;
+      }
+      if (norm.startsWith("runs/") && !allowRunMetadata) {
+        violations.push(`"${entry.path}" is run metadata not returned by ${command}`);
+        return;
+      }
+      if (norm.startsWith("reports/") && !allowReports) {
+        violations.push(`"${entry.path}" is a report artifact not returned by ${command}`);
+        return;
+      }
+      if (allowedFileEntries && norm.startsWith("files/") && !allowedFileEntries.has(norm)) {
+        violations.push(`"${entry.path}" is outside this sandbox's manifest`);
         return;
       }
       const sz = (entry as unknown as { size?: number }).size ?? 0;

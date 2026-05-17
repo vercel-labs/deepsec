@@ -56,8 +56,8 @@ export { triage } from "./triage.js";
 
 export function createDefaultAgentRegistry(): AgentRegistry {
   const registry = new AgentRegistry();
-  registry.register(new ClaudeAgentSdkPlugin());
-  registry.register(new CodexAgentSdkPlugin());
+  registry.register(new ClaudeAgentSdkPlugin(), { allowOverride: true });
+  registry.register(new CodexAgentSdkPlugin(), { allowOverride: true });
   // Plugins can contribute additional backends via `agents: []` in their
   // DeepsecPlugin export. The shape is validated by AgentRegistry at use.
   for (const a of getRegistry().agents as AgentPlugin[]) {
@@ -289,18 +289,10 @@ export async function process(params: {
   // run grabs files the first run is mid-investigation on, both write
   // back, and findings/history get clobbered.
   //
-  // A lock is reclaimable when EITHER:
-  //   1. The owning run's RunMeta says it's done/error/missing — the
-  //      lock won't be released by the original owner, ever.
-  //   2. The lock is older than STALE_LOCK_MS and the owning run's
-  //      RunMeta phase is still "running" (likely a hard crash; the
-  //      heartbeat would update lockedAt during normal progress).
-  //
-  // STALE_LOCK_MS is generous (1h) because individual investigations
-  // can legitimately take 20–40 minutes on big repos with max
-  // thinking. False reclaims are catastrophic; false rejections only
-  // cost a retry on the next run.
-  const STALE_LOCK_MS = 60 * 60 * 1000;
+  // A lock is reclaimable only when the owning run's RunMeta says it's
+  // done/error/missing. There is no heartbeat today; reclaiming a live
+  // phase="running" owner based only on age can steal legitimately long
+  // investigations and clobber their later writes.
   const isReclaimableLock = (r: FileRecord): boolean => {
     if (!r.lockedByRunId) return true;
     // Cross-check the owning run's status. A done/error/missing run's
@@ -314,13 +306,7 @@ export async function process(params: {
       return true;
     }
     if (ownerPhase === "done" || ownerPhase === "error") return true;
-    // Owner reports running — only reclaim after a stale-lock timeout
-    // (hard crashes leave phase=running forever). Records written
-    // before lockedAt existed have no timestamp; treat those as old
-    // enough to reclaim so we can recover legacy locked state.
-    if (!r.lockedAt) return true;
-    const ageMs = Date.now() - new Date(r.lockedAt).getTime();
-    return ageMs >= STALE_LOCK_MS;
+    return false;
   };
 
   // Load file records and pick which to process
@@ -478,7 +464,8 @@ export async function process(params: {
         (current.status === "processing" &&
           current.lockedByRunId !== runId &&
           isReclaimableLock(current));
-      if (!isOurs && !isFreelyClaimable && !inForceMode) {
+      const forceEligible = inForceMode && current.status !== "processing";
+      if (!isOurs && !isFreelyClaimable && !forceEligible) {
         continue;
       }
 
@@ -731,9 +718,11 @@ export async function process(params: {
     await Promise.all(workers);
   }
 
-  completeRun(projectId, runId, "done", {
+  completeRun(projectId, runId, batchesFailed > 0 || quotaExhausted ? "error" : "done", {
     filesProcessed: totalAnalyses,
     findingsCount: totalFindings,
+    errorBatchCount: batchesFailed,
+    quotaExhaustedSource: quotaExhausted?.source,
     totalCostUsd,
     totalInputTokens,
     totalOutputTokens,
@@ -767,6 +756,14 @@ const SEVERITY_ORDER: Record<Severity, number> = {
   LOW: 5,
 };
 
+function findingSignatureForRevalidation(f: {
+  vulnSlug: string;
+  title: string;
+  lineNumbers: number[];
+}): string {
+  return `${f.vulnSlug}\0${f.title.trim().toLowerCase()}\0${f.lineNumbers.join(",")}`;
+}
+
 export async function revalidate(params: {
   projectId: string;
   runId?: string;
@@ -794,6 +791,7 @@ export async function revalidate(params: {
   falsePositives: number;
   fixed: number;
   uncertain: number;
+  errorBatchCount: number;
   /** Same semantics as `process()` — see that return type. */
   quotaExhausted?: { source: QuotaSource; rawMessage: string };
 }> {
@@ -871,19 +869,22 @@ export async function revalidate(params: {
     params.onlySlugs && params.onlySlugs.length > 0 ? new Set(params.onlySlugs) : undefined;
   const revalSkipSet =
     params.skipSlugs && params.skipSlugs.length > 0 ? new Set(params.skipSlugs) : undefined;
+  const eligibleFindingEntries = (r: FileRecord) =>
+    r.findings
+      .map((finding, originalIndex) => ({ finding, originalIndex }))
+      .filter(({ finding }) => {
+        if (!force && finding.revalidation) return false;
+        if (minSeverity && SEVERITY_ORDER[finding.severity] > SEVERITY_ORDER[minSeverity])
+          return false;
+        if (revalOnlySet && !revalOnlySet.has(finding.vulnSlug)) return false;
+        if (revalSkipSet?.has(finding.vulnSlug)) return false;
+        return true;
+      });
   const allRecords = loadAllFileRecords(projectId);
   let toRevalidate = allRecords.filter((r) => {
     if (r.findings.length === 0) return false;
     if (params.filter && !r.filePath.startsWith(params.filter)) return false;
-
-    const unrevalidated = r.findings.filter((f) => {
-      if (!force && f.revalidation) return false;
-      if (minSeverity && SEVERITY_ORDER[f.severity] > SEVERITY_ORDER[minSeverity]) return false;
-      if (revalOnlySet && !revalOnlySet.has(f.vulnSlug)) return false;
-      if (revalSkipSet?.has(f.vulnSlug)) return false;
-      return true;
-    });
-    return unrevalidated.length > 0;
+    return eligibleFindingEntries(r).length > 0;
   });
 
   // Apply manifest filter (exact file list from sandbox orchestrator)
@@ -893,8 +894,12 @@ export async function revalidate(params: {
 
   // Sort by severity (CRITICAL first) then noise tier
   toRevalidate.sort((a, b) => {
-    const aBest = Math.min(...a.findings.map((f) => SEVERITY_ORDER[f.severity]));
-    const bBest = Math.min(...b.findings.map((f) => SEVERITY_ORDER[f.severity]));
+    const aBest = Math.min(
+      ...eligibleFindingEntries(a).map(({ finding }) => SEVERITY_ORDER[finding.severity]),
+    );
+    const bBest = Math.min(
+      ...eligibleFindingEntries(b).map(({ finding }) => SEVERITY_ORDER[finding.severity]),
+    );
     if (aBest !== bBest) return aBest - bBest;
     return (
       noiseScore(a.candidates.map((c) => c.vulnSlug)) -
@@ -919,6 +924,7 @@ export async function revalidate(params: {
       falsePositives: 0,
       fixed: 0,
       uncertain: 0,
+      errorBatchCount: 0,
     };
   }
 
@@ -929,6 +935,7 @@ export async function revalidate(params: {
   let totalUncertain = 0;
   let totalCostUsd = 0;
   let batchesCompleted = 0;
+  let batchesFailed = 0;
   let batchesInFlight = 0;
   const concurrency = params.concurrency ?? defaultConcurrency();
   const batchSize = params.batchSize ?? 5;
@@ -941,10 +948,11 @@ export async function revalidate(params: {
 
   async function revalidateBatch(batch: FileRecord[], idx: number) {
     batchesInFlight++;
-    const findingCount = batch.reduce(
-      (s, f) => s + f.findings.filter((ff) => (!force ? !ff.revalidation : true)).length,
-      0,
-    );
+    const batchForAgent = batch.map((file) => ({
+      ...file,
+      findings: eligibleFindingEntries(file).map(({ finding }) => finding),
+    }));
+    const findingCount = batchForAgent.reduce((s, f) => s + f.findings.length, 0);
     emitProgress({
       type: "batch_started",
       message: `Revalidating batch ${idx + 1}/${batches.length} (${batch.length} files, ${findingCount} findings, ${batchesInFlight} in flight)`,
@@ -954,7 +962,7 @@ export async function revalidate(params: {
 
     try {
       const gen = agent.revalidate({
-        batch,
+        batch: batchForAgent,
         projectRoot: effectiveRootPath,
         projectInfo,
         config,
@@ -978,11 +986,91 @@ export async function revalidate(params: {
       const batchMeta = output.meta;
       totalCostUsd += batchMeta.costUsd ?? 0;
 
+      const expected = new Map<
+        string,
+        {
+          file: FileRecord;
+          filteredIndex: number;
+          originalIndex: number;
+          title: string;
+          signature: string;
+        }
+      >();
+      const titleIndex = new Map<string, string[]>();
+      for (const file of batch) {
+        const entries = eligibleFindingEntries(file);
+        for (const [filteredIndex, { finding, originalIndex }] of entries.entries()) {
+          const key = `${file.filePath}\0${filteredIndex}`;
+          expected.set(key, {
+            file,
+            filteredIndex,
+            originalIndex,
+            title: finding.title,
+            signature: findingSignatureForRevalidation(finding),
+          });
+          const titleKey = `${file.filePath}\0${finding.title}`;
+          const keys = titleIndex.get(titleKey) ?? [];
+          keys.push(key);
+          titleIndex.set(titleKey, keys);
+        }
+      }
+      const seenVerdicts = new Set<string>();
+      const assignments: Array<{
+        file: FileRecord;
+        originalIndex: number;
+        signature: string;
+        verdict: (typeof output.verdicts)[number];
+      }> = [];
+
       // Match verdicts to findings across all files in the batch
       for (const verdict of output.verdicts) {
-        const file = batch.find((f) => f.filePath === verdict.filePath);
-        if (!file) continue;
-        const finding = file.findings.find((f) => f.title === verdict.title);
+        let key: string | undefined;
+        if (verdict.findingIndex !== undefined) {
+          key = `${verdict.filePath}\0${verdict.findingIndex}`;
+        } else {
+          const titleKeys = titleIndex.get(`${verdict.filePath}\0${verdict.title}`) ?? [];
+          if (titleKeys.length > 1) {
+            throw new Error(
+              `Agent revalidation omitted findingIndex for duplicate title ${JSON.stringify(verdict.title)} in ${verdict.filePath}`,
+            );
+          }
+          key = titleKeys[0];
+        }
+        const target = key ? expected.get(key) : undefined;
+        if (!target) {
+          throw new Error(
+            `Agent revalidation returned unexpected verdict for ${verdict.filePath}: ${verdict.title}`,
+          );
+        }
+        if (seenVerdicts.has(key)) {
+          throw new Error(
+            `Agent revalidation returned duplicate verdict for ${verdict.filePath}: ${verdict.title}`,
+          );
+        }
+        seenVerdicts.add(key);
+        assignments.push({
+          file: target.file,
+          originalIndex: target.originalIndex,
+          signature: target.signature,
+          verdict,
+        });
+      }
+      const missingVerdicts = [...expected.keys()].filter((key) => !seenVerdicts.has(key));
+      if (missingVerdicts.length > 0) {
+        throw new Error(
+          `Agent revalidation omitted ${missingVerdicts.length} finding verdict(s): ` +
+            `${missingVerdicts
+              .slice(0, 5)
+              .map((key) => {
+                const e = expected.get(key)!;
+                return `${e.file.filePath}: #${e.filteredIndex} ${e.title}`;
+              })
+              .join(", ")}`,
+        );
+      }
+
+      for (const { file, originalIndex, verdict } of assignments) {
+        const finding = file.findings[originalIndex];
         if (!finding) continue;
         finding.revalidation = {
           verdict: verdict.verdict,
@@ -1025,34 +1113,66 @@ export async function revalidate(params: {
       const perFileNumTurns = batchMeta.numTurns != null ? batchMeta.numTurns / splitN : undefined;
       const investigatedAt = new Date().toISOString();
 
-      for (const file of batch) {
-        const verdictsForFile = output.verdicts.filter((v) => v.filePath === file.filePath).length;
-        file.analysisHistory.push({
-          runId,
-          investigatedAt,
-          durationMs: perFileDurationMs,
-          durationApiMs: perFileDurationApiMs,
-          agentType,
-          model,
-          modelConfig: config,
-          agentSessionId: batchMeta.agentSessionId,
-          findingCount: verdictsForFile,
-          numTurns: perFileNumTurns,
-          phase: "revalidate",
-          costUsd: perFileCost,
-          usage: perFileUsage,
-          refusal: batchMeta.refusal,
-          codexStderr: batchMeta.codexStderr,
-        });
+      const assignmentsByFile = new Map<string, typeof assignments>();
+      for (const assignment of assignments) {
+        const list = assignmentsByFile.get(assignment.file.filePath) ?? [];
+        list.push(assignment);
+        assignmentsByFile.set(assignment.file.filePath, list);
+      }
 
-        try {
-          enrichFileRecord(file, effectiveRootPath);
-        } catch (e) {
-          console.error(
-            `[deepsec] enrich failed for ${file.filePath}: ${e instanceof Error ? e.message : e}`,
-          );
+      const releaseWriteLock = await acquireProcessLock(projectId, runId);
+      try {
+        for (const file of batch) {
+          const fileAssignments = assignmentsByFile.get(file.filePath) ?? [];
+          if (fileAssignments.length === 0) continue;
+          const latest = readFileRecord(projectId, file.filePath) ?? file;
+          for (const assignment of fileAssignments) {
+            const finding =
+              latest.findings.find(
+                (f) => findingSignatureForRevalidation(f) === assignment.signature,
+              ) ?? latest.findings[assignment.originalIndex];
+            if (!finding) continue;
+            finding.revalidation = {
+              verdict: assignment.verdict.verdict,
+              reasoning: assignment.verdict.reasoning,
+              adjustedSeverity: assignment.verdict.adjustedSeverity,
+              revalidatedAt: new Date().toISOString(),
+              runId,
+              model,
+            };
+            if (assignment.verdict.adjustedSeverity) {
+              finding.severity = assignment.verdict.adjustedSeverity;
+            }
+          }
+          latest.analysisHistory.push({
+            runId,
+            investigatedAt,
+            durationMs: perFileDurationMs,
+            durationApiMs: perFileDurationApiMs,
+            agentType,
+            model,
+            modelConfig: config,
+            agentSessionId: batchMeta.agentSessionId,
+            findingCount: fileAssignments.length,
+            numTurns: perFileNumTurns,
+            phase: "revalidate",
+            costUsd: perFileCost,
+            usage: perFileUsage,
+            refusal: batchMeta.refusal,
+            codexStderr: batchMeta.codexStderr,
+          });
+
+          try {
+            enrichFileRecord(latest, effectiveRootPath);
+          } catch (e) {
+            console.error(
+              `[deepsec] enrich failed for ${latest.filePath}: ${e instanceof Error ? e.message : e}`,
+            );
+          }
+          writeFileRecord(latest);
         }
-        writeFileRecord(file);
+      } finally {
+        releaseWriteLock();
       }
 
       batchesInFlight--;
@@ -1066,6 +1186,7 @@ export async function revalidate(params: {
     } catch (err) {
       batchesInFlight--;
       batchesCompleted++;
+      batchesFailed++;
       if (err instanceof QuotaExhaustedError && !quotaExhausted) {
         quotaExhausted = { source: err.source, rawMessage: err.rawMessage };
         quotaAbort.abort(err);
@@ -1098,7 +1219,7 @@ export async function revalidate(params: {
     );
   }
 
-  completeRun(projectId, runId, "done", {
+  completeRun(projectId, runId, batchesFailed > 0 ? "error" : "done", {
     findingsRevalidated: totalRevalidated,
     truePositives: totalTP,
     falsePositives: totalFP,
@@ -1121,6 +1242,7 @@ export async function revalidate(params: {
     falsePositives: totalFP,
     fixed: totalFixed,
     uncertain: totalUncertain,
+    errorBatchCount: batchesFailed,
     quotaExhausted,
   };
 }

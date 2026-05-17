@@ -123,6 +123,13 @@ export async function revalidateCommand(opts: {
     );
     process.exit(1);
   }
+  if (result.errorBatchCount > 0) {
+    console.log();
+    console.log(
+      `${RED}${result.errorBatchCount} batch(es) errored — exiting 1 (revalidation incomplete).${RESET}`,
+    );
+    process.exit(1);
+  }
   if (result.revalidated === 0 && !opts.force) {
     console.log(
       `  ${DIM}Tip: pass ${RESET}${BOLD}--force${RESET}${DIM} to revalidate findings again (e.g. after fixes).${RESET}`,

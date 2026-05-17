@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type AnalysisEntry, type FileRecord, type Finding, fileRecordSchema } from "@deepsec/core";
+import {
+  type AnalysisEntry,
+  assertSafeFilePath,
+  type FileRecord,
+  type Finding,
+  fileRecordSchema,
+} from "@deepsec/core";
 
 /**
  * Tarball extraction is `cwd=dataDir(projectId)`, so file records live
@@ -198,6 +204,12 @@ export function mergeAfterExtract(
         continue;
       }
       const incoming = parsed.data;
+      try {
+        assertSafeFilePath(incoming.filePath);
+      } catch {
+        restoreOrDrop(full, host);
+        continue;
+      }
 
       // Sandbox tarball came from `data/<projectId>/`, so every record in
       // it must claim that same projectId, and the on-disk path must match

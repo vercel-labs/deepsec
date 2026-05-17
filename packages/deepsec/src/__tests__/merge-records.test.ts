@@ -284,4 +284,31 @@ describe("snapshotFileRecords + mergeAfterExtract", () => {
     const snap = snapshotFileRecords(dir);
     expect(snap.size).toBe(1);
   });
+
+  it("restores the host record when incoming JSON declares a traversal filePath", () => {
+    const filesDir = path.join(dir, "files");
+    fs.mkdirSync(filesDir, { recursive: true });
+    const recPath = path.join(filesDir, "foo.ts.json");
+    const host = record({
+      filePath: "foo.ts",
+      analysisHistory: [entry("host", "codex", "2026-05-06T15:00:00.000Z")],
+    });
+    fs.writeFileSync(recPath, JSON.stringify(host));
+    const snap = snapshotFileRecords(dir);
+
+    fs.writeFileSync(
+      recPath,
+      JSON.stringify({
+        ...record({ filePath: "foo.ts" }),
+        filePath: "src/../foo.ts",
+        analysisHistory: [entry("sandbox", "claude", "2026-05-06T16:00:00.000Z")],
+      }),
+    );
+
+    const merged = mergeAfterExtract(dir, snap, "p");
+    expect(merged).toBe(0);
+    const after = JSON.parse(fs.readFileSync(recPath, "utf-8")) as FileRecord;
+    expect(after.filePath).toBe("foo.ts");
+    expect(after.analysisHistory.map((e) => e.runId)).toEqual(["host"]);
+  });
 });

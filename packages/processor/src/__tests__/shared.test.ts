@@ -261,11 +261,45 @@ describe("parseRefusalReport", () => {
 describe("parseInvestigateResults", () => {
   const batch = [{ filePath: "a.ts" } as any, { filePath: "b.ts" } as any];
 
-  it("matches results to batch files; fills missing with empty findings", () => {
-    const text = '```json\n[{"filePath":"a.ts","findings":[{"severity":"HIGH"}]}]\n```';
+  const validFinding = {
+    severity: "HIGH",
+    vulnSlug: "missing-auth",
+    title: "Missing auth",
+    description: "Route lacks an auth check.",
+    lineNumbers: [1],
+    recommendation: "Add authorization before returning data.",
+    confidence: "high",
+  };
+
+  it("matches one result per batch file and preserves valid findings", () => {
+    const text = `\`\`\`json
+[
+  {"filePath":"a.ts","findings":[${JSON.stringify(validFinding)}]},
+  {"filePath":"b.ts","findings":[]}
+]
+\`\`\``;
     const out = parseInvestigateResults(text, batch);
     expect(out.find((r) => r.filePath === "a.ts")?.findings.length).toBe(1);
     expect(out.find((r) => r.filePath === "b.ts")?.findings).toEqual([]);
+  });
+
+  it("throws when the agent omits a batch file", () => {
+    const text = `\`\`\`json
+[{"filePath":"a.ts","findings":[${JSON.stringify(validFinding)}]}]
+\`\`\``;
+    expect(() => parseInvestigateResults(text, batch)).toThrow(/omitted 1 target file/);
+  });
+
+  it("throws on unexpected file paths and invalid findings", () => {
+    expect(() =>
+      parseInvestigateResults('[{"filePath":"../escape.ts","findings":[]}]', batch),
+    ).toThrow(/unexpected filePath/);
+    expect(() =>
+      parseInvestigateResults(
+        '[{"filePath":"a.ts","findings":[{"severity":"HIGH"}]},{"filePath":"b.ts","findings":[]}]',
+        batch,
+      ),
+    ).toThrow(/invalid finding/);
   });
 
   it("throws on parse failure (fail-loud, never silently empty)", () => {
@@ -289,13 +323,23 @@ describe("parseInvestigateResults", () => {
 describe("parseRevalidateVerdicts", () => {
   it("parses verdicts from fenced JSON", () => {
     const text =
-      '```json\n[{"filePath":"a.ts","title":"x","verdict":"true-positive","reasoning":"r"}]\n```';
+      '```json\n[{"filePath":"a.ts","findingIndex":0,"title":"x","verdict":"true-positive","adjustedSeverity":"LOW","reasoning":"r"}]\n```';
     const v = parseRevalidateVerdicts(text);
     expect(v).toHaveLength(1);
+    expect(v[0].findingIndex).toBe(0);
     expect(v[0].verdict).toBe("true-positive");
+    expect(v[0].adjustedSeverity).toBe("LOW");
   });
 
   it("throws on parse failure", () => {
     expect(() => parseRevalidateVerdicts("garbage")).toThrow(/wasn't parseable JSON/);
+  });
+
+  it("rejects invalid findingIndex values", () => {
+    expect(() =>
+      parseRevalidateVerdicts(
+        '[{"filePath":"a.ts","findingIndex":-1,"title":"x","verdict":"true-positive","reasoning":"r"}]',
+      ),
+    ).toThrow(/invalid findingIndex/);
   });
 });

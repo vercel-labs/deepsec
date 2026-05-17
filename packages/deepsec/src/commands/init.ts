@@ -141,7 +141,7 @@ function packageJson(name: string): string {
   // we publish — the scaffolded dep would resolve against npm to
   // whatever happens to match the literal string, which is not what
   // a user typing `npx deepsec@latest init` expects.
-  const deepsecVersion = `^${getDeepsecVersion()}`;
+  const deepsecVersion = getDeepsecVersion();
   return `${JSON.stringify(
     {
       name,

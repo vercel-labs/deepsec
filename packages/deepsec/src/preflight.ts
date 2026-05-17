@@ -71,10 +71,29 @@ export async function applyAiGatewayDefaults(): Promise<void> {
   }
   const key = process.env.AI_GATEWAY_API_KEY;
   if (!key) return;
-  if (!process.env.ANTHROPIC_AUTH_TOKEN) process.env.ANTHROPIC_AUTH_TOKEN = key;
-  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
-  if (!process.env.ANTHROPIC_BASE_URL) process.env.ANTHROPIC_BASE_URL = GATEWAY_ANTHROPIC_BASE_URL;
-  if (!process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = GATEWAY_OPENAI_BASE_URL;
+  const generatedAnthropic = !process.env.ANTHROPIC_AUTH_TOKEN;
+  const generatedOpenai = !process.env.OPENAI_API_KEY;
+  if (generatedAnthropic) {
+    process.env.ANTHROPIC_AUTH_TOKEN = key;
+    process.env.ANTHROPIC_BASE_URL = GATEWAY_ANTHROPIC_BASE_URL;
+  } else if (!process.env.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_AUTH_TOKEN === key) {
+    process.env.ANTHROPIC_BASE_URL = GATEWAY_ANTHROPIC_BASE_URL;
+  }
+  if (generatedOpenai) {
+    process.env.OPENAI_API_KEY = key;
+    process.env.OPENAI_BASE_URL = GATEWAY_OPENAI_BASE_URL;
+  } else if (!process.env.OPENAI_BASE_URL && process.env.OPENAI_API_KEY === key) {
+    process.env.OPENAI_BASE_URL = GATEWAY_OPENAI_BASE_URL;
+  }
+}
+
+function legacyDotenvHint(): string {
+  if (!existsSync(join(process.cwd(), ".env"))) return "";
+  return (
+    `\n\n` +
+    `  Note: deepsec no longer auto-loads .env because that file is often committed in PR checkouts.\n` +
+    `  Move secrets to an ignored .env.local, or set DEEPSEC_ENV_FILE=.env explicitly.`
+  );
 }
 
 function isCodex(agentType: string | undefined): boolean {
@@ -173,7 +192,8 @@ export function assertAgentCredential(
       `Missing AI credentials for --agent codex.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…   (or OPENAI_API_KEY=…)\n` +
-        `  Setup: ${SETUP_DOC_URL}`,
+        `  Setup: ${SETUP_DOC_URL}` +
+        legacyDotenvHint(),
     );
   }
 
@@ -185,7 +205,8 @@ export function assertAgentCredential(
     `Missing AI credentials for --agent ${displayAgent}.\n` +
       `\n` +
       `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…   (or ANTHROPIC_AUTH_TOKEN=…)\n` +
-      `  Setup: ${SETUP_DOC_URL}`,
+      `  Setup: ${SETUP_DOC_URL}` +
+      legacyDotenvHint(),
   );
 }
 

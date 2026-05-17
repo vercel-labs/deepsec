@@ -1,21 +1,21 @@
 name: deepsec
 
-on: pull_request
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: "Base ref to diff against"
+        required: true
+        default: "origin/main"
 
-# Default to read-only at the workflow level. The comment job opts up
-# to pull-requests:write only for the step that posts the artifact;
-# the analyze job that runs PR-controlled code never gets write
-# permission on this repository.
+# Default to read-only at the workflow level. This workflow is manual-only
+# because deepsec executes repository-controlled config/plugins as code and
+# must not expose AI credentials to unreviewed pull_request contents.
 permissions:
   contents: read
 
 jobs:
   analyze:
-    # Same-repo PRs only. Fork PRs already don't receive repo secrets
-    # under the `pull_request` event, so this check is mostly a UX
-    # filter — without it, fork PRs would run, fail on the missing
-    # credential, and post a red ❌ on every external contribution.
-    if: github.event.pull_request.head.repo.full_name == github.repository
     environment: deepsec-run
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -53,49 +53,16 @@ jobs:
         env:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           CLAUDE_CODE_EXECUTABLE: claude
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_REF: ${{ inputs.base_ref }}
         run: |
           pnpm exec deepsec process --agent codex \
-            --diff "origin/${BASE_REF}" \
+            --diff "${BASE_REF}" \
             --comment-out ../comment.md
 
-      # Hand off to the comment job via an artifact so the privileged
-      # step never has to run any PR-controlled code.
+      # Upload the comment body as an artifact for manual inspection.
       - if: always() && hashFiles('comment.md') != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deepsec-comment
           path: comment.md
           retention-days: 1
-
-  comment:
-    needs: analyze
-    # Run only if analyze produced a comment (analyze exits 1 on
-    # findings, so result == 'failure' is the trigger). The
-    # download-artifact step also fails closed if the artifact is
-    # missing, so other failure modes (network, timeout) silently
-    # skip the post.
-    if: always() && needs.analyze.result == 'failure'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - id: dl
-        continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: deepsec-comment
-
-      - if: steps.dl.outcome == 'success'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
-        with:
-          script: |
-            const fs = require('fs');
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: fs.readFileSync('comment.md', 'utf8'),
-            });

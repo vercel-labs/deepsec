@@ -1,3 +1,4 @@
+import net from "node:net";
 import { type NetworkPolicy, type NetworkPolicyRule, Sandbox } from "@vercel/sandbox";
 import { markSetupComplete } from "./download.js";
 import { trackSandbox, untrackSandbox } from "./shutdown.js";
@@ -118,6 +119,7 @@ export function buildSandboxEnv(
   // honour env vars for its analytics — its config.toml is written into
   // CODEX_HOME by createBootstrapSnapshot and baked into the snapshot.
   env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
+  env["DEEPSEC_SKIP_DOTENV"] = "1";
 
   // Signal to the agent SDK code that the orchestrator is running inside a
   // Vercel Sandbox microVM. The agents disable their built-in OS-level
@@ -171,14 +173,88 @@ export function buildSandboxEnv(
 // to reach it; better to deny outright.
 const DEFAULT_ANTHROPIC_HOST = "api.anthropic.com";
 const DEFAULT_OPENAI_HOST = "api.openai.com";
+const TRUSTED_AI_HOSTS = new Set([
+  "ai-gateway.vercel.sh",
+  DEFAULT_ANTHROPIC_HOST,
+  DEFAULT_OPENAI_HOST,
+]);
+const ALLOW_CUSTOM_AI_HOSTS_FROM_SHELL = process.env.DEEPSEC_ALLOW_CUSTOM_AI_HOSTS === "1";
 
-function hostFromUrl(u: string | undefined): string | null {
+function endpointFromUrl(u: string | undefined): URL | null {
   if (!u) return null;
   try {
-    return new URL(u).hostname;
+    const parsed = new URL(u);
+    return parsed.hostname ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function normalizedHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+}
+
+function isPrivateOrLocalHostname(hostname: string): boolean {
+  const host = normalizedHostname(hostname);
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+
+  const ipKind = net.isIP(host);
+  if (ipKind === 4) {
+    const parts = host.split(".").map((p) => Number(p));
+    if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+      return true;
+    }
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+  if (ipKind === 6) {
+    return (
+      host === "::" ||
+      host === "::1" ||
+      host.startsWith("fe80:") ||
+      host.startsWith("fc") ||
+      host.startsWith("fd")
+    );
+  }
+  return false;
+}
+
+function assertTrustedAiEndpoint(endpoint: URL): void {
+  const host = normalizedHostname(endpoint.hostname);
+  if (endpoint.protocol !== "https:") {
+    throw new Error(
+      `Refusing to broker AI credentials to non-HTTPS URL ${JSON.stringify(endpoint.href)}.`,
+    );
+  }
+  if (endpoint.username || endpoint.password) {
+    throw new Error(`Refusing to broker AI credentials to URL with embedded credentials.`);
+  }
+  if (isPrivateOrLocalHostname(host)) {
+    throw new Error(
+      `Refusing to broker AI credentials to local/private host ${JSON.stringify(host)}.`,
+    );
+  }
+  if (endpoint.port && endpoint.port !== "443" && !ALLOW_CUSTOM_AI_HOSTS_FROM_SHELL) {
+    throw new Error(
+      `Refusing to broker AI credentials to non-standard port ${JSON.stringify(endpoint.port)} on ${JSON.stringify(host)}. ` +
+        `Set DEEPSEC_ALLOW_CUSTOM_AI_HOSTS=1 in the shell for an explicitly trusted HTTPS proxy.`,
+    );
+  }
+  if (TRUSTED_AI_HOSTS.has(host)) return;
+  if (ALLOW_CUSTOM_AI_HOSTS_FROM_SHELL) return;
+  throw new Error(
+    `Refusing to broker AI credentials to untrusted host ${JSON.stringify(host)}. ` +
+      `Use ai-gateway.vercel.sh, api.anthropic.com, api.openai.com, or set ` +
+      `DEEPSEC_ALLOW_CUSTOM_AI_HOSTS=1 in the shell for an explicitly trusted HTTPS proxy.`,
+  );
 }
 
 export function buildWorkerNetworkPolicy(
@@ -192,9 +268,13 @@ export function buildWorkerNetworkPolicy(
   // Single AI host per backend. Prefer derived from the base URL the agent
   // will actually use; fall back to the provider's documented default when
   // the user hasn't configured one.
-  const aiHost = isCodex
-    ? (hostFromUrl(env["OPENAI_BASE_URL"]) ?? DEFAULT_OPENAI_HOST)
-    : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ?? DEFAULT_ANTHROPIC_HOST);
+  const aiEndpoint =
+    (isCodex
+      ? endpointFromUrl(env["OPENAI_BASE_URL"])
+      : endpointFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"])) ??
+    new URL(isCodex ? `https://${DEFAULT_OPENAI_HOST}` : `https://${DEFAULT_ANTHROPIC_HOST}`);
+  assertTrustedAiEndpoint(aiEndpoint);
+  const aiHost = normalizedHostname(aiEndpoint.hostname);
 
   // The fallback flips at resolveBrokeredCredentials — by here, openaiToken
   // already carries the ANTHROPIC gateway token if the user only set that
@@ -284,20 +364,45 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
     // whole bootstrap if the package manager rejects either one.
     await installAgentTools(sandbox, opts.onLog);
 
-    // Upload app + target + data in parallel
+    // Upload the app before dependency install. Target/data are uploaded only
+    // after install completes so lifecycle scripts cannot read and exfiltrate
+    // the scanned repository or prior finding state.
     const appTar = "/tmp/deepsec-app.tar.gz";
     const targetTar = "/tmp/deepsec-target.tar.gz";
     const dataTar = "/tmp/deepsec-data.tar.gz";
     const projectDataDir = `${DATA_DIR}/${opts.projectId}`;
 
-    // Each uploadTarballToSandbox call frees the local temp tarball as soon
-    // as the upload completes, so peak host-side memory is bounded by the
-    // largest single tarball (not the sum of all three).
+    await uploadTarballToSandbox(sandbox, appTar, opts.bundle.app.tarPath, opts.onLog);
+    await extractTarballOnSandbox(sandbox, appTar, DEEPSEC_DIR, opts.onLog);
+
+    // Install dependencies. --frozen-lockfile only in dev mode: our source
+    // workspace ships a lockfile written by the same pnpm major (8) we
+    // install in the sandbox above. The user's `.deepsec/` install in
+    // installed mode may have been generated by a newer pnpm whose lockfile
+    // format pnpm@8 rejects (ERR_PNPM_LOCKFILE_BREAKING_CHANGE), so we
+    // resolve fresh there.
+    const installArgs =
+      opts.mode === "dev"
+        ? ["install", "--frozen-lockfile", "--ignore-scripts"]
+        : ["install", "--ignore-scripts"];
+    opts.onLog(`Running pnpm ${installArgs.join(" ")}...`);
+    await runAndLog(sandbox, "pnpm", installArgs, DEEPSEC_DIR, opts.onLog);
+
+    // Ensure agent native binaries. Both backends ship vendored native binaries
+    // through optional deps; pnpm's optional-dep filter on the host platform
+    // doesn't always land the right binary on the sandbox. We install the
+    // matching binary explicitly per agent before target/data are present,
+    // because these helpers perform networked npm fetches in the bootstrap VM.
+    if (agentType === "codex") {
+      opts.onLog("Ensuring Codex CLI native binary is installed...");
+      await ensureCodexNativeBinary(sandbox, opts.onLog);
+      await writeCodexConfig(sandbox, opts.onLog);
+    } else {
+      opts.onLog("Ensuring Claude SDK native binaries are installed...");
+      await ensureClaudeNativeBinaries(sandbox, opts.onLog);
+    }
+
     await Promise.all([
-      (async () => {
-        await uploadTarballToSandbox(sandbox, appTar, opts.bundle.app.tarPath, opts.onLog);
-        await extractTarballOnSandbox(sandbox, appTar, DEEPSEC_DIR, opts.onLog);
-      })(),
       (async () => {
         await uploadTarballToSandbox(sandbox, targetTar, opts.bundle.target.tarPath, opts.onLog);
         await extractTarballOnSandbox(sandbox, targetTar, TARGET_DIR, opts.onLog);
@@ -307,29 +412,6 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
         await extractTarballOnSandbox(sandbox, dataTar, projectDataDir, opts.onLog);
       })(),
     ]);
-
-    // Install dependencies. --frozen-lockfile only in dev mode: our source
-    // workspace ships a lockfile written by the same pnpm major (8) we
-    // install in the sandbox above. The user's `.deepsec/` install in
-    // installed mode may have been generated by a newer pnpm whose lockfile
-    // format pnpm@8 rejects (ERR_PNPM_LOCKFILE_BREAKING_CHANGE), so we
-    // resolve fresh there.
-    const installArgs = opts.mode === "dev" ? ["install", "--frozen-lockfile"] : ["install"];
-    opts.onLog(`Running pnpm ${installArgs.join(" ")}...`);
-    await runAndLog(sandbox, "pnpm", installArgs, DEEPSEC_DIR, opts.onLog);
-
-    // Ensure agent native binaries. Both backends ship vendored native binaries
-    // through optional deps; pnpm's optional-dep filter on the host platform
-    // doesn't always land the right binary on the sandbox. We install the
-    // matching binary explicitly per agent.
-    if (agentType === "codex") {
-      opts.onLog("Ensuring Codex CLI native binary is installed...");
-      await ensureCodexNativeBinary(sandbox, opts.onLog);
-      await writeCodexConfig(sandbox, opts.onLog);
-    } else {
-      opts.onLog("Ensuring Claude SDK native binaries are installed...");
-      await ensureClaudeNativeBinaries(sandbox, opts.onLog);
-    }
 
     // Snapshot the prepared state
     opts.onLog("Snapshotting bootstrap sandbox...");
@@ -577,43 +659,13 @@ install_with() {
   esac
 }
 
-# ripgrep: try the package manager first (Debian/Ubuntu/Alpine ship it),
-# then fall back to the official static musl binary on GitHub releases —
-# Amazon Linux 2023 / RHEL / older yum-based distros don't have ripgrep
-# in their default repos.
-install_rg_from_github() {
-  local arch=""
-  case "$(uname -m)" in
-    x86_64) arch="x86_64-unknown-linux-musl" ;;
-    aarch64|arm64) arch="aarch64-unknown-linux-gnu" ;;
-    *) log "WARN: unsupported arch $(uname -m) for ripgrep prebuilt"; return 1 ;;
-  esac
-  local rel="14.1.1"
-  local url="https://github.com/BurntSushi/ripgrep/releases/download/\${rel}/ripgrep-\${rel}-\${arch}.tar.gz"
-  log "Downloading ripgrep \${rel} (\${arch}) from GitHub..."
-  rm -rf /tmp/rg-fetch && mkdir -p /tmp/rg-fetch && cd /tmp/rg-fetch
-  if ! curl -fsSL --retry 3 -o rg.tar.gz "\${url}"; then
-    log "WARN: ripgrep download failed: \${url}"
-    return 1
-  fi
-  tar -xzf rg.tar.gz
-  local bin
-  bin=$(find . -maxdepth 3 -name rg -type f | head -1)
-  if [ -z "\${bin}" ]; then
-    log "WARN: rg binary not found in tarball"
-    return 1
-  fi
-  install -m 0755 "\${bin}" /usr/local/bin/rg
-  cd / && rm -rf /tmp/rg-fetch
-}
-
 if command -v rg >/dev/null 2>&1; then
   log "rg already installed: $(rg --version | head -1)"
 else
   log "Installing ripgrep via package manager..."
   install_with ripgrep || true
   if ! command -v rg >/dev/null 2>&1; then
-    install_rg_from_github || true
+    log "WARN: rg package unavailable — skipping unauthenticated binary fallback"
   fi
   if command -v rg >/dev/null 2>&1; then
     log "rg ready: $(rg --version | head -1)"

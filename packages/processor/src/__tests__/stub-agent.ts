@@ -77,8 +77,9 @@ export class StubAgent implements AgentPlugin {
     }
     return {
       verdicts: params.batch.flatMap((rec) =>
-        rec.findings.map((f) => ({
+        rec.findings.map((f, findingIndex) => ({
           filePath: rec.filePath,
+          findingIndex,
           title: f.title,
           verdict: "true-positive" as const,
           reasoning: "stub: confirmed",

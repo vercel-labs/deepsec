@@ -68,10 +68,11 @@ export interface RevalidateParams {
 
 export interface RevalidateVerdict {
   filePath: string;
+  findingIndex?: number;
   title: string;
   verdict: RevalidationVerdict;
   reasoning: string;
-  adjustedSeverity?: "CRITICAL" | "HIGH" | "MEDIUM" | "HIGH_BUG" | "BUG";
+  adjustedSeverity?: "CRITICAL" | "HIGH" | "MEDIUM" | "HIGH_BUG" | "BUG" | "LOW";
 }
 
 export interface RevalidateOutput {
@@ -81,6 +82,8 @@ export interface RevalidateOutput {
 
 export interface AgentPlugin {
   type: string;
+  /** Deliberately replace an agent with the same type. Built-ins are reserved by default. */
+  allowOverride?: boolean;
   investigate(params: InvestigateParams): AsyncGenerator<AgentProgress, InvestigateOutput>;
   revalidate(params: RevalidateParams): AsyncGenerator<AgentProgress, RevalidateOutput>;
 }

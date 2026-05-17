@@ -3,6 +3,12 @@ import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../formatters.js";
 import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import { resolveProjectId } from "../resolve-project-id.js";
+import {
+  boundedInt,
+  parseBoundedFlag,
+  parseBoundedOptionalFlag,
+  SANDBOX_LIMITS,
+} from "../sandbox/limits.js";
 import { checkStatus, collect, launch, orchestrate } from "../sandbox/orchestrator.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
 
@@ -13,6 +19,7 @@ interface SandboxOpts {
   sandboxes?: number;
   vcpus?: number;
   snapshotId?: string;
+  trustSnapshotId?: boolean;
   saveSnapshot?: boolean;
   keepAlive?: boolean;
   detach?: boolean;
@@ -60,19 +67,39 @@ function buildConfig(
   opts: SandboxOpts,
 ): SandboxConfig {
   const args = opts.args ?? [];
-  const concurrency = parseInt(extractFlag(args, "--concurrency") ?? "4", 10) || 4;
+  const concurrency = parseBoundedFlag(extractFlag(args, "--concurrency"), "--concurrency", {
+    defaultValue: 4,
+    min: 1,
+    max: SANDBOX_LIMITS.maxConcurrency,
+  });
   // Auto-derive vCPUs from concurrency if not explicitly set (max 8, must be even)
-  const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
+  const derivedVcpus = Math.min(Math.ceil(concurrency / 2) * 2, SANDBOX_LIMITS.maxVcpus);
+  const vcpus = boundedInt(opts.vcpus, "--vcpus", {
+    defaultValue: derivedVcpus,
+    min: 1,
+    max: SANDBOX_LIMITS.maxVcpus,
+  });
   const agentType = resolveAgentType(extractFlag(args, "--agent"));
   return {
     projectId,
     command: subcommand,
-    sandboxCount: opts.sandboxes ?? 1,
+    sandboxCount: boundedInt(opts.sandboxes, "--sandboxes", {
+      defaultValue: 1,
+      min: 1,
+      max: SANDBOX_LIMITS.maxSandboxes,
+    }),
     vcpus,
     // Extract key values from passthrough args for orchestrator/partitioner use
-    limit: parseInt(extractFlag(args, "--limit") ?? "0", 10) || undefined,
+    limit: parseBoundedOptionalFlag(extractFlag(args, "--limit"), "--limit", {
+      min: 1,
+      max: SANDBOX_LIMITS.maxLimit,
+    }),
     concurrency,
-    batchSize: parseInt(extractFlag(args, "--batch-size") ?? "5", 10) || 5,
+    batchSize: parseBoundedFlag(extractFlag(args, "--batch-size"), "--batch-size", {
+      defaultValue: 5,
+      min: 1,
+      max: SANDBOX_LIMITS.maxBatchSize,
+    }),
     agentType,
     model: extractFlag(args, "--model") ?? defaultModelForAgent(agentType),
     snapshotId: opts.snapshotId,
@@ -83,7 +110,11 @@ function buildConfig(
     minSeverity: extractFlag(args, "--min-severity") ?? extractFlag(args, "--severity"),
     filter: extractFlag(args, "--filter"),
     matchers: extractFlag(args, "--matchers"),
-    timeout: opts.timeout ?? 5 * 60 * 60 * 1000,
+    timeout: boundedInt(opts.timeout, "--timeout", {
+      defaultValue: 5 * 60 * 60 * 1000,
+      min: SANDBOX_LIMITS.minTimeoutMs,
+      max: SANDBOX_LIMITS.maxTimeoutMs,
+    }),
     extraArgs: args,
   };
 }
@@ -140,6 +171,11 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   }
 
   const projectId = resolveProjectId(opts.projectId);
+  if (opts.snapshotId && !opts.trustSnapshotId) {
+    throw new Error(
+      "--snapshot-id restores executable VM state. Re-run without it, or pass --trust-snapshot-id only for snapshots you created in this workspace.",
+    );
+  }
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
 
   // Preflight: fail fast with an actionable message before we spend ~30s

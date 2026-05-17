@@ -52,6 +52,12 @@ export interface MatcherPlugin {
    */
   requires?: MatcherGate;
   /**
+   * Deliberately replace a matcher with the same slug. Built-in slug
+   * overrides are blocked unless this is set, so a plugin cannot silently
+   * suppress coverage by registering a no-op `rce`, `xss`, etc.
+   */
+  allowOverride?: boolean;
+  /**
    * Optional inline test cases. Each string is a snippet that this
    * matcher MUST flag (i.e. produce ≥ 1 candidate for). A single
    * discovery test (`packages/scanner/src/__tests__/matcher-examples.test.ts`)

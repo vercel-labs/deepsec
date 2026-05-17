@@ -88,7 +88,7 @@ export default defineConfig({
     expect(filesCount).toBeGreaterThan(0);
   });
 
-  it("loads deepsec.config.ts from cwd via the bundle", () => {
+  it("metadata commands do not execute deepsec.config.ts from cwd", () => {
     const cwd = makeWorkspace();
     fs.writeFileSync(
       path.join(cwd, "deepsec.config.ts"),
@@ -99,8 +99,22 @@ export default defineConfig({
 });`,
     );
 
-    const { stderr } = runBundle(["--help"], { cwd });
-    expect(stderr).toContain("[config-loaded-marker]");
+    const { status, stderr } = runBundle(["--help"], { cwd });
+    expect(status).toBe(0);
+    expect(stderr).not.toContain("[config-loaded-marker]");
+  });
+
+  it("subcommand help does not execute deepsec.config.ts from cwd", () => {
+    const cwd = makeWorkspace();
+    fs.writeFileSync(
+      path.join(cwd, "deepsec.config.ts"),
+      `throw new Error("config should not load for subcommand help");`,
+    );
+
+    const { status, stdout, stderr } = runBundle(["scan", "--help"], { cwd });
+    expect(status).toBe(0);
+    expect(stdout).toContain("scan");
+    expect(stderr).not.toContain("config should not load");
   });
 
   it("activates an inline plugin declared in deepsec.config.ts", () => {
@@ -160,7 +174,7 @@ export default defineConfig({
       expect(stdout).toContain("webapp-debug-flag");
       expect(stdout).toContain("webapp-route-no-rate-limit");
     } finally {
-      fs.rmSync(link, { force: true });
+      if (fs.existsSync(link)) fs.unlinkSync(link);
       fs.rmSync(path.join(sampleDir, "data"), { recursive: true, force: true });
     }
   });
@@ -208,7 +222,7 @@ export default defineConfig({
       const deepsecPkg = JSON.parse(
         fs.readFileSync(path.join(ROOT, "packages/deepsec/package.json"), "utf-8"),
       );
-      expect(pkg.dependencies.deepsec).toBe(`^${deepsecPkg.version}`);
+      expect(pkg.dependencies.deepsec).toBe(deepsecPkg.version);
       // packageManager: pinned to pnpm so a parent repo's `packageManager`
       // (e.g. yarn) doesn't make pnpm refuse to install in `.deepsec/`.
       expect(pkg.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);

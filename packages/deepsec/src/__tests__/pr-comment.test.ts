@@ -144,4 +144,39 @@ describe("renderPrComment()", () => {
     expect(md!).not.toContain("Stale finding from older run");
     expect(md!).toContain("git-diff:HEAD~1");
   });
+
+  it("escapes model-controlled markdown in PR comments", () => {
+    const { projectId } = setupProject();
+
+    writeFileRecord({
+      filePath: "src/a.ts",
+      projectId,
+      candidates: [],
+      lastScannedAt: new Date().toISOString(),
+      lastScannedRunId: "r0",
+      fileHash: "x",
+      findings: [
+        {
+          severity: "HIGH",
+          vulnSlug: "</sub><img src=x>",
+          title: "@team <img src=x onerror=alert(1)>",
+          description: "![leak](https://evil.example/x) @admin",
+          lineNumbers: [1],
+          recommendation: "<script>alert(1)</script>",
+          confidence: "high",
+          producedByRunId: "r1",
+        },
+      ],
+      analysisHistory: [],
+      status: "analyzed",
+    });
+
+    const md = renderPrComment({ projectId, runId: "r1", source: "</sub><img src=x>" });
+    expect(md).not.toContain("<img");
+    expect(md).not.toContain("</sub><img");
+    expect(md).not.toContain("<script>");
+    expect(md).not.toContain("![leak]");
+    expect(md).not.toContain("@admin");
+    expect(md).toContain("&#64;admin");
+  });
 });

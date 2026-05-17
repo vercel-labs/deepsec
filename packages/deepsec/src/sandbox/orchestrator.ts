@@ -46,7 +46,7 @@ function buildSandboxInvocation(
     tail.push("--manifest", manifestPath);
   }
   for (const arg of config.extraArgs) {
-    tail.push(...arg.split(/\s+/).filter(Boolean));
+    tail.push(arg);
   }
 
   if (mode === "installed") {
@@ -244,6 +244,7 @@ async function bootstrapAndSpawn(
         sandboxId: sandbox.sandboxId,
         status: "setup",
         manifest: partition,
+        command: config.command,
       };
     } catch (err: any) {
       const parts: string[] = [];
@@ -260,6 +261,7 @@ async function bootstrapAndSpawn(
         sandboxId: "",
         status: "error" as const,
         manifest: partition,
+        command: config.command,
         error: errMsg,
       } satisfies SandboxInstance;
     }
@@ -464,7 +466,10 @@ export async function collect(
 
       onLog(`[sandbox-${entry.index}] Complete, downloading results...`);
       try {
-        await downloadResults(sandbox, entry.index, projectId, onLog);
+        await downloadResults(sandbox, entry.index, projectId, onLog, {
+          allowedFiles: entry.manifest,
+          command: state.command,
+        });
       } catch (err) {
         // The sandbox is the trust boundary; a download failure means we
         // either don't have the analysis output or it was rejected. Either
@@ -569,7 +574,10 @@ export async function orchestrate(
     // as a clean run with empty findings.
     if (inst.status !== "error") {
       try {
-        await downloadResults(inst.sandbox, inst.index, config.projectId, onLog);
+        await downloadResults(inst.sandbox, inst.index, config.projectId, onLog, {
+          allowedFiles: inst.manifest,
+          command: config.command,
+        });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         onLog(`[sandbox-${inst.index}] Final download failed: ${errMsg}`);
@@ -670,6 +678,8 @@ async function streamDownloadLoop(
       const count = await downloadResults(inst.sandbox, inst.index, projectId, onLog, {
         advanceMarker: true,
         quiet: true,
+        allowedFiles: inst.manifest,
+        command: inst.command,
       });
       const dt = Date.now() - tStart;
       if (count > 0) onLog(`[sandbox-${inst.index}] streamed ${count} file(s) in ${dt}ms`);

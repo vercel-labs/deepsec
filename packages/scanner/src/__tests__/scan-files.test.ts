@@ -47,6 +47,7 @@ describe("scanFiles()", () => {
     });
 
     expect(result.filesScanned).toBe(2);
+    expect(result.skippedFiles).toEqual([]);
 
     const records = loadAllFileRecords(projectId);
     expect(records).toHaveLength(2);
@@ -81,7 +82,10 @@ describe("scanFiles()", () => {
       root,
       filePaths: ["real.ts", "ghost.ts"],
     });
-    expect(result.filesScanned).toBe(2);
+    expect(result.filesScanned).toBe(1);
+    expect(result.skippedFiles).toEqual([
+      { filePath: "ghost.ts", reason: "unreadable, unsafe, binary, or oversized" },
+    ]);
     // The ghost path produces no record.
     const records = loadAllFileRecords(projectId);
     expect(records.map((r) => r.filePath)).toEqual(["real.ts"]);

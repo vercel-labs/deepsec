@@ -212,12 +212,44 @@ describe("applyAiGatewayDefaults", () => {
     expect(process.env.OPENAI_API_KEY).toBe("gw-key");
   });
 
-  it("does not overwrite an explicit ANTHROPIC_BASE_URL pointing direct-to-provider", async () => {
+  it("forces gateway base URL when it mints the Anthropic token from AI_GATEWAY_API_KEY", async () => {
     process.env.AI_GATEWAY_API_KEY = "gw-key";
     process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
     await applyAiGatewayDefaults();
-    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("gw-key");
+    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://ai-gateway.vercel.sh");
     expect(process.env.OPENAI_BASE_URL).toBe("https://ai-gateway.vercel.sh/v1");
+  });
+
+  it("preserves an explicit Anthropic token and direct provider base URL", async () => {
+    process.env.AI_GATEWAY_API_KEY = "gw-key";
+    process.env.ANTHROPIC_AUTH_TOKEN = "explicit-anthropic";
+    process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+    await applyAiGatewayDefaults();
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("explicit-anthropic");
+    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
+    expect(process.env.OPENAI_API_KEY).toBe("gw-key");
+    expect(process.env.OPENAI_BASE_URL).toBe("https://ai-gateway.vercel.sh/v1");
+  });
+
+  it("does not route an explicit Anthropic token through the gateway by default", async () => {
+    process.env.AI_GATEWAY_API_KEY = "gw-key";
+    process.env.ANTHROPIC_AUTH_TOKEN = "explicit-anthropic";
+    await applyAiGatewayDefaults();
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("explicit-anthropic");
+    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(process.env.OPENAI_API_KEY).toBe("gw-key");
+    expect(process.env.OPENAI_BASE_URL).toBe("https://ai-gateway.vercel.sh/v1");
+  });
+
+  it("does not route an explicit OpenAI token through the gateway by default", async () => {
+    process.env.AI_GATEWAY_API_KEY = "gw-key";
+    process.env.OPENAI_API_KEY = "explicit-openai";
+    await applyAiGatewayDefaults();
+    expect(process.env.OPENAI_API_KEY).toBe("explicit-openai");
+    expect(process.env.OPENAI_BASE_URL).toBeUndefined();
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("gw-key");
+    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://ai-gateway.vercel.sh");
   });
 
   it("falls back to VERCEL_OIDC_TOKEN when AI_GATEWAY_API_KEY is unset", async () => {

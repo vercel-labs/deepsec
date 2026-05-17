@@ -103,6 +103,34 @@ describe("detectTech", () => {
     const tags = detectTech(tmpRoot).tags;
     expect(tags).toEqual(expect.arrayContaining(["nextjs", "django", "rails"]));
   });
+
+  it("detects directory sentinels that are not regular files", () => {
+    fs.mkdirSync(path.join(tmpRoot, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "main.tf"), 'resource "x" "y" {}\n');
+    fs.mkdirSync(path.join(tmpRoot, "force-app"), { recursive: true });
+
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toContain("github-actions");
+    expect(tags).toContain("terraform");
+    expect(tags).toContain("salesforce");
+  });
+
+  it("does not follow symlinked manifest files outside the project root", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-detect-outside-"));
+    try {
+      fs.writeFileSync(
+        path.join(outside, "package.json"),
+        JSON.stringify({ dependencies: { next: "15.0.0" } }),
+      );
+      fs.symlinkSync(path.join(outside, "package.json"), path.join(tmpRoot, "package.json"));
+
+      const tags = detectTech(tmpRoot).tags;
+      expect(tags).not.toContain("node");
+      expect(tags).not.toContain("nextjs");
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("evaluateGate", () => {
@@ -136,6 +164,31 @@ describe("evaluateGate", () => {
       sentinelContains: (_p: string, c: string) => c.includes("laravel/"),
     };
     expect(evaluateGate(gate, detected, tmpRoot)).toBe(false);
+  });
+
+  it("treats symlinked sentinel files as absent", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-gate-outside-"));
+    try {
+      fs.writeFileSync(
+        path.join(outside, "composer.json"),
+        '{"require":{"laravel/framework":"^11"}}',
+      );
+      fs.symlinkSync(path.join(outside, "composer.json"), path.join(tmpRoot, "composer.json"));
+      const detected = detectTech(tmpRoot);
+
+      expect(
+        evaluateGate(
+          {
+            sentinelFiles: ["composer.json"],
+            sentinelContains: (_p: string, c: string) => c.includes("laravel/"),
+          },
+          detected,
+          tmpRoot,
+        ),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("treats tech and sentinelFiles as a union (either passes)", () => {
@@ -186,6 +239,30 @@ describe("scan() honors every explicitly-requested matcher slug", () => {
     const dataDir = path.resolve("data", "matcher-honor-test");
     if (fs.existsSync(dataDir)) {
       fs.rmSync(dataDir, { recursive: true });
+    }
+  });
+
+  it("reports unreadable or unsafe files skipped during full scans", async () => {
+    const { scan } = await import("../index.js");
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-skip-outside-"));
+    try {
+      fs.writeFileSync(path.join(outside, "secret.ts"), "export const x = 1;\n");
+      fs.symlinkSync(path.join(outside, "secret.ts"), path.join(tmpRoot, "linked.ts"));
+
+      const projectId = `skip-${Date.now().toString(36)}`;
+      const result = await scan({
+        projectId,
+        root: tmpRoot,
+        matcherSlugs: ["xss"],
+      });
+
+      expect(result.skippedFiles).toEqual([
+        { filePath: "linked.ts", reason: "unreadable, unsafe, binary, or oversized" },
+      ]);
+      const projectDataDir = path.resolve("data", projectId);
+      if (fs.existsSync(projectDataDir)) fs.rmSync(projectDataDir, { recursive: true });
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
     }
   });
 });

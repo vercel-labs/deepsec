@@ -287,9 +287,27 @@ async function processDirectMode(opts: Parameters<typeof processCommand>[0]) {
   }
   console.log(`  Source: ${resolved.sourceLabel}`);
   console.log(`  Files: ${resolved.filePaths.length}`);
+  if (resolved.skipped.length > 0) {
+    const byReason = new Map<string, number>();
+    for (const s of resolved.skipped) byReason.set(s.reason, (byReason.get(s.reason) ?? 0) + 1);
+    console.log(
+      `  Skipped: ${resolved.skipped.length} (${[...byReason].map(([k, v]) => `${k}: ${v}`).join(", ")})`,
+    );
+  }
   console.log(`  Agent: ${agentType} (${model})`);
   console.log(`  Root: ${rootPath}`);
   console.log();
+
+  const unsafeSkipped = resolved.skipped.filter((s) => s.reason !== "ignored");
+  if (unsafeSkipped.length > 0) {
+    console.log(
+      `${RED}Refusing direct process because ${unsafeSkipped.length} requested file(s) were unsafe or unavailable.${RESET}`,
+    );
+    for (const s of unsafeSkipped.slice(0, 10)) {
+      console.log(`  ${s.path}: ${s.reason}`);
+    }
+    process.exit(1);
+  }
 
   if (resolved.filePaths.length === 0) {
     console.log(`${YELLOW}No files matched ${resolved.sourceLabel} (after ignore filter).${RESET}`);
@@ -309,6 +327,15 @@ async function processDirectMode(opts: Parameters<typeof processCommand>[0]) {
   console.log(
     `  ${DIM}${scanResult.candidateCount} candidate(s) across ${scanResult.filesScanned} file(s)${RESET}`,
   );
+  if (scanResult.skippedFiles.length > 0) {
+    console.log(
+      `${RED}Scan skipped ${scanResult.skippedFiles.length} listed file(s); refusing to continue.${RESET}`,
+    );
+    for (const s of scanResult.skippedFiles.slice(0, 10)) {
+      console.log(`  ${s.filePath}: ${s.reason}`);
+    }
+    process.exit(1);
+  }
   console.log();
 
   // Now investigate. process() loads the records scanFiles wrote.

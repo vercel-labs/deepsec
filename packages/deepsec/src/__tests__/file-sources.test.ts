@@ -65,6 +65,16 @@ describe("resolveFiles()", () => {
     expect(sourceLabel).toBe("git-diff:HEAD~1");
   });
 
+  it("--diff rejects ref-like option injection", () => {
+    const root = tempRepo();
+    write(root, "src/a.ts", "1\n");
+    gitCommit(root, "init");
+
+    expect(() => resolveFiles({ rootPath: root, diff: "--output=/tmp/pwn" })).toThrow(
+      /Invalid --diff ref/,
+    );
+  });
+
   it("filters out IGNORE_DIRS by default", () => {
     const root = tempRepo();
     write(root, "src/real.ts", "1\n");
@@ -96,11 +106,12 @@ describe("resolveFiles()", () => {
     const root = tempRepo();
     write(root, "real.ts", "x\n");
 
-    const { filePaths, sourceLabel } = resolveFiles({
+    const { filePaths, skipped, sourceLabel } = resolveFiles({
       rootPath: root,
       files: ["real.ts", "ghost.ts"],
     });
     expect(filePaths).toEqual(["real.ts"]);
+    expect(skipped).toEqual([{ path: "ghost.ts", reason: "missing" }]);
     expect(sourceLabel).toBe("files:cli");
   });
 
@@ -120,11 +131,59 @@ describe("resolveFiles()", () => {
     const root = tempRepo();
     write(root, "real.ts", "x\n");
 
-    const { filePaths } = resolveFiles({
+    const { filePaths, skipped } = resolveFiles({
       rootPath: root,
       files: ["./real.ts", "../escape.ts"],
     });
     expect(filePaths).toEqual(["real.ts"]);
+    expect(skipped).toEqual([{ path: "../escape.ts", reason: "outside root" }]);
+  });
+
+  it("drops symlinks and paths whose real target escapes the root", () => {
+    const root = tempRepo();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-outside-"));
+    cleanups.push(() => fs.rmSync(outside, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(outside, "secret.ts"), "secret\n");
+    fs.symlinkSync(path.join(outside, "secret.ts"), path.join(root, "linked.ts"));
+    write(root, "real.ts", "x\n");
+
+    const { filePaths, skipped } = resolveFiles({
+      rootPath: root,
+      files: ["real.ts", "linked.ts"],
+      noIgnore: true,
+    });
+    expect(filePaths).toEqual(["real.ts"]);
+    expect(skipped).toEqual([{ path: "linked.ts", reason: "symlink" }]);
+  });
+
+  it("preserves git paths with spaces and newlines via NUL-delimited output", () => {
+    const root = tempRepo();
+    const spacey = "src/ spaced name.ts";
+    const newline = "src/line\nbreak.ts";
+    write(root, spacey, "1\n");
+    write(root, newline, "1\n");
+    gitCommit(root, "init");
+
+    write(root, spacey, "2\n");
+    write(root, newline, "2\n");
+    gitCommit(root, "edit");
+
+    const { filePaths, skipped } = resolveFiles({ rootPath: root, diff: "HEAD~1" });
+    expect(filePaths.sort()).toEqual([newline, spacey].sort());
+    expect(skipped).toEqual([]);
+  });
+
+  it("does not reinterpret POSIX literal backslashes from git as separators", () => {
+    const root = tempRepo();
+    const literalBackslash = "src\\literal.ts";
+    write(root, literalBackslash, "1\n");
+    gitCommit(root, "init");
+    write(root, literalBackslash, "2\n");
+    gitCommit(root, "edit");
+
+    const { filePaths, skipped } = resolveFiles({ rootPath: root, diff: "HEAD~1" });
+    expect(filePaths).toEqual([]);
+    expect(skipped).toEqual([{ path: literalBackslash, reason: "unsafe path" }]);
   });
 
   it("dedupes overlapping inputs", () => {

@@ -46,9 +46,12 @@ export interface RunMeta {
   };
   stats: {
     filesScanned?: number;
+    filesSkipped?: number;
     candidatesFound?: number;
     filesProcessed?: number;
     findingsCount?: number;
+    errorBatchCount?: number;
+    quotaExhaustedSource?: string;
     totalCostUsd?: number;
     totalInputTokens?: number;
     totalOutputTokens?: number;

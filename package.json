@@ -14,7 +14,7 @@
     "url": "https://github.com/vercel-labs/deepsec"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "pnpm -r build",
     "bundle": "pnpm --filter deepsec bundle",
     "deepsec": "tsx packages/deepsec/src/cli.ts",
     "test": "vitest run",
@@ -48,5 +48,13 @@
   },
   "dependencies": {
     "deepsec": "workspace:*"
+  },
+  "pnpm": {
+    "overrides": {
+      "@anthropic-ai/sdk": "0.96.0",
+      "fast-uri": "3.1.2",
+      "hono": "4.12.19",
+      "ip-address": "10.2.0"
+    }
   }
 }

@@ -32,7 +32,9 @@ import type {
  * point at a separately-installed `@anthropic-ai/claude-code` and
  * sidestep the resolution path entirely.
  */
-const CLAUDE_CODE_EXECUTABLE = process.env.CLAUDE_CODE_EXECUTABLE;
+function claudeCodeExecutable(): string | undefined {
+  return process.env.CLAUDE_CODE_EXECUTABLE;
+}
 
 /**
  * Variables the Claude Code CLI / spawned shell legitimately needs.
@@ -65,9 +67,6 @@ const CLAUDE_ENV_ALLOWLIST = new Set<string>([
   "TMP",
   "TEMP",
   "PWD",
-  "NODE_PATH",
-  "NODE_OPTIONS",
-  "NPM_CONFIG_USERCONFIG",
   "DEBUG_CLAUDE_AGENT_SDK",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_DEBUG_LOGS_DIR",
@@ -151,7 +150,7 @@ async function runRefusalFollowUp(
         resume: sessionId,
         thinking: { type: "adaptive" },
         effort: "low",
-        ...(CLAUDE_CODE_EXECUTABLE ? { pathToClaudeCodeExecutable: CLAUDE_CODE_EXECUTABLE } : {}),
+        ...(claudeCodeExecutable() ? { pathToClaudeCodeExecutable: claudeCodeExecutable() } : {}),
         env: buildClaudeEnv(),
         sandbox: buildSandbox(),
       },
@@ -226,8 +225,8 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
             model,
             thinking: { type: "adaptive" },
             effort: "max",
-            ...(CLAUDE_CODE_EXECUTABLE
-              ? { pathToClaudeCodeExecutable: CLAUDE_CODE_EXECUTABLE }
+            ...(claudeCodeExecutable()
+              ? { pathToClaudeCodeExecutable: claudeCodeExecutable() }
               : {}),
             env: buildClaudeEnv(),
             sandbox: buildSandbox(),
@@ -454,8 +453,8 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
             model,
             thinking: { type: "adaptive" },
             effort: "max",
-            ...(CLAUDE_CODE_EXECUTABLE
-              ? { pathToClaudeCodeExecutable: CLAUDE_CODE_EXECUTABLE }
+            ...(claudeCodeExecutable()
+              ? { pathToClaudeCodeExecutable: claudeCodeExecutable() }
               : {}),
             env: buildClaudeEnv(),
             sandbox: buildSandbox(),

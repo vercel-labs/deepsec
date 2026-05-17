@@ -1,12 +1,46 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { FileRecord, Finding, Severity } from "@deepsec/core";
-import { loadAllFileRecords, readProjectConfig, reportJsonPath, reportMdPath } from "@deepsec/core";
+import {
+  loadAllFileRecords,
+  readProjectConfig,
+  reportJsonPath,
+  reportMdPath,
+  writeDataTextAtomic,
+} from "@deepsec/core";
 import { BOLD, DIM, RESET, severityColor } from "../formatters.js";
 import { resolveProjectId } from "../resolve-project-id.js";
 
 const ACTIONABLE_SEVERITIES: Severity[] = ["CRITICAL", "HIGH", "MEDIUM", "HIGH_BUG", "BUG"];
 const STDOUT_PER_SEVERITY_LIMIT = 10;
+
+function escapeMarkdownText(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/([`*_{}[\]()#+\-.!|])/g, "\\$1")
+    .replaceAll("@", "&#64;");
+}
+
+function inlineCode(value: string): string {
+  const normalized = value.replace(/\r?\n/g, " ");
+  if (!normalized.includes("`")) return `\`${normalized}\``;
+  return `\`\` ${normalized.replaceAll("`", "'")} \`\``;
+}
+
+function lineLabel(lines: number[]): string {
+  return lines.length > 0 ? lines.join(", ") : "n/a";
+}
+
+function safeConsoleText(value: string, maxChars = 220): string {
+  const cleaned = value
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    .replace(/\r?\n/g, " ")
+    .replace(/^::/, ": :")
+    .trim();
+  return cleaned.length <= maxChars ? cleaned : `${cleaned.slice(0, maxChars)}...`;
+}
 
 function generateMarkdown(records: FileRecord[], projectId: string): string {
   const allFindings: (Finding & { filePath: string })[] = [];
@@ -32,7 +66,7 @@ function generateMarkdown(records: FileRecord[], projectId: string): string {
 
   let md = `# Vulnerability Scan Report\n\n`;
   md += `| Field | Value |\n|-------|-------|\n`;
-  md += `| Project | ${projectId} |\n`;
+  md += `| Project | ${escapeMarkdownText(projectId)} |\n`;
   md += `| Date | ${new Date().toISOString()} |\n`;
   md += `| Files tracked | ${records.length} |\n`;
   md += `| Files analyzed | ${analyzedCount} |\n`;
@@ -53,18 +87,18 @@ function generateMarkdown(records: FileRecord[], projectId: string): string {
 
     md += `## ${severity} (${findings.length})\n\n`;
     for (const f of findings) {
-      md += `### ${f.title}\n\n`;
+      md += `### ${escapeMarkdownText(f.title)}\n\n`;
       const record = records.find((r) => r.filePath === f.filePath);
-      md += `- **File:** \`${f.filePath}\`\n`;
+      md += `- **File:** ${inlineCode(f.filePath)}\n`;
       if (record?.gitInfo?.recentCommitters?.length) {
         const committers = record.gitInfo.recentCommitters
-          .map((c) => `${c.name} <${c.email}>`)
+          .map((c) => `${escapeMarkdownText(c.name)} ${inlineCode(c.email)}`)
           .join(", ");
         md += `- **Recent committers:** ${committers}\n`;
       }
-      md += `- **Lines:** ${f.lineNumbers.join(", ")}\n`;
-      md += `- **Slug:** ${f.vulnSlug}\n`;
-      md += `- **Confidence:** ${f.confidence}\n`;
+      md += `- **Lines:** ${lineLabel(f.lineNumbers)}\n`;
+      md += `- **Slug:** ${inlineCode(f.vulnSlug)}\n`;
+      md += `- **Confidence:** ${escapeMarkdownText(f.confidence)}\n`;
       if (f.revalidation) {
         const v = f.revalidation;
         const icon =
@@ -74,10 +108,10 @@ function generateMarkdown(records: FileRecord[], projectId: string): string {
               ? "~~false positive~~"
               : "uncertain";
         md += `- **Revalidation:** ${icon}\n`;
-        md += `- **Reasoning:** ${v.reasoning}\n`;
+        md += `- **Reasoning:** ${escapeMarkdownText(v.reasoning)}\n`;
       }
-      md += `\n${f.description}\n\n`;
-      md += `**Recommendation:** ${f.recommendation}\n\n`;
+      md += `\n${escapeMarkdownText(f.description)}\n\n`;
+      md += `**Recommendation:** ${escapeMarkdownText(f.recommendation)}\n\n`;
       md += `---\n\n`;
     }
   }
@@ -123,7 +157,6 @@ export async function reportCommand(opts: { projectId?: string; runId?: string }
   );
 
   const jsonPath = reportJsonPath(projectId, opts.runId);
-  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
   const reportData = {
     projectId,
     generatedAt: new Date().toISOString(),
@@ -143,10 +176,10 @@ export async function reportCommand(opts: { projectId?: string; runId?: string }
       analysisHistory: r.analysisHistory,
     })),
   };
-  fs.writeFileSync(jsonPath, JSON.stringify(reportData, null, 2) + "\n");
+  writeDataTextAtomic(jsonPath, JSON.stringify(reportData, null, 2) + "\n");
 
   const mdPath = reportMdPath(projectId, opts.runId);
-  fs.writeFileSync(mdPath, generateMarkdown(records, projectId));
+  writeDataTextAtomic(mdPath, generateMarkdown(records, projectId));
 
   printStdoutSummary({
     projectId,
@@ -201,8 +234,8 @@ function printStdoutSummary(args: {
     console.log(`${severityColor(severity)}${BOLD}${severity}${RESET} (${findings.length})`);
     for (const f of findings.slice(0, STDOUT_PER_SEVERITY_LIMIT)) {
       const lines = f.lineNumbers.length > 0 ? `:${f.lineNumbers[0]}` : "";
-      console.log(`  • ${f.title}`);
-      console.log(`    ${DIM}${f.filePath}${lines}${RESET}`);
+      console.log(`  • ${safeConsoleText(f.title)}`);
+      console.log(`    ${DIM}${safeConsoleText(f.filePath, 300)}${lines}${RESET}`);
     }
     const remaining = findings.length - STDOUT_PER_SEVERITY_LIMIT;
     if (remaining > 0) {

@@ -35,6 +35,7 @@ interface ExportedFinding {
   metadata: {
     projectId: string;
     filePath: string;
+    rawTitle?: string;
     lineNumbers: number[];
     severity: Severity;
     vulnSlug: string;
@@ -48,6 +49,36 @@ interface ExportedFinding {
     githubUrl?: string;
     owners: OwnerSummary;
   };
+}
+
+function escapeMarkdownText(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/([`*_{}[\]()#+\-.!|])/g, "\\$1")
+    .replaceAll("@", "&#64;");
+}
+
+function inlineCode(value: string): string {
+  const normalized = value.replace(/\r?\n/g, " ");
+  if (!normalized.includes("`")) return `\`${normalized}\``;
+  return `\`\` ${normalized.replaceAll("`", "'")} \`\``;
+}
+
+function lineLabel(lines: number[]): string {
+  return lines.length > 0 ? lines.join(", ") : "n/a";
+}
+
+function safeIssueTitle(value: string): string {
+  const cleaned = value
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    .replace(/\r?\n/g, " ")
+    .replace(/^::/, ": :")
+    .trim();
+  return cleaned.length <= 240 ? cleaned : `${cleaned.slice(0, 240)}...`;
 }
 
 function summarizeOwners(record: FileRecord): OwnerSummary {
@@ -110,12 +141,29 @@ function makeGithubLink(
   lines: number[],
 ): string | undefined {
   if (!repoUrl) return undefined;
-  const base = repoUrl.replace(/\/+$/, "").replace(/\/blob\/[^/]+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(repoUrl);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") return undefined;
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) return undefined;
+  const [owner, repo] = parts;
+  const branchParts = parts[2] === "blob" && parts.length > 3 ? parts.slice(3) : ["main"];
+  const base = `${parsed.origin}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const firstLine = lines[0];
   const lastLine = lines[lines.length - 1];
-  const anchor = firstLine === lastLine ? `#L${firstLine}` : `#L${firstLine}-L${lastLine}`;
-  const branch = repoUrl.match(/\/blob\/([^/]+)/)?.[1] ?? "main";
-  return `${base}/blob/${branch}/${filePath}${anchor}`;
+  const anchor =
+    Number.isInteger(firstLine) && Number.isInteger(lastLine)
+      ? firstLine === lastLine
+        ? `#L${firstLine}`
+        : `#L${firstLine}-L${lastLine}`
+      : "";
+  const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+  const encodedBranch = branchParts.map(encodeURIComponent).join("/");
+  return `${base}/blob/${encodedBranch}/${encodedPath}${anchor}`;
 }
 
 function buildDescription(
@@ -126,13 +174,13 @@ function buildDescription(
   githubUrl?: string,
 ): string {
   const head = githubUrl
-    ? `**File:** [\`${record.filePath}\`](${githubUrl}) (lines ${finding.lineNumbers.join(", ")})`
-    : `**File:** \`${record.filePath}\` (lines ${finding.lineNumbers.join(", ")})`;
+    ? `**File:** [${escapeMarkdownText(record.filePath)}](${githubUrl}) (lines ${lineLabel(finding.lineNumbers)})`
+    : `**File:** ${inlineCode(record.filePath)} (lines ${lineLabel(finding.lineNumbers)})`;
 
   const parts: string[] = [
     head,
-    `**Project:** ${projectId}`,
-    `**Severity:** ${finding.severity}  •  **Confidence:** ${finding.confidence}  •  **Slug:** \`${finding.vulnSlug}\``,
+    `**Project:** ${inlineCode(projectId)}`,
+    `**Severity:** ${finding.severity}  •  **Confidence:** ${escapeMarkdownText(finding.confidence)}  •  **Slug:** ${inlineCode(finding.vulnSlug)}`,
   ];
 
   if (owners.assignee || owners.teams.length > 0 || owners.oncall.length > 0) {
@@ -140,14 +188,16 @@ function buildDescription(
     if (owners.assignee) {
       parts.push(
         "",
-        `**Suggested assignee:** \`${owners.assignee}\` _(via ${owners.assigneeSource})_`,
+        `**Suggested assignee:** ${inlineCode(owners.assignee)} _(via ${owners.assigneeSource})_`,
       );
     }
     if (owners.teams.length > 0) {
       parts.push(
         "",
         "**Teams:**",
-        ...owners.teams.slice(0, 3).map((t) => `- ${t.name} (\`${t.slug}\`)`),
+        ...owners.teams
+          .slice(0, 3)
+          .map((t) => `- ${escapeMarkdownText(t.name)} (${inlineCode(t.slug)})`),
       );
     }
     if (owners.oncall.length > 0) {
@@ -156,14 +206,18 @@ function buildDescription(
         "**Current on-call:**",
         ...owners.oncall.slice(0, 3).map((o) => {
           const gh = o.github_username
-            ? ` • [@${o.github_username}](https://github.com/${o.github_username})`
+            ? ` • [${escapeMarkdownText(`@${o.github_username}`)}](https://github.com/${encodeURIComponent(o.github_username)})`
             : "";
-          return `- ${o.name} <${o.email}>${gh}`;
+          return `- ${escapeMarkdownText(o.name)} ${inlineCode(o.email)}${gh}`;
         }),
       );
     }
     if (owners.managers.length > 0) {
-      parts.push("", "**Managers:**", ...owners.managers.slice(0, 3).map((m) => `- <${m.email}>`));
+      parts.push(
+        "",
+        "**Managers:**",
+        ...owners.managers.slice(0, 3).map((m) => `- ${inlineCode(m.email)}`),
+      );
     }
   }
 
@@ -171,11 +225,11 @@ function buildDescription(
     "",
     "## Finding",
     "",
-    finding.description,
+    escapeMarkdownText(finding.description),
     "",
     "## Recommendation",
     "",
-    finding.recommendation,
+    escapeMarkdownText(finding.recommendation),
   );
 
   if (finding.revalidation) {
@@ -185,7 +239,7 @@ function buildDescription(
       "",
       `**Verdict:** ${finding.revalidation.verdict}`,
       "",
-      finding.revalidation.reasoning,
+      escapeMarkdownText(finding.revalidation.reasoning),
     );
   }
 
@@ -194,7 +248,10 @@ function buildDescription(
       "",
       "## Top contributors",
       "",
-      ...owners.contributors.map((c) => `- ${c.name} <${c.email}> (score: ${c.score.toFixed(2)})`),
+      ...owners.contributors.map(
+        (c) =>
+          `- ${escapeMarkdownText(c.name)} ${inlineCode(c.email)} (score: ${c.score.toFixed(2)})`,
+      ),
     );
   }
   if (owners.recentCommitters.length > 0) {
@@ -202,7 +259,9 @@ function buildDescription(
       "",
       "## Recent committers (`git log`)",
       "",
-      ...owners.recentCommitters.map((c) => `- ${c.name} <${c.email}> (${c.date.slice(0, 10)})`),
+      ...owners.recentCommitters.map(
+        (c) => `- ${escapeMarkdownText(c.name)} ${inlineCode(c.email)} (${c.date.slice(0, 10)})`,
+      ),
     );
   }
 
@@ -244,12 +303,16 @@ function findingFilename(f: ExportedFinding): string {
   return `${safeProject}-${safeSlug}-${hash}.md`;
 }
 
-function writeJson(findings: ExportedFinding[], out: string | undefined) {
+function writeJson(
+  findings: ExportedFinding[],
+  out: string | undefined,
+  log: (message?: unknown, ...optionalParams: unknown[]) => void,
+) {
   const json = JSON.stringify(findings, null, 2);
   if (out) {
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
     fs.writeFileSync(out, json + "\n");
-    console.log(`\n${GREEN}Exported ${findings.length} finding(s)${RESET} → ${BOLD}${out}${RESET}`);
+    log(`\n${GREEN}Exported ${findings.length} finding(s)${RESET} → ${BOLD}${out}${RESET}`);
   } else {
     process.stdout.write(json + "\n");
   }
@@ -257,56 +320,107 @@ function writeJson(findings: ExportedFinding[], out: string | undefined) {
 
 function writeMdDir(findings: ExportedFinding[], out: string) {
   const root = path.resolve(out);
-  fs.mkdirSync(root, { recursive: true });
+  ensurePlainDirectory(root);
 
-  // The set of files this export is authoritative for. Anything else in
-  // the severity subdirs is left over from a prior run — most often a
-  // finding that has since been revalidated as fixed/false-positive/
-  // accepted-risk and is now filtered out of the export. Without this
-  // sweep, those orphans linger forever and make the export directory
-  // misleading (the user thinks they still have unresolved findings on a
-  // file we've already patched).
-  const wantedFiles = new Set<string>();
+  const wantedRelFiles = new Set<string>();
   for (const f of findings) {
-    wantedFiles.add(path.join(root, f.metadata.severity, findingFilename(f)));
+    const rel = path.posix.join(f.metadata.severity, findingFilename(f));
+    wantedRelFiles.add(rel);
   }
 
-  // Only sweep severity subdirs we recognize — keeps an accidental
-  // `--out ~/Documents` from nuking unrelated files. Severity values are
-  // a closed enum (see `Severity` in @deepsec/core), so this list IS the
-  // namespace md-dir mode owns.
-  const ourSeverityDirs = Object.keys(SEVERITY_ORDER) as Severity[];
+  const manifestPath = path.join(root, ".deepsec-export-manifest.json");
+  const previous = readExportManifest(manifestPath);
   let droppedStale = 0;
-  for (const sev of ourSeverityDirs) {
-    const dir = path.join(root, sev);
-    if (!fs.existsSync(dir)) continue;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      const full = path.join(dir, entry.name);
-      if (!wantedFiles.has(full)) {
+  for (const rel of previous) {
+    if (wantedRelFiles.has(rel)) continue;
+    const full = path.resolve(root, rel);
+    if (!isInside(root, full)) continue;
+    try {
+      const st = fs.lstatSync(full);
+      if (st.isFile() && !st.isSymbolicLink()) {
         fs.unlinkSync(full);
         droppedStale++;
       }
-    }
-    // Drop now-empty severity dirs so a 0-finding export leaves a clean
-    // root rather than a forest of empty directories.
-    try {
-      if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
     } catch {}
+  }
+
+  for (const sev of Object.keys(SEVERITY_ORDER) as Severity[]) {
+    const dir = path.join(root, sev);
+    try {
+      const st = fs.lstatSync(dir);
+      if (st.isSymbolicLink())
+        throw new Error(`Refusing to use symlinked export directory: ${dir}`);
+      if (st.isDirectory() && fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
   }
 
   for (const f of findings) {
     const dir = path.join(root, f.metadata.severity);
-    fs.mkdirSync(dir, { recursive: true });
+    ensurePlainDirectory(dir);
     const file = path.join(dir, findingFilename(f));
-    const body = `# ${f.title}\n\n${f.description}\n`;
+    const body = `# ${escapeMarkdownText(f.title)}\n\n${f.description}\n`;
+    ensureSafeRegularTarget(root, file);
     fs.writeFileSync(file, body);
   }
+  ensureSafeRegularTarget(root, manifestPath);
+  fs.writeFileSync(
+    manifestPath,
+    JSON.stringify({ version: 1, files: [...wantedRelFiles].sort() }, null, 2) + "\n",
+  );
 
   const staleNote = droppedStale > 0 ? ` (removed ${droppedStale} stale file(s))` : "";
   console.log(
     `\n${GREEN}Exported ${findings.length} finding(s)${RESET} → ${BOLD}${root}/${RESET}${staleNote}`,
   );
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function ensurePlainDirectory(dir: string): void {
+  const parent = path.dirname(dir);
+  if (parent !== dir && !fs.existsSync(parent)) ensurePlainDirectory(parent);
+  try {
+    const st = fs.lstatSync(dir);
+    if (st.isSymbolicLink()) throw new Error(`Refusing to use symlinked export directory: ${dir}`);
+    if (!st.isDirectory()) throw new Error(`Refusing to use non-directory export path: ${dir}`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    fs.mkdirSync(dir);
+  }
+}
+
+function ensureSafeRegularTarget(root: string, file: string): void {
+  const resolved = path.resolve(file);
+  if (!isInside(root, resolved))
+    throw new Error(`Refusing to write outside export directory: ${file}`);
+  try {
+    const st = fs.lstatSync(resolved);
+    if (st.isSymbolicLink())
+      throw new Error(`Refusing to overwrite symlinked export file: ${file}`);
+    if (!st.isFile()) throw new Error(`Refusing to overwrite non-file export path: ${file}`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+}
+
+function readExportManifest(manifestPath: string): string[] {
+  try {
+    const st = fs.lstatSync(manifestPath);
+    if (st.isSymbolicLink() || !st.isFile()) return [];
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+      version?: unknown;
+      files?: unknown;
+    };
+    if (parsed.version !== 1 || !Array.isArray(parsed.files)) return [];
+    return parsed.files.filter((f): f is string => typeof f === "string" && !f.includes(".."));
+  } catch {
+    return [];
+  }
 }
 
 export async function exportCommand(opts: {
@@ -348,6 +462,7 @@ export async function exportCommand(opts: {
   if (format === "md-dir" && !opts.out) {
     throw new Error(`--format md-dir requires --out <dir>`);
   }
+  const log = format === "json" && !opts.out ? console.error : console.log;
 
   const minSeverity = opts.minSeverity as Severity | undefined;
   const onlySeverity = opts.onlySeverity as Severity | undefined;
@@ -377,34 +492,31 @@ export async function exportCommand(opts: {
   const onlySlugSet = onlySlugs?.length ? new Set(onlySlugs) : undefined;
   const skipSlugSet = skipSlugs?.length ? new Set(skipSlugs) : undefined;
 
-  console.log(`${BOLD}Exporting findings (${format})${RESET}`);
-  console.log(`  Projects: ${projectIds.join(", ") || "(none)"}`);
-  if (minSeverity) console.log(`  Min severity: ${minSeverity}`);
-  if (onlySeverity) console.log(`  Only severity: ${onlySeverity}`);
-  if (opts.discoveredToday) console.log(`  ${YELLOW}Filter: discovered today only${RESET}`);
-  if (opts.since) console.log(`  Filter: discovered since ${opts.since}`);
-  if (opts.onlyTruePositive) console.log(`  Filter: only revalidated true-positive`);
+  log(`${BOLD}Exporting findings (${format})${RESET}`);
+  log(`  Projects: ${projectIds.join(", ") || "(none)"}`);
+  if (minSeverity) log(`  Min severity: ${minSeverity}`);
+  if (onlySeverity) log(`  Only severity: ${onlySeverity}`);
+  if (opts.discoveredToday) log(`  ${YELLOW}Filter: discovered today only${RESET}`);
+  if (opts.since) log(`  Filter: discovered since ${opts.since}`);
+  if (opts.onlyTruePositive) log(`  Filter: only revalidated true-positive`);
   if (opts.includeResolved) {
-    console.log(`  Filter: including resolved verdicts (fixed/false-positive/accepted-risk)`);
+    log(`  Filter: including resolved verdicts (fixed/false-positive/accepted-risk)`);
   } else {
-    console.log(`  Filter: hiding resolved verdicts (fixed/false-positive/accepted-risk)`);
+    log(`  Filter: hiding resolved verdicts (fixed/false-positive/accepted-risk)`);
   }
   if (opts.excludeFalsePositive) {
-    console.log(
-      `  ${YELLOW}Note: --exclude-false-positive is now the default; flag is a no-op.${RESET}`,
-    );
+    log(`  ${YELLOW}Note: --exclude-false-positive is now the default; flag is a no-op.${RESET}`);
   }
-  if (onlySlugs) console.log(`  Only slugs: ${onlySlugs.join(", ")}`);
-  if (skipSlugs) console.log(`  Skip slugs: ${skipSlugs.join(", ")}`);
-  if (opts.requireOwner)
-    console.log(`  ${YELLOW}Filter: only findings with ownership data${RESET}`);
+  if (onlySlugs) log(`  Only slugs: ${onlySlugs.join(", ")}`);
+  if (skipSlugs) log(`  Skip slugs: ${skipSlugs.join(", ")}`);
+  if (opts.requireOwner) log(`  ${YELLOW}Filter: only findings with ownership data${RESET}`);
   const onlyMarker = opts.onlyMarker !== undefined ? Number(opts.onlyMarker) : undefined;
   if (onlyMarker !== undefined && !Number.isFinite(onlyMarker)) {
     throw new Error(`--only-marker must be a number, got "${opts.onlyMarker}"`);
   }
   const onlyAgent = opts.onlyAgent ? resolveAgentType(opts.onlyAgent) : undefined;
-  if (opts.onlyAgent) console.log(`  Only agent: ${opts.onlyAgent}`);
-  if (onlyMarker !== undefined) console.log(`  Only marker: ${onlyMarker}`);
+  if (opts.onlyAgent) log(`  Only agent: ${opts.onlyAgent}`);
+  if (onlyMarker !== undefined) log(`  Only marker: ${onlyMarker}`);
 
   const findings: ExportedFinding[] = [];
   let droppedNoOwner = 0;
@@ -492,7 +604,7 @@ export async function exportCommand(opts: {
         if (owners.teams.length > 0) withTeam++;
 
         findings.push({
-          title: `[${finding.severity}] ${finding.title}`,
+          title: `[${finding.severity}] ${safeIssueTitle(finding.title)}`,
           description: buildDescription(finding, record, projectId, owners, githubUrl),
           severity: finding.severity,
           labels,
@@ -500,6 +612,7 @@ export async function exportCommand(opts: {
           metadata: {
             projectId,
             filePath: record.filePath,
+            rawTitle: finding.title,
             lineNumbers: finding.lineNumbers,
             severity: finding.severity,
             vulnSlug: finding.vulnSlug,
@@ -516,7 +629,7 @@ export async function exportCommand(opts: {
         emitted++;
       }
     }
-    console.log(`  [${projectId}] ${emitted} finding(s)`);
+    log(`  [${projectId}] ${emitted} finding(s)`);
   }
 
   // Sort: severity ascending (CRITICAL first), then project, then file
@@ -532,17 +645,17 @@ export async function exportCommand(opts: {
   if (format === "md-dir") {
     writeMdDir(findings, opts.out!);
   } else {
-    writeJson(findings, opts.out);
+    writeJson(findings, opts.out, log);
   }
 
   if (findings.length > 0) {
     const pct = (n: number) => `${((n / findings.length) * 100).toFixed(0)}%`;
-    console.log();
-    console.log(`${BOLD}Ownership coverage:${RESET}`);
-    console.log(`  with assignee:    ${withAssignee}/${findings.length} (${pct(withAssignee)})`);
-    console.log(`  with owning team: ${withTeam}/${findings.length} (${pct(withTeam)})`);
+    log();
+    log(`${BOLD}Ownership coverage:${RESET}`);
+    log(`  with assignee:    ${withAssignee}/${findings.length} (${pct(withAssignee)})`);
+    log(`  with owning team: ${withTeam}/${findings.length} (${pct(withTeam)})`);
     if (droppedNoOwner > 0) {
-      console.log(`  ${YELLOW}dropped (--require-owner): ${droppedNoOwner}${RESET}`);
+      log(`  ${YELLOW}dropped (--require-owner): ${droppedNoOwner}${RESET}`);
     }
   }
 }

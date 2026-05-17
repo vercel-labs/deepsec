@@ -5,6 +5,8 @@ import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
 import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
+import { validateProjectId } from "../resolve-project-id.js";
+import { boundedInt, parseBoundedFlag, SANDBOX_LIMITS } from "../sandbox/limits.js";
 import { orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
@@ -41,7 +43,13 @@ function discoverProjects(): string[] {
   return fs
     .readdirSync(dataDir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && fs.existsSync(path.join(dataDir, e.name, "project.json")))
-    .map((e) => e.name);
+    .flatMap((e) => {
+      try {
+        return [validateProjectId(e.name)];
+      } catch {
+        return [];
+      }
+    });
 }
 
 function countEligibleFiles(
@@ -84,10 +92,27 @@ export async function sandboxAllCommand(
   }
   const command = subcommand as SandboxSubcommand;
   const passthrough = opts.args ?? [];
-  const totalSandboxes = opts.sandboxes ?? 10;
-  const concurrency = parseInt(extractFlag(passthrough, "--concurrency") ?? "4", 10) || 4;
-  const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
-  const timeout = opts.timeout ?? 5 * 60 * 60 * 1000;
+  const totalSandboxes = boundedInt(opts.sandboxes, "--sandboxes", {
+    defaultValue: 10,
+    min: 1,
+    max: SANDBOX_LIMITS.maxSandboxes,
+  });
+  const concurrency = parseBoundedFlag(extractFlag(passthrough, "--concurrency"), "--concurrency", {
+    defaultValue: 4,
+    min: 1,
+    max: SANDBOX_LIMITS.maxConcurrency,
+  });
+  const derivedVcpus = Math.min(Math.ceil(concurrency / 2) * 2, SANDBOX_LIMITS.maxVcpus);
+  const vcpus = boundedInt(opts.vcpus, "--vcpus", {
+    defaultValue: derivedVcpus,
+    min: 1,
+    max: SANDBOX_LIMITS.maxVcpus,
+  });
+  const timeout = boundedInt(opts.timeout, "--timeout", {
+    defaultValue: 5 * 60 * 60 * 1000,
+    min: SANDBOX_LIMITS.minTimeoutMs,
+    max: SANDBOX_LIMITS.maxTimeoutMs,
+  });
   const agentType = resolveAgentType(extractFlag(passthrough, "--agent"));
 
   // Same preflight as sandbox-process — fail fast before fanning out.
@@ -199,7 +224,11 @@ export async function sandboxAllCommand(
       vcpus,
       limit: undefined,
       concurrency,
-      batchSize: parseInt(extractFlag(passthrough, "--batch-size") ?? "5", 10) || 5,
+      batchSize: parseBoundedFlag(extractFlag(passthrough, "--batch-size"), "--batch-size", {
+        defaultValue: 5,
+        min: 1,
+        max: SANDBOX_LIMITS.maxBatchSize,
+      }),
       agentType,
       model: extractFlag(passthrough, "--model") ?? defaultModelForAgent(agentType),
       snapshotId: undefined,

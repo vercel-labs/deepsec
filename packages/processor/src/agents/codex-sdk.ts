@@ -216,10 +216,6 @@ const CODEX_ENV_ALLOWLIST = new Set<string>([
   "TMP",
   "TEMP",
   "PWD",
-  // Node/JS toolchain (codex CLI is node)
-  "NODE_PATH",
-  "NODE_OPTIONS",
-  "NPM_CONFIG_USERCONFIG",
   // Rust tracing (codex's Rust binary respects RUST_LOG/RUST_BACKTRACE)
   "RUST_LOG",
   "RUST_BACKTRACE",

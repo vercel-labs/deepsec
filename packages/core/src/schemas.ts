@@ -193,9 +193,12 @@ export const runMetaSchema = z.object({
     .optional(),
   stats: z.object({
     filesScanned: z.number().optional(),
+    filesSkipped: z.number().optional(),
     candidatesFound: z.number().optional(),
     filesProcessed: z.number().optional(),
     findingsCount: z.number().optional(),
+    errorBatchCount: z.number().optional(),
+    quotaExhaustedSource: z.string().optional(),
     totalCostUsd: z.number().optional(),
     totalInputTokens: z.number().optional(),
     totalOutputTokens: z.number().optional(),

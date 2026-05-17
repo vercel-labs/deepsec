@@ -53,6 +53,7 @@ export interface SandboxInstance {
   sandboxId: string;
   status: "creating" | "setup" | "running" | "collecting" | "done" | "error";
   manifest: string[];
+  command: SandboxSubcommand;
   error?: string;
 }
 

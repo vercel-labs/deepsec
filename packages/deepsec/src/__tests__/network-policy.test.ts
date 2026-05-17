@@ -79,6 +79,54 @@ describe("buildWorkerNetworkPolicy", () => {
     expect(allowedHosts(policy)).toEqual(["ai-gateway.vercel.sh", "telemetry.example.com"]);
   });
 
+  it("rejects untrusted derived AI hosts by default", () => {
+    expect(() =>
+      buildWorkerNetworkPolicy(
+        { ANTHROPIC_UPSTREAM_BASE_URL: "https://evil.example.com" },
+        "claude-agent-sdk",
+      ),
+    ).toThrow(/untrusted host/);
+  });
+
+  it("rejects non-HTTPS AI base URLs before host allowlisting", () => {
+    expect(() =>
+      buildWorkerNetworkPolicy(
+        { ANTHROPIC_UPSTREAM_BASE_URL: "http://api.anthropic.com" },
+        "claude-agent-sdk",
+      ),
+    ).toThrow(/non-HTTPS/);
+  });
+
+  it("rejects embedded credentials in AI base URLs", () => {
+    expect(() =>
+      buildWorkerNetworkPolicy({ OPENAI_BASE_URL: "https://user:pass@api.openai.com/v1" }, "codex"),
+    ).toThrow(/embedded credentials/);
+  });
+
+  it("rejects localhost and private network AI hosts", () => {
+    expect(() =>
+      buildWorkerNetworkPolicy(
+        { ANTHROPIC_UPSTREAM_BASE_URL: "https://localhost" },
+        "claude-agent-sdk",
+      ),
+    ).toThrow(/local\/private/);
+    expect(() =>
+      buildWorkerNetworkPolicy({ OPENAI_BASE_URL: "https://127.0.0.1/v1" }, "codex"),
+    ).toThrow(/local\/private/);
+    expect(() =>
+      buildWorkerNetworkPolicy({ OPENAI_BASE_URL: "https://10.0.0.5/v1" }, "codex"),
+    ).toThrow(/local\/private/);
+  });
+
+  it("rejects non-standard ports unless custom hosts were allowed from the shell", () => {
+    expect(() =>
+      buildWorkerNetworkPolicy(
+        { ANTHROPIC_UPSTREAM_BASE_URL: "https://api.anthropic.com:8443" },
+        "claude-agent-sdk",
+      ),
+    ).toThrow(/non-standard port/);
+  });
+
   it("dedupes when extras overlap with the derived host", () => {
     const policy = buildWorkerNetworkPolicy(
       { ANTHROPIC_UPSTREAM_BASE_URL: "https://api.anthropic.com" },

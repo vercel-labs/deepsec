@@ -18,9 +18,28 @@ export const TARGET_EXCLUDES = [
   "--exclude=.git",
   "--exclude=*.log",
   "--exclude=.DS_Store",
+  "--exclude=.env",
+  "--exclude=.env.*",
+  "--exclude=**/.env",
+  "--exclude=**/.env.*",
+  "--exclude=.npmrc",
+  "--exclude=**/.npmrc",
+  "--exclude=*.pem",
+  "--exclude=*.key",
+  "--exclude=*.p12",
+  "--exclude=*.pfx",
+  "--exclude=id_rsa",
+  "--exclude=id_ed25519",
 ];
 
-export const DATA_EXCLUDES: string[] = [];
+export const DATA_EXCLUDES: string[] = [
+  "--exclude=.env",
+  "--exclude=.env.*",
+  "--exclude=**/.env",
+  "--exclude=**/.env.*",
+  "--exclude=*.pem",
+  "--exclude=*.key",
+];
 
 export const DEEPSEC_APP_EXCLUDES = [
   "--exclude=node_modules",
@@ -32,7 +51,110 @@ export const DEEPSEC_APP_EXCLUDES = [
   "--exclude=data", // uploaded separately per project
   "--exclude=.DS_Store",
   "--exclude=*.log",
+  "--exclude=.env",
+  "--exclude=.env.*",
+  "--exclude=**/.env",
+  "--exclude=**/.env.*",
+  "--exclude=.vercel",
+  "--exclude=.npmrc",
+  "--exclude=**/.npmrc",
+  "--exclude=*.pem",
+  "--exclude=*.key",
+  "--exclude=*.p12",
+  "--exclude=*.pfx",
 ];
+
+const DENIED_SECRET_BASENAMES = new Set([
+  ".env",
+  ".npmrc",
+  ".yarnrc",
+  ".pypirc",
+  ".netrc",
+  "application_default_credentials.json",
+  "azureprofile.json",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "kubeconfig",
+  "credentials",
+  "service-account.json",
+  "service_account.json",
+  "secrets.json",
+  "secrets.yml",
+  "secrets.yaml",
+]);
+
+function isDeniedSecretPath(p: string): boolean {
+  const parts = p.replaceAll("\\", "/").split("/");
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    if (DENIED_SECRET_BASENAMES.has(lower)) return true;
+    if (lower.startsWith(".env.")) return true;
+    if (
+      lower.endsWith(".pem") ||
+      lower.endsWith(".key") ||
+      lower.endsWith(".p12") ||
+      lower.endsWith(".pfx")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchesExclude(relPath: string, excludes: string[]): boolean {
+  const rel = relPath.replaceAll("\\", "/");
+  const parts = rel.split("/");
+  const base = parts[parts.length - 1] ?? rel;
+  for (const ex of excludes) {
+    if (!ex.startsWith("--exclude=")) continue;
+    const pattern = ex.slice("--exclude=".length);
+    if (pattern.startsWith("**/")) {
+      const tail = pattern.slice(3);
+      if (base === tail) return true;
+      if (tail.startsWith("*") && base.endsWith(tail.slice(1))) return true;
+    } else if (pattern.startsWith("*")) {
+      if (base.endsWith(pattern.slice(1))) return true;
+    } else if (parts.includes(pattern) || base === pattern || rel === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function listRegularFilesForTar(absSourceDir: string, excludes: string[]): string[] {
+  const out: string[] = [];
+  const stack = [""];
+  while (stack.length > 0) {
+    const relDir = stack.pop()!;
+    const absDir = path.join(absSourceDir, relDir);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const rel = path.join(relDir, entry.name).replaceAll("\\", "/");
+      if (matchesExclude(rel, excludes) || isDeniedSecretPath(rel)) continue;
+      const abs = path.join(absSourceDir, rel);
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(abs);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        stack.push(rel);
+      } else if (st.isFile()) {
+        out.push(rel);
+      }
+    }
+  }
+  return out.sort();
+}
 
 export interface TarballStats {
   /**
@@ -124,8 +246,18 @@ export async function makeTarball(
     const candidates = raw.toString("utf8").split("\0").filter(Boolean);
     let skippedDeleted = 0;
     let skippedSymlink = 0;
+    let skippedSecret = 0;
+    let skippedExcluded = 0;
     const existing: string[] = [];
     for (const p of candidates) {
+      if (isDeniedSecretPath(p)) {
+        skippedSecret++;
+        continue;
+      }
+      if (matchesExclude(p, excludes)) {
+        skippedExcluded++;
+        continue;
+      }
       let st: fs.Stats;
       try {
         st = fs.lstatSync(path.join(absSourceDir, p));
@@ -145,7 +277,13 @@ export async function makeTarball(
     if (skippedSymlink > 0) {
       onLog?.(`  (skipped ${skippedSymlink} symlink(s))`);
     }
-    filteredList = Buffer.from(`${existing.join("\0")}\0`);
+    if (skippedSecret > 0) {
+      onLog?.(`  (skipped ${skippedSecret} secret-like file(s))`);
+    }
+    if (skippedExcluded > 0) {
+      onLog?.(`  (skipped ${skippedExcluded} excluded file(s))`);
+    }
+    filteredList = Buffer.from(existing.length > 0 ? `${existing.join("\0")}\0` : "");
 
     // `-C` MUST come before `-T -` in GNU tar. -T reads filenames from
     // stdin, and tar processes positional opts in argv order: anything
@@ -168,19 +306,11 @@ export async function makeTarball(
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
   } else {
-    // Same belt-and-suspenders pairing as the git branch above. Here
-    // `-C` already runs before `.` so the initial cwd never mattered
-    // for production — adding `cwd` doesn't change anything but keeps
-    // the two branches symmetric. Absolute paths everywhere (see
-    // absSourceDir comment above) so relative sourceDirs don't
-    // double-apply. Only caller of this branch today is the data dir
-    // (our own JSON output) which never has symlinks, so we don't
-    // pre-filter here — tar would archive symlinks-as-links by default
-    // anyway, which is safe; the host-side strict extract would
-    // refuse them on the way back if any ever appeared.
-    tar = spawn("tar", ["-czf", "-", ...excludes, "-C", absSourceDir, "."], {
+    const existing = listRegularFilesForTar(absSourceDir, excludes);
+    filteredList = Buffer.from(existing.length > 0 ? `${existing.join("\0")}\0` : "");
+    tar = spawn("tar", ["-czf", "-", "-C", absSourceDir, "--null", "-T", "-"], {
       cwd: absSourceDir,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
   }

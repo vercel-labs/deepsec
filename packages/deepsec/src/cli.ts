@@ -1,8 +1,3 @@
-import { config as dotenvConfig } from "dotenv";
-
-dotenvConfig({ path: ".env.local" });
-dotenvConfig(); // also load .env as fallback
-
 import { getRegistry } from "@deepsec/core";
 import { Command } from "commander";
 import { enrichCommand } from "./commands/enrich.js";
@@ -18,9 +13,13 @@ import { sandboxCommand } from "./commands/sandbox-process.js";
 import { scanCommand } from "./commands/scan.js";
 import { statusCommand } from "./commands/status.js";
 import { triageCommand } from "./commands/triage.js";
+import { loadTrustedEnvFiles } from "./env.js";
 import { loadConfig } from "./load-config.js";
 import { applyAiGatewayDefaults } from "./preflight.js";
 import { getDeepsecVersion } from "./version.js";
+
+const CONFIG_ENV_SECRET_RE =
+  /(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|AUTH|COOKIE|SESSION|API[_-]?KEY|ACCESS[_-]?KEY|OPENAI|ANTHROPIC|VERCEL|NPM|GITHUB|AWS|AZURE|GOOGLE|GCP|DEEPSEC_ALLOW_CUSTOM_AI_HOSTS)/i;
 
 const program = new Command();
 
@@ -320,6 +319,10 @@ const sandboxCmd = program
   .option("--detach", "Launch sandboxes and exit immediately (collect results later)")
   .option("--run-id <id>", "Run ID for status/collect commands")
   .option("--snapshot-id <id>", "Restore from existing snapshot")
+  .option(
+    "--trust-snapshot-id",
+    "Allow restoring from an externally supplied snapshot id. Only use for snapshots you created in this workspace.",
+  )
   .option("--save-snapshot", "Snapshot after setup for future reuse")
   .option("--keep-alive", "Don't stop sandboxes after completion")
   .option("--timeout <ms>", "Sandbox timeout in ms (default: 5 hours)", parseInt)
@@ -367,16 +370,59 @@ function printFatal(err: unknown): never {
 process.on("unhandledRejection", printFatal);
 process.on("uncaughtException", printFatal);
 
+async function withScrubbedConfigEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const before = { ...process.env };
+  for (const key of Object.keys(process.env)) {
+    if (CONFIG_ENV_SECRET_RE.test(key)) delete process.env[key];
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in before)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 async function main() {
-  // Expand AI_GATEWAY_API_KEY (or fall back to a Vercel OIDC token) into
-  // the per-SDK env vars before any command handler instantiates an agent.
-  // Must run before loadConfig in case the user's deepsec.config.ts reads
-  // these vars at module load.
-  await applyAiGatewayDefaults();
-  await loadConfig();
-  // Plugins may register their own subcommands.
-  for (const register of getRegistry().commands) {
-    register(program);
+  const args = process.argv.slice(2);
+  const firstArg = args.find((arg) => arg !== "--");
+  const metadataOnly =
+    firstArg === undefined ||
+    args.includes("--help") ||
+    args.includes("-h") ||
+    ["--version", "-V", "help"].includes(firstArg);
+  if (metadataOnly) {
+    await program.parseAsync();
+    return;
+  }
+
+  if (firstArg === "init" || firstArg === "init-project") {
+    await program.parseAsync();
+    return;
+  }
+
+  await withScrubbedConfigEnv(async () => {
+    await loadConfig(process.cwd());
+    // Plugins may register their own subcommands. Config and plugins are
+    // executable repo code, so registration also runs without ambient
+    // credentials or mutable env side effects.
+    for (const register of getRegistry().commands) {
+      register(program);
+    }
+  });
+  if (["process", "revalidate", "triage", "sandbox", "sandbox-all"].includes(firstArg)) {
+    loadTrustedEnvFiles();
+    // Expand AI_GATEWAY_API_KEY (or a Vercel OIDC token) only for commands
+    // that may instantiate an agent. Config files are executable code and
+    // must not see freshly minted credentials merely because the user asked
+    // for help, init, scan, report, or export.
+    await applyAiGatewayDefaults();
   }
   await program.parseAsync();
 }

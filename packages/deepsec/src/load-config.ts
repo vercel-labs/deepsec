@@ -35,6 +35,7 @@ function findConfigFile(start: string): string | undefined {
  */
 export async function loadConfig(
   cwd: string = process.cwd(),
+  opts: { softFailure?: boolean } = {},
 ): Promise<{ config: DeepsecConfig; path: string } | undefined> {
   const file = findConfigFile(cwd);
   if (!file) return undefined;
@@ -57,6 +58,9 @@ export async function loadConfig(
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[deepsec] could not load ${file}: ${msg}`);
     console.error(`[deepsec]   Run \`pnpm install\` to install dependencies, then retry.`);
+    if (!opts.softFailure) {
+      throw new Error(`Refusing to continue with an unloadable config: ${file}`);
+    }
     return undefined;
   }
 
