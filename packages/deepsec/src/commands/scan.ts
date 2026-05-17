@@ -64,6 +64,7 @@ export async function scanCommand(opts: { projectId?: string; root?: string; mat
   // Per-matcher hit counts collected from progress events. Used in the
   // post-scan summary so we don't have to re-derive it from records.
   const hitsBySlug = new Map<string, number>();
+  const hitsByFile = new Map<string, number>();
   let filesWithMatches = 0;
   let totalFileMatches = 0;
   const startedAt = Date.now();
@@ -167,6 +168,12 @@ export async function scanCommand(opts: { projectId?: string; root?: string; mat
         case "file_scanned":
           filesWithMatches++;
           totalFileMatches += progress.matchCount ?? 0;
+          if (progress.filePath && (progress.matchCount ?? 0) > 0) {
+            hitsByFile.set(
+              progress.filePath,
+              (hitsByFile.get(progress.filePath) ?? 0) + (progress.matchCount ?? 0),
+            );
+          }
           // File-scanned can fire many times per matcher; piggyback on
           // the rate-limited renderBar so the hit counter ticks up live.
           renderBar();
@@ -235,21 +242,22 @@ export async function scanCommand(opts: { projectId?: string; root?: string; mat
   // Top files by candidate count — gives the user a fast sense of where
   // findings will concentrate before they even run process.
   try {
-    const records = loadAllFileRecords(projectId);
-    const topFiles = records
-      .filter((r) => r.candidates.length > 0)
-      .sort((a, b) => b.candidates.length - a.candidates.length)
-      .slice(0, 5);
+    const activeSlugSet = new Set(result.activeMatchers);
+    const recordsByPath = new Map(loadAllFileRecords(projectId).map((r) => [r.filePath, r]));
+    const topFiles = [...hitsByFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
     if (topFiles.length > 0) {
       console.log();
       console.log(`${BOLD}Top files by candidate count${RESET}`);
-      for (const r of topFiles) {
-        const slugs = Array.from(new Set(r.candidates.map((c) => c.vulnSlug))).slice(0, 4);
+      for (const [filePath, count] of topFiles) {
+        const record = recordsByPath.get(filePath);
+        const candidateSlugs =
+          record?.candidates.map((c) => c.vulnSlug).filter((slug) => activeSlugSet.has(slug)) ?? [];
+        const slugs = Array.from(new Set(candidateSlugs)).slice(0, 4);
         const slugList =
-          slugs.join(", ") +
-          (slugs.length < new Set(r.candidates.map((c) => c.vulnSlug)).size ? ", …" : "");
+          slugs.join(", ") + (slugs.length < new Set(candidateSlugs).size ? ", …" : "");
+        const slugSuffix = slugList ? ` (${slugList})` : "";
         console.log(
-          `  ${pad(r.filePath, 56)} ${DIM}${r.candidates.length} hit${r.candidates.length === 1 ? "" : "s"} (${slugList})${RESET}`,
+          `  ${pad(filePath, 56)} ${DIM}${count} hit${count === 1 ? "" : "s"}${slugSuffix}${RESET}`,
         );
       }
     }
