@@ -39,6 +39,24 @@ async function collect<T>(gen: AsyncGenerator<unknown, T>): Promise<T> {
 }
 
 describe("CopilotRotatePlugin", () => {
+  it("defaults Copilot Rotate runs to gpt-5.5", async () => {
+    const plugin = new CopilotRotatePlugin();
+    const gen = plugin.investigate({
+      batch: [makeRecord()],
+      projectRoot: process.cwd(),
+      promptTemplate: "Review these files.",
+      projectInfo: "",
+      config: { command: fixtureCommand, timeoutMs: 10_000 },
+    });
+
+    const started = await gen.next();
+    expect(started.value).toMatchObject({
+      type: "started",
+      message: expect.stringContaining("gpt-5.5"),
+    });
+    await gen.return(undefined as never);
+  });
+
   it("investigates via an injected delegate command and parses fenced JSON", async () => {
     fs.chmodSync(fixtureCommand, 0o755);
     const plugin = new CopilotRotatePlugin();

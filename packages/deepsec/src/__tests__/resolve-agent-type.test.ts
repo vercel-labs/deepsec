@@ -35,6 +35,6 @@ describe("resolveAgentType", () => {
 
 describe("defaultModelForAgent", () => {
   it("uses the Copilot Rotate default model for the Copilot backend", () => {
-    expect(defaultModelForAgent("copilot-rotate")).toBe("gpt-5.4");
+    expect(defaultModelForAgent("copilot-rotate")).toBe("gpt-5.5");
   });
 });

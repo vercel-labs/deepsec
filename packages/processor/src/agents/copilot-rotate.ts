@@ -16,7 +16,7 @@ import type {
   RevalidateParams,
 } from "./types.js";
 
-const DEFAULT_MODEL = "gpt-5.4";
+const DEFAULT_MODEL = "gpt-5.5";
 const DEFAULT_EFFORT = "xhigh";
 const DEFAULT_TIMEOUT_MS = 900_000;
 const DEFAULT_DELEGATE_COMMAND = "/Users/greenapple/.agents/scripts/copilot-delegate";

@@ -136,7 +136,7 @@ program
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex, gpt-5.4 for copilot-rotate)",
+    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex and copilot-rotate)",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
@@ -196,7 +196,7 @@ program
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex, gpt-5.4 for copilot-rotate)",
+    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex and copilot-rotate)",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
