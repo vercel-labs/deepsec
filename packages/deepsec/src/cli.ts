@@ -132,11 +132,11 @@ program
   .option("--run-id <id>", "Resume a specific processing run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex or claude (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, or copilot-rotate (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex)",
+    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex, gpt-5.4 for copilot-rotate)",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
@@ -192,11 +192,11 @@ program
   .option("--run-id <id>", "Resume a specific revalidation run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex or claude (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, or copilot-rotate (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex)",
+    "Model to use (default: claude-opus-4-7 for claude, gpt-5.5 for codex, gpt-5.4 for copilot-rotate)",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(

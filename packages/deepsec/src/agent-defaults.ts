@@ -6,6 +6,8 @@ export function defaultModelForAgent(agentType: string): string {
   switch (agentType) {
     case "codex":
       return "gpt-5.5";
+    case "copilot-rotate":
+      return "gpt-5.4";
     default:
       return "claude-opus-4-7";
   }

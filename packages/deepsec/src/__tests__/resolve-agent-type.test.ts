@@ -1,5 +1,6 @@
 import { defineConfig, setLoadedConfig } from "@deepsec/core";
 import { afterEach, describe, expect, it } from "vitest";
+import { defaultModelForAgent } from "../agent-defaults.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 
 describe("resolveAgentType", () => {
@@ -29,5 +30,11 @@ describe("resolveAgentType", () => {
   it("falls back to codex when neither is set", () => {
     setLoadedConfig(defineConfig({ projects: [] }));
     expect(resolveAgentType(undefined)).toBe("codex");
+  });
+});
+
+describe("defaultModelForAgent", () => {
+  it("uses the Copilot Rotate default model for the Copilot backend", () => {
+    expect(defaultModelForAgent("copilot-rotate")).toBe("gpt-5.4");
   });
 });

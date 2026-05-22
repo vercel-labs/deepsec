@@ -86,6 +86,12 @@ for the Vercel Sandbox setup. To bypass the gateway, set
 explicitly. Explicit values always win over the `AI_GATEWAY_API_KEY`
 expansion.
 
+Terry-local builds also include `--agent copilot-rotate`, which delegates
+DeepSec batches through `/Users/greenapple/.agents/scripts/copilot-delegate`
+and account-rotated GitHub Copilot instead of the built-in Claude/Codex SDKs.
+It accepts `model`, `effort`, `timeoutMs`, `command`, and `useDelegate`
+agent config options.
+
 If a `process` or `revalidate` run halts because the upstream credential
 ran out of quota or credits, deepsec stops gracefully and tells you
 where to top up. Re-run the same command afterward and it picks up
