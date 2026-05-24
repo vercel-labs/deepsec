@@ -514,7 +514,16 @@ export async function process(params: {
           (current.status === "processing" &&
             current.lockedByRunId !== runId &&
             isReclaimableLock(current));
-        if (!isOurs && !isFreelyClaimable && !inForceMode) {
+
+        // Force/direct mode may reprocess analyzed/pending/error files, but
+        // must never steal a live non-reclaimable processing lock from another
+        // run. That would cause the other run to silently lose its work.
+        const isLiveOtherLock =
+          current.status === "processing" &&
+          current.lockedByRunId !== runId &&
+          !isReclaimableLock(current);
+
+        if (!isOurs && !isFreelyClaimable && (!inForceMode || isLiveOtherLock)) {
           continue;
         }
 

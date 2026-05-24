@@ -103,9 +103,10 @@ You are running as DeepSec's \`copilot-rotate\` backend inside GitHub Copilot CL
 `;
 }
 
-function buildArgs(config: CopilotConfig, projectRoot: string, prompt: string): string[] {
+function buildArgs(config: CopilotConfig, projectRoot: string): string[] {
   if (config.useDelegate) {
-    return ["worker", config.model, config.effort, projectRoot, prompt];
+    // Prompt is delivered via stdin; argv carries only non-sensitive metadata.
+    return ["worker", config.model, config.effort, projectRoot, "--prompt-stdin"];
   }
   return [
     "delegate",
@@ -117,8 +118,7 @@ function buildArgs(config: CopilotConfig, projectRoot: string, prompt: string): 
     config.effort,
     "--timeout-ms",
     String(config.timeoutMs),
-    "--prompt",
-    prompt,
+    "--prompt-stdin",
   ];
 }
 
@@ -155,7 +155,7 @@ async function* runCopilot(
   config: CopilotConfig,
   signal?: AbortSignal,
 ): AsyncGenerator<AgentProgress, CopilotRunResult> {
-  const args = buildArgs(config, projectRoot, prompt);
+  const args = buildArgs(config, projectRoot);
   const startTime = Date.now();
   let stdout = "";
   let stderr = "";
@@ -165,8 +165,14 @@ async function* runCopilot(
   const child = spawn(config.command, args, {
     cwd: projectRoot,
     env: buildMinimalEnv(projectRoot, config),
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
+
+  // Deliver prompt via stdin so it never appears in child process argv.
+  if (child.stdin) {
+    child.stdin.write(prompt);
+    child.stdin.end();
+  }
 
   child.stdout.setEncoding("utf-8");
   child.stderr.setEncoding("utf-8");

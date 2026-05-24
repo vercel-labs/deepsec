@@ -458,6 +458,236 @@ describe("processor with stub agent", () => {
     expect(after.lockedByRunId).toBe(liveRunId);
   });
 
+  it("VAL-RACE-001: two concurrent process() runs cannot both claim the same pending records", async () => {
+    // Regression for DeepSec finding VAL-RACE-001 (HIGH_BUG): race condition
+    // where two process() invocations select + claim overlapping file sets.
+    // With the acquireProcessLock mutex, only one runner can hold the claim
+    // window at a time; the other either waits or gets no files to claim.
+    //
+    // Strategy: launch two process() calls in parallel against a project with
+    // N pending files. Use a barrier in the agent's investigate impl to ensure
+    // both runs have passed the selection phase (one holds the lock, the other
+    // is waiting). After both complete, assert:
+    //   - Each file has exactly ONE new analysisHistory entry (no duplicate work)
+    //   - Each file has no duplicate findings
+    //   - Each file has a stable final status (analyzed, not still processing)
+    //   - The total analysisCount across both runs equals the number of files
+    const fx = setupProject({ files: ["a.ts", "b.ts", "c.ts", "d.ts"] });
+    fx.writeRecord(pendingRecord(fx.projectId, "a.ts"));
+    fx.writeRecord(pendingRecord(fx.projectId, "b.ts"));
+    fx.writeRecord(pendingRecord(fx.projectId, "c.ts"));
+    fx.writeRecord(pendingRecord(fx.projectId, "d.ts"));
+
+    // Track which run claimed which files
+    const claimedByRun: Map<string, string[]> = new Map();
+    let callCount = 0;
+
+    const makeStub = () =>
+      new StubAgent({
+        async *investigateImpl(params) {
+          callCount++;
+          const runId = params.batch[0]?.lockedByRunId ?? `unknown-${callCount}`;
+          const files = params.batch.map((r) => r.filePath);
+          claimedByRun.set(runId, [...(claimedByRun.get(runId) ?? []), ...files]);
+
+          // Simulate real work taking time — ensures both process() calls
+          // overlap and contend for the lock.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+
+          return {
+            results: params.batch.map((rec) => ({
+              filePath: rec.filePath,
+              findings: rec.candidates.length
+                ? [
+                    {
+                      severity: "HIGH" as const,
+                      vulnSlug: rec.candidates[0].vulnSlug,
+                      title: `finding for ${rec.filePath}`,
+                      description: "test",
+                      lineNumbers: [1],
+                      recommendation: "fix",
+                      confidence: "medium" as const,
+                    },
+                  ]
+                : [],
+            })),
+            meta: {
+              durationMs: 50,
+              usage: { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            },
+          };
+        },
+      });
+
+    const stub1 = makeStub();
+    const stub2 = makeStub();
+
+    // Both stubs are registered; each process() call creates its own config
+    // snapshot but they share the same on-disk state.
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [
+          { name: "stub1", agents: [stub1] },
+          { name: "stub2", agents: [stub2] },
+        ],
+      }),
+    );
+
+    // Launch both process() calls concurrently — this is the critical race.
+    const [result1, result2] = await Promise.all([
+      processProject({ projectId: fx.projectId, agentType: "stub", concurrency: 1 }),
+      processProject({ projectId: fx.projectId, agentType: "stub", concurrency: 1 }),
+    ]);
+
+    // --- Assertions per file: no duplicates, no clobber ---
+    const allFiles = ["a.ts", "b.ts", "c.ts", "d.ts"];
+    for (const filePath of allFiles) {
+      const rec = fx.readRecord(filePath);
+
+      // Exactly one analysisHistory entry per file — no double-processing.
+      expect(rec.analysisHistory).toHaveLength(1);
+
+      // No duplicate findings (each finding title is unique per file).
+      const titles = rec.findings.map((f) => f.title);
+      expect(new Set(titles).size).toBe(titles.length);
+
+      // Stable terminal status — not stuck in "processing".
+      expect(rec.status).toBe("analyzed");
+
+      // Lock released (no lingering lockedByRunId).
+      expect(rec.lockedByRunId).toBeFalsy();
+    }
+
+    // Total work is partitioned: winner claims all 4, loser gets 0 (under
+    // the mutex the second process() sees all files already claimed).
+    expect(result1.analysisCount + result2.analysisCount).toBe(4);
+    // One run got all files, the other got none (mutex serializes claim).
+    const counts = [result1.analysisCount, result2.analysisCount].sort();
+    expect(counts).toEqual([0, 4]);
+  });
+
+  it("VAL-RACE-002: force/direct mode skips live other-run lock and leaves it untouched", async () => {
+    // Regression for DeepSec finding other-race-condition (HIGH_BUG): force
+    // mode (reinvestigate / filePaths) must not steal a live non-reclaimable
+    // processing lock from another run. It may reprocess analyzed/pending
+    // files, but not clobber an active investigation.
+    const fx = setupProject({ files: ["app.ts", "lib.ts"] });
+
+    // app.ts: live processing lock from another run (fresh, live PID)
+    const liveRunId = "20260101000000-liveforceaaaaa";
+    const lockedRec = pendingRecord(fx.projectId, "app.ts");
+    lockedRec.status = "processing";
+    lockedRec.lockedByRunId = liveRunId;
+    lockedRec.lockedAt = new Date().toISOString();
+    fx.writeRecord(lockedRec);
+
+    // Write a run-meta for the live run so isReclaimableLock sees it alive
+    fs.mkdirSync(path.join(fx.dataRoot, fx.projectId, "runs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(fx.dataRoot, fx.projectId, "runs", `${liveRunId}.json`),
+      JSON.stringify({
+        runId: liveRunId,
+        projectId: fx.projectId,
+        rootPath: fx.targetRoot,
+        createdAt: new Date().toISOString(),
+        type: "process",
+        phase: "running",
+        pid: process.pid,
+        hostname: os.hostname(),
+        stats: {},
+      }),
+    );
+
+    // lib.ts: already analyzed — force mode should still pick it up
+    const analyzedRec = pendingRecord(fx.projectId, "lib.ts");
+    analyzedRec.status = "analyzed";
+    fx.writeRecord(analyzedRec);
+
+    const stub = new StubAgent();
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    // Use filePaths (direct mode) — triggers inForceMode
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      filePaths: ["app.ts", "lib.ts"],
+    });
+
+    // Force mode processed lib.ts but skipped app.ts (live lock)
+    expect(result.analysisCount).toBe(1);
+
+    // app.ts lock is untouched — still belongs to the other run
+    const appAfter = fx.readRecord("app.ts");
+    expect(appAfter.status).toBe("processing");
+    expect(appAfter.lockedByRunId).toBe(liveRunId);
+
+    // lib.ts was reprocessed
+    const libAfter = fx.readRecord("lib.ts");
+    expect(libAfter.status).toBe("analyzed");
+    expect(libAfter.analysisHistory).toHaveLength(1);
+  });
+
+  it("VAL-RACE-002b: reinvestigate mode skips live other-run lock", async () => {
+    // Same as VAL-RACE-002 but using reinvestigate=true instead of filePaths
+    const fx = setupProject({ files: ["app.ts", "lib.ts"] });
+
+    const liveRunId = "20260101000000-livereivaaaaa";
+    const lockedRec = pendingRecord(fx.projectId, "app.ts");
+    lockedRec.status = "processing";
+    lockedRec.lockedByRunId = liveRunId;
+    lockedRec.lockedAt = new Date().toISOString();
+    fx.writeRecord(lockedRec);
+
+    fs.mkdirSync(path.join(fx.dataRoot, fx.projectId, "runs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(fx.dataRoot, fx.projectId, "runs", `${liveRunId}.json`),
+      JSON.stringify({
+        runId: liveRunId,
+        projectId: fx.projectId,
+        rootPath: fx.targetRoot,
+        createdAt: new Date().toISOString(),
+        type: "process",
+        phase: "running",
+        pid: process.pid,
+        hostname: os.hostname(),
+        stats: {},
+      }),
+    );
+
+    const analyzedRec = pendingRecord(fx.projectId, "lib.ts");
+    analyzedRec.status = "pending";
+    fx.writeRecord(analyzedRec);
+
+    const stub = new StubAgent();
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      reinvestigate: true,
+    });
+
+    // lib.ts processed, app.ts skipped
+    expect(result.analysisCount).toBe(1);
+
+    const appAfter = fx.readRecord("app.ts");
+    expect(appAfter.status).toBe("processing");
+    expect(appAfter.lockedByRunId).toBe(liveRunId);
+  });
+
   it("process() captures refusals from the agent into AnalysisEntry", async () => {
     const fx = setupProject({ files: ["app.ts"] });
     fx.writeRecord(pendingRecord(fx.projectId, "app.ts"));

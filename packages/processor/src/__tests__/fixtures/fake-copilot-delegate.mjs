@@ -1,6 +1,23 @@
 #!/usr/bin/env node
 
-const prompt = process.argv[6] ?? "";
+import { readFileSync } from "node:fs";
+
+// Read prompt from stdin (private transport) instead of argv.
+let prompt = "";
+const args = process.argv.slice(2);
+const hasPromptStdin = args.includes("--prompt-stdin");
+
+if (hasPromptStdin) {
+  // Read prompt from stdin (fd 0).
+  try {
+    prompt = readFileSync(0, "utf-8");
+  } catch {
+    prompt = "";
+  }
+}
+
+// Emit argv to stderr so tests can verify no sensitive content leaks into process args.
+console.error(`[fake-copilot] argv=${JSON.stringify(process.argv.slice(2))}`);
 
 if (prompt.includes("MALFORMED")) {
   console.log("not json");
