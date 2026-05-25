@@ -81,6 +81,14 @@ function isCodex(agentType: string | undefined): boolean {
   return agentType === "codex";
 }
 
+function isCursor(agentType: string | undefined): boolean {
+  return agentType === "cursor";
+}
+
+function hasLocalCursorAgent(): boolean {
+  return whichSync("agent");
+}
+
 /**
  * Walk `$PATH` looking for a binary. Used as a positive signal that an
  * agent CLI (`claude`, `codex`) is set up on this host — if it's
@@ -138,7 +146,7 @@ function hasLocalCodexAgent(): boolean {
 // via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
 // their own credential resolution, so we skip the check for anything
 // other than these.
-const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex"]);
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "cursor"]);
 
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
@@ -173,6 +181,18 @@ export function assertAgentCredential(
       `Missing AI credentials for --agent codex.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…   (or OPENAI_API_KEY=…)\n` +
+        `  Setup: ${SETUP_DOC_URL}`,
+    );
+  }
+
+  if (isCursor(agentType)) {
+    if (process.env.CURSOR_API_KEY) return;
+    if (!options.inSandbox && hasLocalCursorAgent()) return;
+    throw new Error(
+      `Missing AI credentials for --agent cursor.\n` +
+        `\n` +
+        `  Add to .env.local:    CURSOR_API_KEY=…\n` +
+        `  Or install the Cursor CLI and run \`agent login\` on this host.\n` +
         `  Setup: ${SETUP_DOC_URL}`,
     );
   }

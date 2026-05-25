@@ -35,10 +35,12 @@ describe("assertAgentCredential", () => {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       CLAUDE_HOME: process.env.CLAUDE_HOME,
       CODEX_HOME: process.env.CODEX_HOME,
+      CURSOR_API_KEY: process.env.CURSOR_API_KEY,
       PATH: process.env.PATH,
     };
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.CURSOR_API_KEY;
     // Point CLAUDE_HOME / CODEX_HOME and PATH at empty tmp dirs so the
     // suite is hermetic — the dev running tests may have a real
     // ~/.codex/auth.json or `claude` on $PATH, which would cause
@@ -113,6 +115,27 @@ describe("assertAgentCredential", () => {
     // No codex auth.json → still throws.
     expect(() => assertAgentCredential("codex")).toThrow(/OPENAI_API_KEY/);
     expect(() => assertAgentCredential("codex")).toThrow(/AI_GATEWAY_API_KEY/);
+  });
+
+  it("passes for cursor when CURSOR_API_KEY is set", () => {
+    process.env.CURSOR_API_KEY = "x";
+    expect(() => assertAgentCredential("cursor")).not.toThrow();
+  });
+
+  it("passes for cursor when `agent` is on PATH (login mode)", () => {
+    writeFileSync(join(emptyPathDir, "agent"), "#!/bin/sh\n", { mode: 0o755 });
+    expect(() => assertAgentCredential("cursor")).not.toThrow();
+  });
+
+  it("throws actionable message for cursor when no key and no agent CLI", () => {
+    expect(() => assertAgentCredential("cursor")).toThrow(/--agent cursor/);
+    expect(() => assertAgentCredential("cursor")).toThrow(/CURSOR_API_KEY/);
+    expect(() => assertAgentCredential("cursor")).toThrow(/agent login/);
+  });
+
+  it("ignores cursor login auth in sandbox mode", () => {
+    writeFileSync(join(emptyPathDir, "agent"), "#!/bin/sh\n", { mode: 0o755 });
+    expect(() => assertAgentCredential("cursor", { inSandbox: true })).toThrow(/CURSOR_API_KEY/);
   });
 
   it("skips the credential check for custom plugin agents", () => {

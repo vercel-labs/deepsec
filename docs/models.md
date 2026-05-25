@@ -1,17 +1,22 @@
 # Models
 
-deepsec talks to LLMs through two interchangeable backends:
+deepsec talks to LLMs through interchangeable agent backends:
 
 | Backend                     | Default model         | Used by                      |
 |-----------------------------|-----------------------|------------------------------|
 | `codex` (default)           | `gpt-5.5`             | `process`, `revalidate`      |
 | `claude`                    | `claude-opus-4-7`     | `process`, `revalidate`      |
+| `cursor`                    | `composer-2.5`        | `process`, `revalidate`      |
 | `claude` (triage)           | `claude-sonnet-4-6`   | `triage` (Claude-only)       |
 
-Both backends route through [Vercel AI Gateway](https://vercel.com/ai-gateway)
+`codex` and `claude` route through [Vercel AI Gateway](https://vercel.com/ai-gateway)
 by default, so a single token covers Claude **and** Codex. To use
 Anthropic or OpenAI directly, point `ANTHROPIC_BASE_URL` /
 `OPENAI_BASE_URL` at the provider.
+
+`cursor` uses the [Cursor Agent CLI](https://cursor.com/docs) (`agent` on
+PATH). Set `CURSOR_API_KEY` in `.env.local`, or run `agent login` on the
+host. List models with `agent --list-models`.
 
 ## CLI selection
 
@@ -27,6 +32,10 @@ pnpm deepsec process --project-id my-app --agent codex
 
 # Codex backend, specific model:
 pnpm deepsec process --project-id my-app --agent codex --model gpt-5.4
+
+# Cursor Agent CLI (local `agent` binary or CURSOR_API_KEY):
+pnpm deepsec process --project-id my-app --agent cursor
+pnpm deepsec process --project-id my-app --agent cursor --model gpt-5.3-codex-high
 
 # Triage uses Claude; pass a cheaper model if you want:
 pnpm deepsec triage --project-id my-app --model claude-haiku-4-5

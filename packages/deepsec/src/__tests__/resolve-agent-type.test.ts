@@ -30,4 +30,8 @@ describe("resolveAgentType", () => {
     setLoadedConfig(defineConfig({ projects: [] }));
     expect(resolveAgentType(undefined)).toBe("codex");
   });
+
+  it("passes cursor through unchanged", () => {
+    expect(resolveAgentType("cursor")).toBe("cursor");
+  });
 });
