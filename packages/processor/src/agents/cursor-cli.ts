@@ -403,13 +403,20 @@ export class CursorCliPlugin implements AgentPlugin {
 
       if (run.resultText) {
         const durationMs = Date.now() - startTime;
+        const refusal = await runRefusalFollowUp(run.sessionId, model, projectRoot);
+        if (refusal?.refused) {
+          yield {
+            type: "thinking",
+            message: `Refusal detected during revalidation: ${refusal.reason ?? "see raw"}`,
+          };
+        }
         yield {
           type: "complete",
-          message: `Revalidation complete (${(durationMs / 1000).toFixed(1)}s, ${toolUseCount} tool calls)`,
+          message: `Revalidation complete (${(durationMs / 1000).toFixed(1)}s, ${toolUseCount} tool calls${refusal?.refused ? " ⚠️  refusal" : ""})`,
         };
         return {
           verdicts: parseRevalidateVerdicts(run.resultText),
-          meta: { durationMs, ...run.meta },
+          meta: { durationMs, ...run.meta, refusal },
         };
       }
 
