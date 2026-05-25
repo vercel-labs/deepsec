@@ -52,10 +52,11 @@ describe("AgentRegistry", () => {
 });
 
 describe("createDefaultAgentRegistry", () => {
-  it("registers both backends", () => {
+  it("registers built-in backends", () => {
     const registry = createDefaultAgentRegistry();
     expect(registry.get("claude-agent-sdk")).toBeDefined();
     expect(registry.get("codex")).toBeDefined();
-    expect(registry.types().sort()).toEqual(["claude-agent-sdk", "codex"]);
+    expect(registry.get("cursor")).toBeDefined();
+    expect(registry.types().sort()).toEqual(["claude-agent-sdk", "codex", "cursor"]);
   });
 });

@@ -65,13 +65,16 @@ built-ins by reusing the same slug.
 - **Outputs:** FileRecord `findings[]` populated, `status: "analyzed"`,
   `analysisHistory[]` appended.
 
-Two agent backends are supported, both routed through Vercel AI Gateway
-by default:
+Three agent backends are supported:
 
-| `--agent` | SDK | Default model |
+| `--agent` | Runtime | Default model |
 |---|---|---|
 | `codex` (default) | `@openai/codex-sdk` | `gpt-5.5` |
 | `claude` | `@anthropic-ai/claude-agent-sdk` | `claude-opus-4-7` |
+| `cursor` | Cursor Agent CLI (`agent`) | `composer-2.5` |
+
+`codex` and `claude` route through Vercel AI Gateway by default; `cursor`
+uses Cursor credentials (`CURSOR_API_KEY` or `agent login`).
 
 Same prompt, same JSON output schema. You can mix backends within a
 project — re-process a file with a different agent and the second run's
