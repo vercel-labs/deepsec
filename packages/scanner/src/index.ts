@@ -386,7 +386,7 @@ const LANGUAGE_EXTENSIONS: Record<string, string[]> = {
   typescript: [".ts", ".tsx", ".cts", ".mts"],
   javascript: [".js", ".jsx", ".cjs", ".mjs"],
   python: [".py"],
-  ruby: [".rb"],
+  ruby: [".rb", ".ru"],
   php: [".php"],
   go: [".go"],
   rust: [".rs"],

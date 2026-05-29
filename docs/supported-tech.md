@@ -122,7 +122,21 @@ that single signal.
   strong-params bypasses, `raw`/`html_safe` XSS, raw SQL, open redirect.
 
 ### Other Ruby detected
-`sinatra`, `grape`, `hanami`, `roda`. Roadmap.
+`sinatra`, `grape`, `hanami`, `roda`.
+
+### Ruby gRPC / async (`grpc-ruby`, `async-grpc`, `falcon-ruby`, `async-websocket`)
+- **Sentinel detection:** root `Gemfile` / `Gemfile.lock` exact gems:
+  `grpc`, `async-grpc`, `falcon`, `async-websocket`. `async-grpc`
+  also emits the shared `grpc` tag.
+- **Matchers:** `rb-grpc-service`, `rb-async-websocket-handler`,
+  `rb-falcon-rack-app` (gated). Their gates also use recursive
+  `Gemfile` / `Gemfile.lock` / `.ru` sentinels so nested Ruby services
+  can still produce `.rb` candidates.
+- **Prompt highlights:** per-RPC interceptor auth, `call.metadata`
+  trust, Falcon/Rack async service boundaries, WebSocket handshake and
+  per-message authorization.
+- **Proto files:** `proto-rpc-surface` activates via the shared `grpc`
+  tag when root detection sees Ruby gRPC.
 
 ## Go
 
@@ -152,11 +166,17 @@ that single signal.
 ### Generic Go (`go`)
 Always-on Go matchers regardless of framework: `go-http-handler`,
 `go-ssrf`, `go-command-injection`, `go-embed-asset`,
-`connectrpc-handler-impl`, `proto-rpc-surface`, `unix-socket-listener`.
+`connectrpc-handler-impl`, `unix-socket-listener`.
+
+### Protobuf / gRPC (`grpc`)
+`proto-rpc-surface` is cross-language and activates for projects tagged
+`grpc` or `connectrpc`. It flags `.proto` service/message definitions as
+wire-format trust boundaries.
 
 ### Other Go detected
 `gorilla`, `buffalo`, `grpc`, `connectrpc`, `cobra`. Roadmap for
-dedicated matchers (gRPC service impl already partially covered).
+dedicated Go matchers (gRPC wire formats are covered by
+`proto-rpc-surface`).
 
 ## Rust
 

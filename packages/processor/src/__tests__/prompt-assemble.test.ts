@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { assemblePrompt, CORE_PROMPT, TECH_HIGHLIGHTS } from "../prompt/index.js";
+import { languagesForBatch } from "../prompt/file-language.js";
+import { assemblePrompt, CORE_PROMPT, noteForSlug, TECH_HIGHLIGHTS } from "../prompt/index.js";
 
 describe("assemblePrompt", () => {
   it("returns just the core prompt when no tech is detected and no batch slugs", () => {
@@ -41,6 +42,25 @@ describe("assemblePrompt", () => {
     expect(prompt).toContain("`sql-injection`");
     expect(prompt).not.toContain("`open-redirect`");
     expect(meta.slugsWithNotes).toBe(2);
+  });
+
+  it("maps Rack config files to Ruby for batch-scoped highlights", () => {
+    expect(languagesForBatch(["config.ru"])).toEqual(["ruby"]);
+  });
+
+  it("uses Ruby-specific gRPC guidance without Go implementation terms", () => {
+    const { prompt } = assemblePrompt({
+      detectedTags: ["grpc-ruby"],
+      batchSlugs: ["rb-grpc-service", "proto-rpc-surface"],
+      batchLanguages: ["ruby"],
+    });
+
+    expect(prompt).toContain("GRPC::ServerInterceptor");
+    expect(prompt).toContain("call.metadata");
+    expect(prompt).toContain("::Service");
+    expect(prompt).not.toMatch(/context\.Context|connect\.Request|net\/http/);
+    expect(noteForSlug("proto-rpc-surface")).toMatch(/Wire-format boundary/);
+    expect(noteForSlug("proto-rpc-surface")).not.toMatch(/Go|Ruby|context\.Context/);
   });
 
   it("appends INFO.md and promptAppend at the end, both after the framework section", () => {
