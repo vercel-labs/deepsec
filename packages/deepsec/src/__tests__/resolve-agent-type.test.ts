@@ -21,9 +21,18 @@ describe("resolveAgentType", () => {
     expect(resolveAgentType(undefined)).toBe("claude-agent-sdk");
   });
 
+  it("passes cursor through unchanged", () => {
+    expect(resolveAgentType("cursor")).toBe("cursor");
+  });
+
   it("falls back to defaultAgent from config when not provided", () => {
     setLoadedConfig(defineConfig({ projects: [], defaultAgent: "codex" }));
     expect(resolveAgentType(undefined)).toBe("codex");
+  });
+
+  it("falls back to cursor from config when set", () => {
+    setLoadedConfig(defineConfig({ projects: [], defaultAgent: "cursor" }));
+    expect(resolveAgentType(undefined)).toBe("cursor");
   });
 
   it("falls back to codex when neither is set", () => {

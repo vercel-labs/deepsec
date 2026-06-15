@@ -32,12 +32,14 @@ describe("assertAgentCredential", () => {
   beforeEach(() => {
     saved = {
       ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+      CURSOR_API_KEY: process.env.CURSOR_API_KEY,
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       CLAUDE_HOME: process.env.CLAUDE_HOME,
       CODEX_HOME: process.env.CODEX_HOME,
       PATH: process.env.PATH,
     };
     delete process.env.ANTHROPIC_AUTH_TOKEN;
+    delete process.env.CURSOR_API_KEY;
     delete process.env.OPENAI_API_KEY;
     // Point CLAUDE_HOME / CODEX_HOME and PATH at empty tmp dirs so the
     // suite is hermetic — the dev running tests may have a real
@@ -89,6 +91,22 @@ describe("assertAgentCredential", () => {
   it("passes for codex when OPENAI_API_KEY is set", () => {
     process.env.OPENAI_API_KEY = "x";
     expect(() => assertAgentCredential("codex")).not.toThrow();
+  });
+
+  it("passes for cursor when CURSOR_API_KEY is set", () => {
+    process.env.CURSOR_API_KEY = "cursor_x";
+    expect(() => assertAgentCredential("cursor")).not.toThrow();
+  });
+
+  it("throws actionable message for cursor when CURSOR_API_KEY is missing", () => {
+    expect(() => assertAgentCredential("cursor")).toThrow(/--agent cursor/);
+    expect(() => assertAgentCredential("cursor")).toThrow(/CURSOR_API_KEY/);
+    expect(() => assertAgentCredential("cursor")).toThrow(/cursor\.com\/dashboard\/integrations/);
+  });
+
+  it("rejects cursor in sandbox mode even when CURSOR_API_KEY is set", () => {
+    process.env.CURSOR_API_KEY = "cursor_x";
+    expect(() => assertAgentCredential("cursor", { inSandbox: true })).toThrow(/local runs only/);
   });
 
   it("passes for codex when only ANTHROPIC token is set (gateway fallback)", () => {

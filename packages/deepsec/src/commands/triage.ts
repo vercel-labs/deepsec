@@ -1,13 +1,16 @@
 import type { Severity } from "@deepsec/core";
 import { readProjectConfig } from "@deepsec/core";
 import { triage } from "@deepsec/processor";
+import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
 import { assertAgentCredential } from "../preflight.js";
+import { resolveAgentType } from "../resolve-agent-type.js";
 import { resolveProjectId } from "../resolve-project-id.js";
 
 export async function triageCommand(opts: {
   projectId?: string;
   severity?: string;
+  agent?: string;
   force?: boolean;
   limit?: number;
   concurrency?: number;
@@ -16,21 +19,27 @@ export async function triageCommand(opts: {
   const projectId = resolveProjectId(opts.projectId);
   readProjectConfig(projectId);
   const severity = (opts.severity ?? "MEDIUM") as Severity;
-  const model = opts.model ?? "claude-sonnet-4-6";
+  const agentType = resolveAgentType(opts.agent ?? "claude");
+  if (agentType !== "claude-agent-sdk" && agentType !== "cursor") {
+    throw new Error("triage currently supports only --agent claude or --agent cursor");
+  }
+  const model =
+    opts.model ?? (agentType === "cursor" ? defaultModelForAgent("cursor") : "claude-sonnet-4-6");
 
-  // Triage uses Anthropic directly — no codex path here.
-  assertAgentCredential("claude-agent-sdk");
+  assertAgentCredential(agentType);
 
   console.log(
     `${BOLD}Triaging${RESET} ${severity} findings for project ${BOLD}${projectId}${RESET}`,
   );
-  console.log(`  Model: ${model} (lightweight — no code reading)`);
+  console.log(`  Agent: ${agentType} (${model})`);
+  console.log(`  ${DIM}Lightweight path — triage uses finding text only.${RESET}`);
   if (opts.force) console.log(`  ${YELLOW}Force re-triaging already-triaged findings${RESET}`);
   console.log();
 
   const result = await triage({
     projectId,
     severity,
+    agentType,
     force: opts.force,
     limit: opts.limit,
     concurrency: opts.concurrency,
