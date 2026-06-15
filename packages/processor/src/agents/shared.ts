@@ -18,6 +18,7 @@ export const MAX_ATTEMPTS = 3;
  * Provider-specific signatures:
  * - `claude-subscription`     — Claude Pro/Max weekly or 5-hour limit
  * - `anthropic-credits`       — direct Anthropic API: credit balance too low
+ * - `cursor-quota`            — Cursor API / Composer usage quota exhausted
  * - `openai-quota`            — direct OpenAI API: insufficient_quota / 402
  * - `openai-subscription`     — ChatGPT Plus quota via `codex login`
  * - `gateway-credits`         — Vercel AI Gateway: out of gateway credits
@@ -26,6 +27,7 @@ export const MAX_ATTEMPTS = 3;
 export type QuotaSource =
   | "claude-subscription"
   | "anthropic-credits"
+  | "cursor-quota"
   | "openai-quota"
   | "openai-subscription"
   | "gateway-credits"

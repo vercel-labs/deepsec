@@ -12,6 +12,7 @@ const repoRoot = resolve(__dirname, "../..");
 // bundles its own esbuild — re-bundling it produces broken output).
 const external = [
   "@anthropic-ai/claude-agent-sdk",
+  "@cursor/sdk",
   "@openai/codex",
   "@openai/codex-sdk",
   "@vercel/sandbox",

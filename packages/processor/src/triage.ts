@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { Agent } from "@cursor/sdk";
 import type { FileRecord, Finding, Severity, TriagePriority } from "@deepsec/core";
 import {
   completeRun,
@@ -12,8 +13,65 @@ import {
   writeFileRecord,
   writeRunMeta,
 } from "@deepsec/core";
+import {
+  buildCursorReadOnlyPreamble,
+  DEFAULT_CURSOR_MODEL,
+  resolveCursorModelSelection,
+} from "./agents/cursor-model.js";
 
 const TRIAGE_BATCH_SIZE = 30;
+const DEFAULT_CLAUDE_TRIAGE_MODEL = "claude-sonnet-4-6";
+const DEFAULT_CURSOR_TRIAGE_MODEL = DEFAULT_CURSOR_MODEL;
+const READONLY_MODE = "plan";
+
+function parseTriageVerdicts(resultText: string): TriageVerdict[] {
+  const jsonMatch = resultText.match(/```json\s*([\s\S]*?)```/);
+  const jsonStr = jsonMatch ? jsonMatch[1].trim() : resultText.trim();
+  return JSON.parse(jsonStr) as TriageVerdict[];
+}
+
+async function runClaudeTriagePrompt(prompt: string, model: string): Promise<string> {
+  let resultText = "";
+  for await (const message of query({
+    prompt,
+    options: {
+      allowedTools: [],
+      permissionMode: "dontAsk",
+      maxTurns: 1,
+      model,
+    },
+  })) {
+    const msg = message as Record<string, any>;
+    if (msg.type === "result" && msg.subtype === "success") {
+      resultText = msg.result;
+    }
+  }
+  return resultText;
+}
+
+async function runCursorTriagePrompt(
+  prompt: string,
+  model: string,
+  projectRoot: string,
+): Promise<string> {
+  if (process.env.DEEPSEC_INSIDE_SANDBOX === "1") {
+    throw new Error("Cursor triage supports local runs only.");
+  }
+  const apiKey = process.env.CURSOR_API_KEY;
+  const resolvedModel = await resolveCursorModelSelection(model, { apiKey });
+  const result = await Agent.prompt(`${buildCursorReadOnlyPreamble(projectRoot)}\n\n${prompt}`, {
+    apiKey,
+    model: resolvedModel,
+    mode: READONLY_MODE,
+    local: {
+      cwd: projectRoot,
+    },
+  });
+  if (result.status !== "finished" || !result.result) {
+    throw new Error(result.result?.trim() || `Cursor triage run ${result.status}`);
+  }
+  return result.result;
+}
 
 interface TriageVerdict {
   title: string;
@@ -34,10 +92,18 @@ export async function triage(params: {
   force?: boolean;
   limit?: number;
   concurrency?: number;
+  agentType?: string;
   model?: string;
   onProgress?: (progress: TriageProgress) => void;
 }): Promise<{ triaged: number; p0: number; p1: number; p2: number; skip: number }> {
-  const { projectId, severity = "MEDIUM", force = false, model = "claude-sonnet-4-6" } = params;
+  const agentType = params.agentType ?? "claude-agent-sdk";
+  if (agentType !== "claude-agent-sdk" && agentType !== "cursor") {
+    throw new Error(`Unsupported triage agent type: ${agentType}`);
+  }
+  const model =
+    params.model ??
+    (agentType === "cursor" ? DEFAULT_CURSOR_TRIAGE_MODEL : DEFAULT_CLAUDE_TRIAGE_MODEL);
+  const { projectId, severity = "MEDIUM", force = false } = params;
 
   const emit = (progress: TriageProgress) => {
     try {
@@ -95,7 +161,7 @@ export async function triage(params: {
     projectId,
     rootPath: project.rootPath,
     type: "revalidate",
-    processorConfig: { agentType: "triage", model, modelConfig: {} },
+    processorConfig: { agentType, model, modelConfig: {} },
   });
   writeRunMeta(meta);
 
@@ -176,28 +242,13 @@ ${findingsList}
 \`\`\``;
 
     try {
-      let resultText = "";
-
-      for await (const message of query({
-        prompt,
-        options: {
-          allowedTools: [],
-          permissionMode: "dontAsk",
-          maxTurns: 1,
-          model,
-        },
-      })) {
-        const msg = message as Record<string, any>;
-        if (msg.type === "result" && msg.subtype === "success") {
-          resultText = msg.result;
-        }
-      }
-
-      const jsonMatch = resultText.match(/```json\s*([\s\S]*?)```/);
-      const jsonStr = jsonMatch ? jsonMatch[1].trim() : resultText.trim();
+      const resultText =
+        agentType === "cursor"
+          ? await runCursorTriagePrompt(prompt, model, project.rootPath)
+          : await runClaudeTriagePrompt(prompt, model);
       let verdicts: TriageVerdict[] = [];
       try {
-        verdicts = JSON.parse(jsonStr);
+        verdicts = parseTriageVerdicts(resultText);
       } catch {}
 
       for (const verdict of verdicts) {

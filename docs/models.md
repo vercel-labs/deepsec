@@ -1,17 +1,25 @@
 # Models
 
-deepsec talks to LLMs through two interchangeable backends:
+deepsec talks to LLMs through three interchangeable backends:
 
 | Backend                     | Default model         | Used by                      |
 |-----------------------------|-----------------------|------------------------------|
 | `codex` (default)           | `gpt-5.5`             | `process`, `revalidate`      |
-| `claude`                    | `claude-opus-4-7`     | `process`, `revalidate`      |
-| `claude` (triage)           | `claude-sonnet-4-6`   | `triage` (Claude-only)       |
+| `claude`                    | `claude-opus-4-8`     | `process`, `revalidate`      |
+| `cursor`                    | `composer-2.5`        | `process`, `revalidate`      |
+| `claude` (triage default)   | `claude-sonnet-4-6`   | `triage`                     |
+| `cursor` (triage optional)  | `composer-2.5`        | `triage --agent cursor`      |
 
 Both backends route through [Vercel AI Gateway](https://vercel.com/ai-gateway)
 by default, so a single token covers Claude **and** Codex. To use
 Anthropic or OpenAI directly, point `ANTHROPIC_BASE_URL` /
 `OPENAI_BASE_URL` at the provider.
+
+Cursor is different: it uses the Cursor SDK directly in local mode and
+authenticates with `CURSOR_API_KEY`. It does **not** route through
+Vercel AI Gateway today, and sandbox execution is not supported yet.
+When deepsec selects its default `composer-2.5` model, it pins Cursor's
+`fast=false` variant so the default stays on the standard non-fast tier.
 
 ## CLI selection
 
@@ -22,14 +30,26 @@ pnpm deepsec process --project-id my-app
 # Claude with a specific model:
 pnpm deepsec process --project-id my-app --agent claude --model claude-sonnet-4-6
 
+# Cursor backend, default model:
+pnpm deepsec process --project-id my-app --agent cursor
+
+# Cursor backend, raw model id from your Cursor account:
+pnpm deepsec process --project-id my-app --agent cursor --model claude-4-sonnet
+
+# Cursor backend, friendly variant slug resolved via Cursor metadata:
+pnpm deepsec process --project-id my-app --agent cursor --model gpt-5.4-high
+
 # Codex backend, default model:
 pnpm deepsec process --project-id my-app --agent codex
 
 # Codex backend, specific model:
 pnpm deepsec process --project-id my-app --agent codex --model gpt-5.4
 
-# Triage uses Claude; pass a cheaper model if you want:
+# Triage defaults to Claude; pass a cheaper model if you want:
 pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
+
+# Or use Cursor explicitly for triage:
+pnpm deepsec triage --project-id my-app --agent cursor --model composer-2.5
 ```
 
 `--agent` and `--model` are also accepted on `revalidate`. Set the
@@ -38,7 +58,7 @@ default backend project-wide via `defaultAgent` in
 
 ## Why these defaults
 
-### `claude-opus-4-7` for `process` and `revalidate`
+### `claude-opus-4-8` for `process` and `revalidate`
 
 Investigating a candidate site is a multi-step reasoning task: trace
 control flow, recognize an auth boundary, decide whether input is
@@ -58,11 +78,44 @@ and cost for that loop. `gpt-5.5-pro` is the most careful Codex
 option at significantly higher cost; `gpt-5.4` and below are fine for
 follow-up reinvestigation passes.
 
+### `composer-2.5` for the Cursor backend
+
+Cursor runs through the Cursor SDK in local read-only mode. For deepsec's
+workflow, `composer-2.5` is the right default: strong reasoning, broad
+availability on Cursor accounts, and a stable default path. deepsec also
+disables Cursor's `fast` variant for this default, so bare
+`composer-2.5` means the standard non-fast tier unless you explicitly
+choose another slug.
+
+For Cursor specifically, deepsec accepts three `--model` forms:
+
+1. raw Cursor model ids, like `claude-4-sonnet`
+2. raw Cursor aliases, like `gpt`
+3. friendly suffix slugs, like `gpt-5.4-high` or `gpt-5.4-high-1m`
+
+Friendly suffix slugs are resolved against your account's live
+`Cursor.models.list()` catalog. deepsec first checks exact ids and exact
+aliases, then resolves known suffix slugs to a `{ id, params }`
+selection. For example, `gpt-5.4-high` becomes the `gpt-5.4` model with
+the matching Cursor parameters for the `high` reasoning preset, while
+keeping large context windows as explicit opt-ins. If you want the large
+context tier, pass a dedicated slug such as `gpt-5.4-1m`, or combine
+options directly as `gpt-5.4-high-1m`. deepsec splits the suffix on `-`
+and matches each option token against Cursor's discovered parameter
+options, so `gpt-5.4-1m-high` also resolves correctly.
+
+Because deepsec does not maintain a hardcoded allowlist here, the source
+of truth is your account itself. A slug that works for one user may not
+exist for another if their Cursor account lacks that model or variant.
+If you're unsure which ids, aliases, or suffix slugs you have, inspect
+the SDK's `Cursor.models.list()` output outside of deepsec.
+
 ### `claude-sonnet-4-6` for `triage`
 
 Triage buckets findings into P0/P1/P2/skip without re-reading the code
 — it just looks at the finding text. That's a cheap task; Opus is
-overkill. Sonnet keeps `triage` at ~1¢/finding.
+overkill. Sonnet keeps `triage` at ~1¢/finding, so it stays the default
+when you don't pass `--agent`.
 
 ## Refusals
 
@@ -109,7 +162,7 @@ Two small integration points:
 
 1. **The model identifier** — whatever string the provider's SDK
    accepts. deepsec passes it through unchanged. No code change needed
-   to *use* a new model on either backend.
+   to *use* a new model on Claude, Codex, or Cursor.
 2. **Pricing for the cost-per-batch readout.** The Claude Agent SDK
    reports cost natively, so new Claude-family models drop in with
    zero code changes. Codex doesn't, so add a line to

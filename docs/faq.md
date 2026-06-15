@@ -48,7 +48,7 @@ calibrate before committing to a full pass.
 
 `triage` is ~1¢/finding. `revalidate` is comparable to `process`.
 
-## Should I use Claude or Codex?
+## Should I use Claude, Codex, or Cursor?
 
 Both work. Different strengths:
 
@@ -56,17 +56,20 @@ Both work. Different strengths:
   cross-file flows. The default. Most expensive.
 - **Codex (gpt-5.5):** runs in a strict sandbox (read-only, no network).
   Fast at grep-heavy investigations. Cheaper.
+- **Cursor (`composer-2.5`):** runs through the Cursor SDK in local
+  read-only mode. Good if your team already uses Cursor models and wants
+  to pass Cursor-supported slugs directly with `--model`.
 
 Mix them. Run Claude first, then re-process unconvincing findings with
-`--agent codex --reinvestigate` for a second opinion. Findings dedupe
-across agents.
+`--agent codex --reinvestigate` or `--agent cursor --reinvestigate` for
+a second opinion. Findings dedupe across agents.
 
-## Should I use Vercel AI Gateway or Anthropic directly?
+## Should I use Vercel AI Gateway, Cursor, or a direct provider?
 
-Either works. The gateway gives you provider failover, observability,
-and zero data retention. One token covers Claude and Codex. For a quick
-evaluation, use Anthropic directly. For ongoing production scanning, use
-the gateway.
+For `claude` and `codex`, the gateway gives you provider failover,
+observability, and zero data retention. One token covers both backends.
+For a quick evaluation, use Anthropic directly. For ongoing production
+scanning, use the gateway.
 
 ```bash
 # Direct Anthropic
@@ -76,10 +79,17 @@ ANTHROPIC_BASE_URL=https://api.anthropic.com
 # AI Gateway (recommended)
 ANTHROPIC_AUTH_TOKEN=vck_...
 ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh
+
+# Cursor SDK (local only)
+CURSOR_API_KEY=cursor_...
 ```
 
 If `claude` or `codex` is already logged in on this machine, non-sandbox
 runs reuse that subscription — no API key needed.
+
+Cursor is separate from AI Gateway: it uses the Cursor SDK directly,
+stays local-only for now, and does not support `deepsec sandbox ...`
+yet.
 
 See [vercel-setup.md](vercel-setup.md) for how to get a gateway key
 and how to wire up Vercel Sandbox auth (OIDC or access token).

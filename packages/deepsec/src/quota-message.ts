@@ -39,6 +39,8 @@ function sourceLabel(source: QuotaSource): string {
       return "Claude Pro/Max subscription";
     case "anthropic-credits":
       return "Anthropic API credits";
+    case "cursor-quota":
+      return "Cursor API quota";
     case "openai-quota":
       return "OpenAI API quota";
     case "openai-subscription":
@@ -96,6 +98,12 @@ export function renderQuotaMessage(args: {
     lines.push("");
     lines.push(`  Or set ${BOLD}AI_GATEWAY_API_KEY=vck_…${RESET} in .env.local.`);
     lines.push(`  Setup: ${SETUP_DOC_URL}`);
+  } else if (source === "cursor-quota") {
+    lines.push("");
+    lines.push("  Your Cursor API key hit a usage or billing limit.");
+    lines.push("");
+    lines.push("  Check your Cursor dashboard or team billing, then rerun the command.");
+    lines.push("  If you want AI Gateway-backed billing, switch to the claude/codex backend.");
   } else {
     // anthropic-credits / openai-quota / unknown
     const accountPhrase =

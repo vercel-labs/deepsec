@@ -10,5 +10,10 @@ import { getConfig } from "@deepsec/core";
  */
 export function resolveAgentType(provided: string | undefined): string {
   const resolved = provided ?? getConfig()?.defaultAgent ?? "codex";
-  return resolved === "claude" ? "claude-agent-sdk" : resolved;
+  switch (resolved) {
+    case "claude":
+      return "claude-agent-sdk";
+    default:
+      return resolved;
+  }
 }

@@ -67,10 +67,17 @@ If you feel like the `deepsec` should look at more parts of the code, give it [t
 
 ## AI provider
 
-When running locally, `deepsec` falls back to your existing `claude` /
-`codex` subscription if you've logged in on this machine. Subscriptions
-(Claude Pro/Max, ChatGPT Plus) are useful for evaluating deepsec but
-generally don't have enough headroom for full repo scans.
+When running locally, `deepsec` supports three built-in AI backends:
+
+- `claude` / `claude-agent-sdk`
+- `codex`
+- `cursor`
+
+`claude` and `codex` can route through Vercel AI Gateway, and both can
+also reuse a local CLI login on your machine (`claude`, `codex`) for
+evaluation workflows. Subscriptions (Claude Pro/Max, ChatGPT Plus) are
+useful for trying deepsec but generally don't have enough headroom for
+full repo scans.
 
 For real scans, use Vercel AI Gateway. One key covers both Claude and
 Codex, and the gateway's default quotas are sized for highly concurrent
@@ -85,6 +92,24 @@ for the Vercel Sandbox setup. To bypass the gateway, set
 `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` (or the OpenAI pair)
 explicitly. Explicit values always win over the `AI_GATEWAY_API_KEY`
 expansion.
+
+Cursor uses the Cursor SDK directly in local mode:
+
+```
+CURSOR_API_KEY=cursor_...
+```
+
+Its built-in default model is `composer-2.5` with Cursor's `fast`
+variant disabled. For the Cursor backend, `--model` accepts raw Cursor
+model ids, raw aliases, and friendly suffix slugs like
+`gpt-5.4-high` or `gpt-5.4-high-1m`, which deepsec resolves against your
+account's `Cursor.models.list()` catalog. Reasoning slugs do not
+implicitly opt you into large context tiers; use an explicit context
+option like `1m`, either alone (`gpt-5.4-1m`) or combined with other
+options (`gpt-5.4-high-1m`), when you want that. Because that catalog is account-specific,
+a slug that works for one user may not exist for another. Cursor support
+is local-only in this release; `sandbox ... --agent cursor` is not
+supported yet.
 
 If a `process` or `revalidate` run halts because the upstream credential
 ran out of quota or credits, deepsec stops gracefully and tells you

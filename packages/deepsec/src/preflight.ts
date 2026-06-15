@@ -81,6 +81,10 @@ function isCodex(agentType: string | undefined): boolean {
   return agentType === "codex";
 }
 
+function isCursor(agentType: string | undefined): boolean {
+  return agentType === "cursor";
+}
+
 /**
  * Walk `$PATH` looking for a binary. Used as a positive signal that an
  * agent CLI (`claude`, `codex`) is set up on this host — if it's
@@ -138,7 +142,7 @@ function hasLocalCodexAgent(): boolean {
 // via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
 // their own credential resolution, so we skip the check for anything
 // other than these.
-const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex"]);
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "cursor"]);
 
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
@@ -163,6 +167,26 @@ export function assertAgentCredential(
 
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;
   const openai = process.env.OPENAI_API_KEY;
+  const cursor = process.env.CURSOR_API_KEY;
+
+  if (isCursor(agentType)) {
+    if (options.inSandbox) {
+      throw new Error(
+        `The built-in cursor provider currently supports local runs only.\n` +
+          `\n` +
+          `  Use --agent cursor with local \`process\`, \`revalidate\`, or \`triage\`.\n` +
+          `  Sandbox execution is not supported for Cursor yet.`,
+      );
+    }
+    if (cursor) return;
+    throw new Error(
+      `Missing AI credentials for --agent cursor.\n` +
+        `\n` +
+        `  Add to .env.local:    CURSOR_API_KEY=cursor_…\n` +
+        `  Note: Cursor runs locally only today (no sandbox support).\n` +
+        `  Setup: https://cursor.com/dashboard/integrations`,
+    );
+  }
 
   if (isCodex(agentType)) {
     // Codex prefers OPENAI_API_KEY; AI Gateway issues a single token that

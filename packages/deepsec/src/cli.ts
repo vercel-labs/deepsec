@@ -132,11 +132,11 @@ program
   .option("--run-id <id>", "Resume a specific processing run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex or claude (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, or cursor (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex)",
+    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, composer-2.5 for cursor; Cursor also accepts aliases and combined option slugs like gpt-5.4-high-1m)",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
@@ -192,11 +192,11 @@ program
   .option("--run-id <id>", "Resume a specific revalidation run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex or claude (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, or cursor (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex)",
+    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, composer-2.5 for cursor; Cursor also accepts aliases and combined option slugs like gpt-5.4-high-1m)",
   )
   .option("--max-turns <n>", "Max conversation turns per batch (default: 150)", parseInt)
   .option(
@@ -238,7 +238,11 @@ program
     "Project identifier (default: the only project in deepsec.config.ts; required if there are multiple)",
   )
   .option("--severity <sev>", "Severity to triage (default: MEDIUM)", "MEDIUM")
-  .option("--model <model>", "Model to use (default: claude-sonnet-4-6 — cheaper)")
+  .option("--agent <type>", "Triage backend: claude or cursor (default: claude)")
+  .option(
+    "--model <model>",
+    "Model to use (default: claude-sonnet-4-6 for claude, composer-2.5 for cursor; Cursor also accepts aliases and combined option slugs like gpt-5.4-high-1m)",
+  )
   .option("--force", "Re-triage already-triaged findings")
   .option("--limit <n>", "Max findings to triage", parseInt)
   .option("--concurrency <n>", "Parallel triage batches (default: cores - 1)", parseInt)
