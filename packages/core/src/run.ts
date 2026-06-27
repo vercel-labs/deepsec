@@ -182,7 +182,6 @@ export function completeRun(
 // `isReclaimableLock`.
 const activeRuns = new Map<string, { projectId: string; runId: string }>();
 let shutdownHandlersInstalled = false;
-let shutdownStarted = false;
 
 function flushActiveRuns(): void {
   // Snapshot to a fresh array — completeRun's read+write can throw if
@@ -209,8 +208,6 @@ function installShutdownHandlers(): void {
   if (shutdownHandlersInstalled) return;
   shutdownHandlersInstalled = true;
   const handler = (signal: NodeJS.Signals) => {
-    if (shutdownStarted) return;
-    shutdownStarted = true;
     flushActiveRuns();
     // Attaching a listener for SIGINT/SIGTERM suppresses Node's default termination, so we
     // have to provide an exit path ourselves or the process hangs after Ctrl+C. Kill the
