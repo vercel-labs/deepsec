@@ -182,6 +182,10 @@ export function completeRun(
 // `isReclaimableLock`.
 const activeRuns = new Map<string, { projectId: string; runId: string }>();
 let shutdownHandlersInstalled = false;
+// Guards against the handler firing twice when both SIGINT and SIGTERM
+// are delivered in quick succession (e.g. a process manager sending
+// SIGTERM immediately after the user hits Ctrl+C).
+let shutdownStarted = false;
 
 function flushActiveRuns(): void {
   // Snapshot to a fresh array — completeRun's read+write can throw if
@@ -208,20 +212,21 @@ function installShutdownHandlers(): void {
   if (shutdownHandlersInstalled) return;
   shutdownHandlersInstalled = true;
   const handler = (signal: NodeJS.Signals) => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
     flushActiveRuns();
-    // Attaching a listener for SIGINT/SIGTERM suppresses Node's
-    // default termination, so we have to provide an exit path
-    // ourselves or the process hangs after Ctrl+C. When another
-    // listener is also registered (e.g. the sandbox shutdown handler
-    // in `deepsec/sandbox/shutdown.ts`), defer to it — that handler
-    // needs async cleanup time and calls process.exit() itself once
-    // its sandboxes have stopped (or its 10s timeout fires).
-    //
-    // listenerCount counts the currently-executing handler too, so
-    // "1" means we're the only listener.
-    if (process.listenerCount(signal) <= 1) {
-      // Conventional signal exit codes: 128 + signal number
-      // (SIGINT=2 → 130, SIGTERM=15 → 143).
+    // After flushing run metadata synchronously, kill the entire process
+    // group. This handles cases where another SIGINT listener (e.g. an
+    // agent SDK) is registered but never calls process.exit(), which
+    // would otherwise leave the CLI hanging indefinitely after Ctrl+C.
+    // SIGKILL cannot be caught or deferred, so this is guaranteed to
+    // terminate the process even if other handlers are mid-flight.
+    // flushActiveRuns() has already persisted run state, so data loss
+    // is not a concern.
+    try {
+      process.kill(0, "SIGKILL");
+    } catch {
+      // Fallback: kill(0) may throw EPERM in restricted environments.
       process.exit(signal === "SIGINT" ? 130 : 143);
     }
   };
