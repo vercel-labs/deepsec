@@ -212,11 +212,21 @@ function installShutdownHandlers(): void {
     if (shutdownStarted) return;
     shutdownStarted = true;
     flushActiveRuns();
-    // Kill the process group so co-listeners that never call process.exit()
-    // (e.g. some agent SDKs) cannot hang the CLI indefinitely.
+    // Attaching a listener for SIGINT/SIGTERM suppresses Node's
+    // default termination, so we have to provide an exit path
+    // ourselves or the process hangs after Ctrl+C. Previously we
+    // deferred to co-listeners (e.g. the sandbox shutdown handler in
+    // `deepsec/sandbox/shutdown.ts`) when listenerCount > 1, but
+    // agent SDKs can register listeners that never call process.exit(),
+    // causing the CLI to hang. Killing the process group via SIGKILL
+    // guarantees termination in all cases; run metadata has already
+    // been persisted synchronously above.
     try {
       process.kill(0, "SIGKILL");
     } catch {
+      // Fallback for restricted environments where kill(0) is not
+      // permitted. Conventional signal exit codes: 128 + signal number
+      // (SIGINT=2 → 130, SIGTERM=15 → 143).
       process.exit(signal === "SIGINT" ? 130 : 143);
     }
   };
