@@ -212,11 +212,10 @@ function installShutdownHandlers(): void {
     if (shutdownStarted) return;
     shutdownStarted = true;
     flushActiveRuns();
-    // Attaching a listener for SIGINT/SIGTERM suppresses Node's
-    // default termination, so we have to provide an exit path
-    // ourselves or the process hangs after Ctrl+C. Kill the process
-    // group so co-listeners that never call process.exit() (e.g. some
-    // agent SDKs) cannot leave the CLI hanging.
+    // Attaching a listener for SIGINT/SIGTERM suppresses Node's default termination, so we
+    // have to provide an exit path ourselves or the process hangs after Ctrl+C. Kill the
+    // process group so co-listeners that never call process.exit() (e.g. some agent SDKs)
+    // cannot leave the CLI hanging.
     try {
       process.kill(0, "SIGKILL");
     } catch {
@@ -229,8 +228,8 @@ function installShutdownHandlers(): void {
   process.on("SIGTERM", handler);
   // beforeExit covers the case where a thrown error bubbles out of
   // `process()` / `revalidate()` without `unregisterActiveRun` being
-  // called — without this, the run would be stranded at `phase:
-  // "running"` even though the node process is on its way out.
+  // called — without this, the run would be stranded at `phase: "running"`
+  // even though the node process is on its way out.
   process.on("beforeExit", flushActiveRuns);
 }
 
