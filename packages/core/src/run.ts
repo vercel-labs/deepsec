@@ -182,9 +182,6 @@ export function completeRun(
 // `isReclaimableLock`.
 const activeRuns = new Map<string, { projectId: string; runId: string }>();
 let shutdownHandlersInstalled = false;
-// Guards against the handler firing twice when both SIGINT and SIGTERM
-// are delivered in quick succession (e.g. a process manager sending
-// SIGTERM immediately after the user hits Ctrl+C).
 let shutdownStarted = false;
 
 function flushActiveRuns(): void {
@@ -215,18 +212,11 @@ function installShutdownHandlers(): void {
     if (shutdownStarted) return;
     shutdownStarted = true;
     flushActiveRuns();
-    // After flushing run metadata synchronously, kill the entire process
-    // group. This handles cases where another SIGINT listener (e.g. an
-    // agent SDK) is registered but never calls process.exit(), which
-    // would otherwise leave the CLI hanging indefinitely after Ctrl+C.
-    // SIGKILL cannot be caught or deferred, so this is guaranteed to
-    // terminate the process even if other handlers are mid-flight.
-    // flushActiveRuns() has already persisted run state, so data loss
-    // is not a concern.
+    // Kill the process group so co-listeners that never call process.exit()
+    // (e.g. some agent SDKs) cannot hang the CLI indefinitely.
     try {
       process.kill(0, "SIGKILL");
     } catch {
-      // Fallback: kill(0) may throw EPERM in restricted environments.
       process.exit(signal === "SIGINT" ? 130 : 143);
     }
   };
