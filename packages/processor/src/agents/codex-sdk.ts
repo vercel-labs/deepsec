@@ -19,7 +19,9 @@ import {
   buildRevalidateJsonRepairPrompt,
   buildRevalidatePrompt,
   classifyQuotaError,
+  formatMissingCodexBinaryError,
   formatJsonRepairFailureDebugText,
+  isMissingBinaryError,
   isTransientError,
   jsonRepairFailureError,
   MAX_ATTEMPTS,
@@ -393,6 +395,32 @@ function readStderrTail(p: string | null): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function firstMissingCodexBinaryError(
+  ...messages: Array<string | undefined | null>
+): string | undefined {
+  return messages.find(
+    (msg): msg is string => typeof msg === "string" && isMissingBinaryError(msg),
+  );
+}
+
+function formatCodexNoResultError(params: {
+  resultKind: "result" | "revalidation result";
+  lastError: string;
+  codexStderr?: string;
+}): string {
+  const { resultKind, lastError, codexStderr } = params;
+  const combinedError = [lastError, codexStderr].filter(Boolean).join("\n");
+  if (isMissingBinaryError(combinedError)) {
+    return formatMissingCodexBinaryError(combinedError);
+  }
+
+  const stderrSuffix = codexStderr ? ` Stderr tail: ${codexStderr.slice(0, 800)}` : "";
+  return (
+    `Codex SDK produced no ${resultKind} after ${MAX_ATTEMPTS} attempt(s). ` +
+    `Last error: ${lastError || "(none captured)"}.${stderrSuffix}`
+  );
 }
 
 function cleanupStderrLog(p: string | null): void {
@@ -780,7 +808,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         // Codex frequently exits silent on quota/auth errors — the SDK
         // returns an empty `response.completed` and the error only lives in
         // the wrapper-captured stderr. Read it BEFORE deciding to retry so
-        // a quota miss bails fast instead of burning all 3 attempts.
+        // a quota miss or missing binary bails fast instead of burning all
+        // 3 attempts.
         const stderrPeek = readStderrTail(invocation.stderrLog) ?? "";
         const quotaSourceEarly =
           classifyQuotaError(lastError, "codex") || classifyQuotaError(stderrPeek, "codex");
@@ -791,6 +820,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
             quotaSourceEarly,
             lastError || stderrPeek || "codex silent quota exit",
           );
+        }
+        const missingBinaryEarly = firstMissingCodexBinaryError(lastError, stderrPeek);
+        if (missingBinaryEarly) {
+          if (stderrPeek) sdkMeta.codexStderr = stderrPeek;
+          lastError = missingBinaryEarly;
+          break;
         }
         // Silent-failure retry: gateway returned response.completed with 0
         // tokens and no agent_message — codex CLI exited clean, but no work
@@ -844,6 +879,9 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         if (quotaSourceFinal) {
           throw new QuotaExhaustedError(quotaSourceFinal, stderrTail);
         }
+        if (isMissingBinaryError(stderrTail)) {
+          throw new Error(formatMissingCodexBinaryError(stderrTail));
+        }
       }
 
       // Empty-result check runs BEFORE parse so a silent failure throws
@@ -851,12 +889,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       // with a misleading "no JSON in response" message — and the finally
       // block below cleans up regardless of which path we exit through.
       if (!resultText) {
-        const stderrSuffix = sdkMeta.codexStderr
-          ? ` Stderr tail: ${sdkMeta.codexStderr.slice(0, 800)}`
-          : "";
         throw new Error(
-          `Codex SDK produced no result after ${MAX_ATTEMPTS} attempt(s). ` +
-            `Last error: ${lastError || "(none captured)"}.${stderrSuffix}`,
+          formatCodexNoResultError({
+            resultKind: "result",
+            lastError,
+            codexStderr: sdkMeta.codexStderr,
+          }),
         );
       }
 
@@ -1053,7 +1091,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
 
         if (agentMessages.length > 0) break;
         // See investigate() — read stderr first so we bail fast on quota
-        // misses instead of burning all 3 attempts.
+        // misses or missing binaries instead of burning all 3 attempts.
         const stderrPeek = readStderrTail(invocation.stderrLog) ?? "";
         const quotaSourceEarly =
           classifyQuotaError(lastError, "codex") || classifyQuotaError(stderrPeek, "codex");
@@ -1063,6 +1101,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
             quotaSourceEarly,
             lastError || stderrPeek || "codex silent quota exit",
           );
+        }
+        const missingBinaryEarly = firstMissingCodexBinaryError(lastError, stderrPeek);
+        if (missingBinaryEarly) {
+          if (stderrPeek) sdkMeta.codexStderr = stderrPeek;
+          lastError = missingBinaryEarly;
+          break;
         }
         // Silent-failure retry: gateway returned response.completed with 0
         // tokens and no agent_message — codex CLI exited clean, but no work
@@ -1104,17 +1148,20 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         if (quotaSourceFinal) {
           throw new QuotaExhaustedError(quotaSourceFinal, stderrTail);
         }
+        if (isMissingBinaryError(stderrTail)) {
+          throw new Error(formatMissingCodexBinaryError(stderrTail));
+        }
       }
 
       // Empty-result throw before parse so silent failures don't crash inside
       // parseRevalidateVerdicts and bypass the cleanup in finally.
       if (!resultText) {
-        const stderrSuffix = sdkMeta.codexStderr
-          ? ` Stderr tail: ${sdkMeta.codexStderr.slice(0, 800)}`
-          : "";
         throw new Error(
-          `Codex SDK produced no revalidation result after ${MAX_ATTEMPTS} attempt(s). ` +
-            `Last error: ${lastError || "(none captured)"}.${stderrSuffix}`,
+          formatCodexNoResultError({
+            resultKind: "revalidation result",
+            lastError,
+            codexStderr: sdkMeta.codexStderr,
+          }),
         );
       }
 

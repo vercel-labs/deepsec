@@ -200,6 +200,53 @@ export class QuotaExhaustedError extends Error {
   }
 }
 
+const CODEX_VENDOR_BINARY_RE =
+  /@openai[\\/]codex[\\/]vendor[\\/][\s\S]*?[\\/]codex[\\/]codex(?:\.exe)?/i;
+
+function extractMissingCodexBinaryPath(msg: string): string | undefined {
+  const spawnMatch = msg.match(
+    /\bspawn\s+(.+?@openai[\\/]codex[\\/]vendor[\\/].+?[\\/]codex[\\/]codex(?:\.exe)?)\s+(?:ENOENT|$)/i,
+  );
+  if (spawnMatch?.[1]) return spawnMatch[1].trim();
+
+  const pathMatch = msg.match(
+    /((?:[A-Za-z]:)?[^"'`\n\r]*?@openai[\\/]codex[\\/]vendor[\\/][^"'`\n\r]*?[\\/]codex[\\/]codex(?:\.exe)?)/i,
+  );
+  return pathMatch?.[1]?.trim();
+}
+
+/**
+ * Detect the local failure mode where the vendored @openai/codex executable
+ * is gone by the time the SDK tries to spawn it. macOS Gatekeeper/XProtect
+ * can kill the binary first (SIGKILL) and quarantine/remove it, but SIGKILL
+ * alone is not enough to classify this: we require the vendored binary path
+ * plus ENOENT/no-such-file so ordinary process kills stay in the existing
+ * retry/error path.
+ */
+export function isMissingBinaryError(msg: string): boolean {
+  if (!msg) return false;
+  const hasMissingFileSignature =
+    /\bENOENT\b/i.test(msg) || /no such file or directory/i.test(msg);
+  return hasMissingFileSignature && CODEX_VENDOR_BINARY_RE.test(msg);
+}
+
+export function formatMissingCodexBinaryError(msg: string): string {
+  const binaryPath = extractMissingCodexBinaryPath(msg);
+  const missingLine = binaryPath ? `\n\nMissing binary: ${binaryPath}` : "";
+  const rawLine = msg ? `\n\nOriginal error: ${msg.slice(0, 1000)}` : "";
+
+  return (
+    `Codex could not start because the bundled @openai/codex executable is missing or no longer spawnable.` +
+    missingLine +
+    `\n\nOn macOS, Gatekeeper may have killed or quarantined the vendored Codex binary. ` +
+    `That often appears first as "Codex Exec exited with signal SIGKILL", then the next spawn fails with ENOENT.` +
+    `\n\nTo fix it, reinstall dependencies so @openai/codex restores the vendored binary. ` +
+    `If you trust the installed package, you can also clear the macOS quarantine attribute from the restored package or binary with: ` +
+    `xattr -dr com.apple.quarantine <path-to-node_modules/@openai/codex>` +
+    rawLine
+  );
+}
+
 /**
  * Vercel AI Gateway endpoints — duplicated from preflight.ts on purpose:
  * processor doesn't depend on the deepsec CLI package. Keep these in sync
