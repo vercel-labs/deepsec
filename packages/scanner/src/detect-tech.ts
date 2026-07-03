@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "@deepsec/core";
+import { globSync } from "glob";
+import { parse as parseYaml } from "yaml";
 
 /**
  * Outcome of inspecting a project root for known tech. Tags are normalized
@@ -57,27 +59,174 @@ function listDir(rootPath: string, rel: string): string[] {
  */
 type Detector = (rootPath: string, cache: Map<string, string | null>) => string[];
 
+const NEXT_CONFIG_FILES = ["next.config.js", "next.config.ts", "next.config.mjs"];
+
+const WORKSPACE_PACKAGE_IGNORE = [
+  "**/node_modules/**",
+  "**/.git/**",
+  "**/.next/**",
+  "**/dist/**",
+  "**/build/**",
+  "**/coverage/**",
+  "**/.turbo/**",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseJsonObject(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseYamlObject(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = parseYaml(raw);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+}
+
+function normalizeWorkspacePattern(pattern: string): string | null {
+  let normalized = pattern.trim().replaceAll("\\", "/");
+  if (!normalized) return null;
+  const negated = normalized.startsWith("!");
+  if (negated) normalized = normalized.slice(1).trim();
+  if (!normalized || path.isAbsolute(normalized)) return null;
+  normalized = normalized.replace(/^\.\//, "").replace(/\/+$/, "");
+  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+    return null;
+  }
+  return negated ? `!${normalized}` : normalized;
+}
+
+function addWorkspacePatterns(
+  target: { include: Set<string>; exclude: Set<string> },
+  patterns: string[],
+): void {
+  for (const raw of patterns) {
+    const normalized = normalizeWorkspacePattern(raw);
+    if (!normalized) continue;
+    if (normalized.startsWith("!")) target.exclude.add(normalized.slice(1));
+    else target.include.add(normalized);
+  }
+}
+
+function readWorkspacePatterns(
+  rootPath: string,
+  cache: Map<string, string | null>,
+): { include: string[]; exclude: string[] } {
+  const patterns = { include: new Set<string>(), exclude: new Set<string>() };
+
+  const pkg = parseJsonObject(readSafe(rootPath, "package.json", cache));
+  if (pkg) {
+    const workspaces = pkg.workspaces;
+    if (Array.isArray(workspaces)) {
+      addWorkspacePatterns(patterns, toStringArray(workspaces));
+    } else if (isRecord(workspaces)) {
+      addWorkspacePatterns(patterns, toStringArray(workspaces.packages));
+    }
+  }
+
+  const pnpmWorkspace = parseYamlObject(readSafe(rootPath, "pnpm-workspace.yaml", cache));
+  if (pnpmWorkspace) {
+    addWorkspacePatterns(patterns, toStringArray(pnpmWorkspace.packages));
+  }
+
+  return {
+    include: Array.from(patterns.include),
+    exclude: Array.from(patterns.exclude),
+  };
+}
+
+function packageJsonGlob(pattern: string): string {
+  return pattern === "package.json" || pattern.endsWith("/package.json")
+    ? pattern
+    : `${pattern}/package.json`;
+}
+
+function workspacePackageJsonPaths(rootPath: string, cache: Map<string, string | null>): string[] {
+  const paths = new Set<string>();
+  if (readSafe(rootPath, "package.json", cache) !== null) paths.add("package.json");
+
+  const { include, exclude } = readWorkspacePatterns(rootPath, cache);
+  if (include.length === 0) return Array.from(paths);
+
+  const ignore = [
+    ...WORKSPACE_PACKAGE_IGNORE,
+    ...exclude.flatMap((pattern) => [pattern, `${pattern}/**`, packageJsonGlob(pattern)]),
+  ];
+
+  for (const rel of globSync(include.map(packageJsonGlob), {
+    cwd: rootPath,
+    ignore,
+    nodir: true,
+    absolute: false,
+  })) {
+    paths.add(rel.replaceAll("\\", "/"));
+  }
+
+  return Array.from(paths).sort((a, b) =>
+    a === "package.json" ? -1 : b === "package.json" ? 1 : a.localeCompare(b),
+  );
+}
+
+function dependencyNamesFromPackageJson(pkg: Record<string, unknown>): Set<string> {
+  const deps = new Set<string>();
+  for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
+    const entries = pkg[field];
+    if (!isRecord(entries)) continue;
+    for (const name of Object.keys(entries)) deps.add(name);
+  }
+  return deps;
+}
+
+function hasNextConfig(rootPath: string, packageJsonPaths: string[]): boolean {
+  const dirs = new Set<string>(["."]);
+  for (const rel of packageJsonPaths) dirs.add(path.posix.dirname(rel));
+
+  for (const dir of dirs) {
+    for (const file of NEXT_CONFIG_FILES) {
+      const rel = dir === "." ? file : `${dir}/${file}`;
+      if (exists(rootPath, rel)) return true;
+    }
+  }
+
+  return false;
+}
+
 const detectors: Detector[] = [
   // --- Node / TS / JS ecosystems ---
   (root, cache) => {
-    const pkg = readSafe(root, "package.json", cache);
-    if (!pkg) return [];
-    const tags: string[] = ["node"];
-    let parsed: Record<string, unknown> | null = null;
-    try {
-      parsed = JSON.parse(pkg) as Record<string, unknown>;
-    } catch {
-      return tags;
-    }
-    const deps = {
-      ...((parsed.dependencies as Record<string, string>) ?? {}),
-      ...((parsed.devDependencies as Record<string, string>) ?? {}),
-      ...((parsed.peerDependencies as Record<string, string>) ?? {}),
-    };
-    const has = (name: string) => Object.hasOwn(deps, name);
-    const startsWith = (prefix: string) => Object.keys(deps).some((k) => k.startsWith(prefix));
+    const packageJsonPaths = workspacePackageJsonPaths(root, cache);
+    const foundNextConfig = hasNextConfig(root, packageJsonPaths);
+    if (packageJsonPaths.length === 0 && !foundNextConfig) return [];
 
-    if (has("next")) tags.push("nextjs");
+    const tags: string[] = ["node"];
+    const deps = new Set<string>();
+    for (const rel of packageJsonPaths) {
+      const parsed = parseJsonObject(readSafe(root, rel, cache));
+      if (!parsed) continue;
+      for (const name of dependencyNamesFromPackageJson(parsed)) deps.add(name);
+    }
+    const dependencyNames = Array.from(deps);
+    const has = (name: string) => deps.has(name);
+    const startsWith = (prefix: string) => dependencyNames.some((k) => k.startsWith(prefix));
+
+    if (foundNextConfig || has("next")) tags.push("nextjs");
     if (has("react") || has("react-dom")) tags.push("react");
     if (has("express")) tags.push("express");
     if (has("fastify")) tags.push("fastify");
@@ -392,6 +541,7 @@ export function detectTech(rootPath: string): DetectedTech {
 
   const COMMON_SENTINELS = [
     "package.json",
+    "pnpm-workspace.yaml",
     "composer.json",
     "artisan",
     "pyproject.toml",
