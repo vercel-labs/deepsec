@@ -57,6 +57,7 @@ describe("createDefaultAgentRegistry", () => {
     expect(registry.get("claude-agent-sdk")).toBeDefined();
     expect(registry.get("codex")).toBeDefined();
     expect(registry.get("pi")).toBeDefined();
-    expect(registry.types().sort()).toEqual(["claude-agent-sdk", "codex", "pi"]);
+    expect(registry.get("cursor")).toBeDefined();
+    expect(registry.types().sort()).toEqual(["claude-agent-sdk", "codex", "cursor", "pi"]);
   });
 });
