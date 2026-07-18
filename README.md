@@ -91,6 +91,18 @@ ran out of quota or credits, deepsec stops gracefully and tells you
 where to top up. Re-run the same command afterward and it picks up
 where it left off.
 
+## Running deepsec with open models
+
+Besides Claude and Codex, deepsec ships a `pi` agent (built on
+[pi-coding-agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent))
+that can be configured to run through any model. When using Vercel's AI Gateway, pass any
+gateway `provider/model` slug via `--model`. Examples:
+
+```bash
+pnpm deepsec process --agent=pi --model=moonshotai/kimi-k3
+pnpm deepsec process --agent=pi --model=zai/glm-5.2
+```
+
 ## Distributed execution (optional)
 
 Large monorepos can fan work across [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) microVMs:

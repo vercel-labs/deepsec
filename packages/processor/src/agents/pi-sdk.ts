@@ -612,6 +612,7 @@ async function* runPiPrompt(params: {
   let promptError: unknown;
   let turnCount = 0;
   let toolUseCount = 0;
+  let lastAssistantError: string | undefined;
   const toolTargets = new Map<string, string | undefined>();
 
   const wake = () => {
@@ -626,8 +627,15 @@ async function* runPiPrompt(params: {
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     const e = event as Record<string, any>;
+    if (process.env.DEEPSEC_PI_DEBUG === "1" && event.type !== "message_update") {
+      try {
+        console.error(`[pi-debug] ${JSON.stringify(event).slice(0, 2000)}`);
+      } catch {
+        console.error(`[pi-debug] ${event.type} (unserializable)`);
+      }
+    }
     switch (event.type) {
-      case "agent_start":
+      case "turn_start":
         turnCount++;
         push({
           type: "thinking",
@@ -647,6 +655,23 @@ async function* runPiPrompt(params: {
           message: `${e.toolName ?? "tool"}${target ? `: ${target}` : ""}`,
           candidateFile: target,
         });
+        break;
+      }
+      case "message_end": {
+        // API failures (e.g. gateway 403s) surface as assistant messages with
+        // stopReason "error" — session.prompt() resolves normally, so without
+        // this the run ends with an empty result and "(none captured)".
+        const message = e.message as Record<string, any> | undefined;
+        if (message?.role === "assistant" && message.stopReason === "error") {
+          lastAssistantError =
+            typeof message.errorMessage === "string" && message.errorMessage.trim()
+              ? message.errorMessage
+              : "Pi model request failed without an error message";
+          push({
+            type: "error",
+            message: `Pi model error: ${truncateLogDetail(lastAssistantError)}`,
+          });
+        }
         break;
       }
       case "tool_execution_end":
@@ -716,10 +741,14 @@ async function* runPiPrompt(params: {
   if (promptError) {
     throw promptError;
   }
+  const finalText = session.getLastAssistantText() ?? "";
+  if (!finalText && lastAssistantError) {
+    throw new Error(lastAssistantError);
+  }
 
   const durationMs = Date.now() - startTime;
   return {
-    resultText: session.getLastAssistantText() ?? "",
+    resultText: finalText,
     meta: batchMetaFromSession(session, durationMs),
     turnCount,
     toolUseCount,
