@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { authBypassMatcher } from "../matchers/auth-bypass.js";
 import { insecureCryptoMatcher } from "../matchers/insecure-crypto.js";
+import { k8sPrivilegedWorkloadMatcher } from "../matchers/k8s-privileged-workload.js";
 import { missingAuthMatcher } from "../matchers/missing-auth.js";
 import { openRedirectMatcher } from "../matchers/open-redirect.js";
 import { pathTraversalMatcher } from "../matchers/path-traversal.js";
@@ -119,5 +120,42 @@ describe("open-redirect matcher", () => {
     const content = readFixture("utils/redirect.ts");
     const matches = openRedirectMatcher.match(content, "src/utils/redirect.ts");
     expect(matches.length).toBeGreaterThan(0);
+  });
+});
+
+describe("k8s-privileged-workload matcher", () => {
+  it("detects privileged Kubernetes workload settings", () => {
+    const content = `apiVersion: v1
+kind: Pod
+spec:
+  hostPID: true
+  containers:
+    - securityContext:
+        privileged: true
+        allowPrivilegeEscalation: true`;
+    const matches = k8sPrivilegedWorkloadMatcher.match(content, "deploy/pod.yaml");
+    expect(matches.map((match) => match.matchedPattern)).toEqual([
+      "privileged container",
+      "privilege escalation allowed",
+      "host namespace shared",
+    ]);
+  });
+
+  it("does not flag hardened workloads or non-Kubernetes YAML", () => {
+    const hardened = `apiVersion: v1
+kind: Pod
+spec:
+  hostPID: false
+  containers:
+    - securityContext:
+        privileged: false
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        capabilities:
+          drop: ["ALL"]`;
+    expect(k8sPrivilegedWorkloadMatcher.match(hardened, "deploy/pod.yaml")).toEqual([]);
+    expect(k8sPrivilegedWorkloadMatcher.match("hostNetwork: true", "config/settings.yaml")).toEqual(
+      [],
+    );
   });
 });
