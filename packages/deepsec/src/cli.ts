@@ -299,7 +299,10 @@ program
   .command("export")
   .description("Export findings as JSON, SARIF, or per-finding markdown files")
   .option("--format <kind>", "Output format: json (default), sarif, or md-dir", "json")
-  .option("--project-id <csv>", "Comma-separated project IDs (omit for all)")
+  .option(
+    "--project-id <csv>",
+    "Comma-separated project IDs (omit for all; SARIF requires exactly one)",
+  )
   .option(
     "--min-severity <sev>",
     "Only export findings at this severity or above (CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG, LOW)",

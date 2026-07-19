@@ -357,6 +357,11 @@ export async function exportCommand(opts: {
   if ((format === "md-dir" || format === "sarif") && !opts.out) {
     throw new Error(`--format ${format} requires --out <${format === "md-dir" ? "dir" : "file"}>`);
   }
+  if (format === "sarif" && projectIds.length !== 1) {
+    throw new Error(
+      `--format sarif requires exactly one project; pass --project-id <id> when multiple projects are configured`,
+    );
+  }
 
   const minSeverity = opts.minSeverity as Severity | undefined;
   const onlySeverity = opts.onlySeverity as Severity | undefined;

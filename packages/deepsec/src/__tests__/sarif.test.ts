@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ExportedFinding } from "../commands/export.js";
+import { type ExportedFinding, exportCommand } from "../commands/export.js";
 import { toSarif } from "../commands/sarif.js";
 
 function finding(overrides: Partial<ExportedFinding> = {}): ExportedFinding {
@@ -53,7 +53,16 @@ describe("toSarif", () => {
         {
           physicalLocation: {
             artifactLocation: { uri: "src/user%20search.ts" },
-            region: { startLine: 12, endLine: 15 },
+            region: { startLine: 12 },
+          },
+        },
+      ],
+      relatedLocations: [
+        {
+          id: 1,
+          physicalLocation: {
+            artifactLocation: { uri: "src/user%20search.ts" },
+            region: { startLine: 15 },
           },
         },
       ],
@@ -95,6 +104,25 @@ describe("toSarif", () => {
     expect(toSarif([input], "2.2.3").runs[0].results[0].level).toBe(level);
   });
 
+  it.each([
+    ["CRITICAL", { tags: ["security"], "security-severity": "9.5" }],
+    ["HIGH", { tags: ["security"], "security-severity": "8.0" }],
+    ["MEDIUM", { tags: ["security"], "security-severity": "5.0" }],
+    ["LOW", { tags: ["security"], "security-severity": "2.0" }],
+    ["HIGH_BUG", { tags: ["correctness"], "problem.severity": "error" }],
+    ["BUG", { tags: ["correctness"], "problem.severity": "warning" }],
+  ] as const)("maps %s findings to GitHub rule metadata", (severity, properties) => {
+    const input = finding({
+      severity,
+      metadata: { ...finding().metadata, severity },
+    });
+
+    const run = toSarif([input], "2.2.3").runs[0];
+
+    expect(run.tool.driver.rules[0].properties).toMatchObject(properties);
+    expect(run.results[0].properties.tags[0]).toBe(properties.tags[0]);
+  });
+
   it("produces deterministic fingerprints from finding identity", () => {
     const original = toSarif([finding()], "2.2.3").runs[0].results[0].partialFingerprints;
     const reorderedLines = finding({
@@ -111,5 +139,15 @@ describe("toSarif", () => {
     expect(original["deepsecFindingId/v1"]).toMatch(/^[a-f0-9]{64}$/);
     expect(movedFingerprint).toEqual(original);
     expect(differentTitleFingerprint).not.toEqual(original);
+  });
+
+  it("rejects ambiguous multi-project SARIF exports", async () => {
+    await expect(
+      exportCommand({
+        format: "sarif",
+        out: "findings.sarif",
+        projectId: "web,api",
+      }),
+    ).rejects.toThrow("--format sarif requires exactly one project");
   });
 });
