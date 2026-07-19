@@ -45,6 +45,7 @@ pnpm deepsec scan
 pnpm deepsec process    
 pnpm deepsec revalidate # optional, cuts FP rate
 pnpm deepsec export --format md-dir --out ./findings
+pnpm deepsec export --format sarif --out findings.sarif
 ```
 
 If you feel like the `deepsec` should look at more parts of the code, give it [the writing matchers](docs/writing-matchers.md) doc to find more valuable starting points in your code base.

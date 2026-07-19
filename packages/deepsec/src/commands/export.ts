@@ -5,6 +5,8 @@ import type { FileRecord, Finding, Severity } from "@deepsec/core";
 import { dataDir, getDataRoot, loadAllFileRecords } from "@deepsec/core";
 import { BOLD, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
+import { getDeepsecVersion } from "../version.js";
+import { toSarif } from "./sarif.js";
 
 const SEVERITY_ORDER: Record<Severity, number> = {
   CRITICAL: 0,
@@ -25,7 +27,7 @@ interface OwnerSummary {
   recentCommitters: { name: string; email: string; date: string }[];
 }
 
-interface ExportedFinding {
+export interface ExportedFinding {
   title: string;
   description: string;
   severity: Severity;
@@ -255,6 +257,13 @@ function writeJson(findings: ExportedFinding[], out: string | undefined) {
   }
 }
 
+function writeSarif(findings: ExportedFinding[], out: string) {
+  const sarif = JSON.stringify(toSarif(findings, getDeepsecVersion()), null, 2);
+  fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+  fs.writeFileSync(out, sarif + "\n");
+  console.log(`\n${GREEN}Exported ${findings.length} finding(s)${RESET} → ${BOLD}${out}${RESET}`);
+}
+
 function writeMdDir(findings: ExportedFinding[], out: string) {
   const root = path.resolve(out);
   fs.mkdirSync(root, { recursive: true });
@@ -342,11 +351,11 @@ export async function exportCommand(opts: {
     : listProjectIds();
 
   const format = opts.format ?? "json";
-  if (format !== "json" && format !== "md-dir") {
-    throw new Error(`--format must be "json" or "md-dir", got "${format}"`);
+  if (format !== "json" && format !== "md-dir" && format !== "sarif") {
+    throw new Error(`--format must be "json", "md-dir", or "sarif", got "${format}"`);
   }
-  if (format === "md-dir" && !opts.out) {
-    throw new Error(`--format md-dir requires --out <dir>`);
+  if ((format === "md-dir" || format === "sarif") && !opts.out) {
+    throw new Error(`--format ${format} requires --out <${format === "md-dir" ? "dir" : "file"}>`);
   }
 
   const minSeverity = opts.minSeverity as Severity | undefined;
@@ -534,6 +543,8 @@ export async function exportCommand(opts: {
 
   if (format === "md-dir") {
     writeMdDir(findings, opts.out!);
+  } else if (format === "sarif") {
+    writeSarif(findings, opts.out!);
   } else {
     writeJson(findings, opts.out);
   }

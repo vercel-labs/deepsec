@@ -166,11 +166,15 @@ Both optional, but worth running on the HIGH/CRITICAL set.
 ```bash
 pnpm deepsec export --format md-dir --out ./findings
 pnpm deepsec export --format json   --out findings.json
+pnpm deepsec export --format sarif  --out findings.sarif
 ```
 
 `md-dir` writes one markdown file per finding under
 `./findings/{CRITICAL,HIGH,MEDIUM,…}/`. `json` writes a single array
-suitable for piping to a downstream issue tracker.
+suitable for piping to a downstream issue tracker. `sarif` writes a
+[SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+log for code-scanning tools such as GitHub code scanning. SARIF output requires
+`--out` and honors the same project, severity, slug, date, and revalidation filters.
 
 For a quick aggregate look:
 
