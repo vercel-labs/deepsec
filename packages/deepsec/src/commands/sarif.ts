@@ -70,7 +70,6 @@ function physicalLocation(finding: SarifFinding) {
   return {
     artifactLocation: {
       uri: artifactUri(finding.metadata.filePath),
-      uriBaseId: "%SRCROOT%",
     },
     ...(startLine !== undefined
       ? {

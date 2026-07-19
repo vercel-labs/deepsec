@@ -52,7 +52,7 @@ describe("toSarif", () => {
       locations: [
         {
           physicalLocation: {
-            artifactLocation: { uri: "src/user%20search.ts", uriBaseId: "%SRCROOT%" },
+            artifactLocation: { uri: "src/user%20search.ts" },
             region: { startLine: 12, endLine: 15 },
           },
         },
