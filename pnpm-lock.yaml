@@ -78,6 +78,9 @@ importers:
       tar:
         specifier: ^7.5.20
         version: 7.5.20
+      undici:
+        specifier: ^8.5.0
+        version: 8.5.0
     devDependencies:
       '@deepsec/core':
         specifier: workspace:*
@@ -127,6 +130,9 @@ importers:
       jsonrepair:
         specifier: ^3.14.0
         version: 3.14.0
+      undici:
+        specifier: ^8.5.0
+        version: 8.5.0
 
   packages/scanner:
     dependencies:

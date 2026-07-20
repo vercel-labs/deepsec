@@ -42,7 +42,8 @@
     "jiti": "^2.4.0",
     "minimatch": "^10.0.0",
     "opencode-ai": "^1.18.3",
-    "tar": "^7.5.20"
+    "tar": "^7.5.20",
+    "undici": "^8.5.0"
   },
   "devDependencies": {
     "@deepsec/core": "workspace:*",

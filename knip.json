@@ -31,6 +31,7 @@
     "@openai/codex",
     "@openai/codex-sdk",
     "@opencode-ai/sdk",
-    "opencode-ai"
+    "opencode-ai",
+    "undici"
   ]
 }

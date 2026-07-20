@@ -18,6 +18,7 @@ const external = [
   "@opencode-ai/sdk",
   "@vercel/sandbox",
   "jiti",
+  "undici",
 ];
 
 const common = {

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOpenCodeConfig,
+  formatOpenCodeError,
   parseOpenCodeModel,
+  resolveOpenCodeAssistantText,
   resolveOpenCodeVariant,
 } from "../agents/opencode-sdk.js";
 
@@ -41,6 +43,54 @@ describe("OpenCodeAgentPlugin configuration", () => {
     expect(resolveOpenCodeVariant("google", "high")).toBe("high");
     expect(resolveOpenCodeVariant("custom")).toBeUndefined();
     expect(resolveOpenCodeVariant("custom", "medium")).toBe("medium");
+  });
+
+  it("preserves nested network error details", () => {
+    const cause = Object.assign(new Error("Headers Timeout Error"), {
+      code: "UND_ERR_HEADERS_TIMEOUT",
+    });
+    const error = new TypeError("fetch failed", { cause });
+
+    expect(formatOpenCodeError(error)).toBe(
+      "fetch failed: Headers Timeout Error (UND_ERR_HEADERS_TIMEOUT)",
+    );
+  });
+
+  it("uses plain text when a provider skips OpenCode's StructuredOutput tool", () => {
+    expect(
+      resolveOpenCodeAssistantText(
+        {
+          error: {
+            name: "StructuredOutputError",
+            data: {
+              message: "Model did not produce structured output",
+              retries: 0,
+            },
+          },
+        },
+        '[{"filePath":"src/a.ts","findings":[]}]',
+      ),
+    ).toEqual({
+      resultText: '[{"filePath":"src/a.ts","findings":[]}]',
+      recoveredStructuredText: true,
+    });
+  });
+
+  it("keeps a structured-output failure when the provider returned no text", () => {
+    expect(() =>
+      resolveOpenCodeAssistantText(
+        {
+          error: {
+            name: "StructuredOutputError",
+            data: {
+              message: "Model did not produce structured output",
+              retries: 0,
+            },
+          },
+        },
+        "",
+      ),
+    ).toThrow(/StructuredOutputError: Model did not produce structured output/);
   });
 
   it("enforces read-only tools, capped steps, and structured provider routing", () => {

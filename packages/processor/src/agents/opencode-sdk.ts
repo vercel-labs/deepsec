@@ -3,12 +3,14 @@ import type { RefusalReport } from "@deepsec/core";
 import {
   type AssistantMessage,
   type Config,
-  createOpencode,
+  createOpencodeClient,
+  createOpencodeServer,
   type OpencodeClient,
   type OutputFormat,
   type Part,
   type PermissionConfig,
 } from "@opencode-ai/sdk/v2";
+import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import {
   backoff,
   buildInvestigateJsonRepairPrompt,
@@ -66,6 +68,7 @@ interface OpenCodeModelRef {
 interface OpenCodeRunContext {
   client: OpencodeClient;
   server: { close(): void };
+  dispatcher: UndiciAgent;
   sessionID: string;
   directory: string;
   controller: AbortController;
@@ -78,6 +81,11 @@ interface OpenCodePromptResult {
   turnCount: number;
   toolUseCount: number;
   progress: AgentProgress[];
+}
+
+interface OpenCodeResolvedText {
+  resultText: string;
+  recoveredStructuredText: boolean;
 }
 
 const INVESTIGATE_FORMAT: OutputFormat = {
@@ -157,31 +165,7 @@ const REVALIDATE_FORMAT: OutputFormat = {
   },
 };
 
-const REFUSAL_FORMAT: OutputFormat = {
-  type: "json_schema",
-  retryCount: 1,
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    required: ["refused", "skipped"],
-    properties: {
-      refused: { type: "boolean" },
-      reason: { type: ["string", "null"] },
-      skipped: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["reason"],
-          properties: {
-            filePath: { type: "string" },
-            reason: { type: "string" },
-          },
-        },
-      },
-    },
-  },
-};
+const TEXT_FORMAT: OutputFormat = { type: "text" };
 
 const READ_ONLY_PERMISSION: PermissionConfig = {
   "*": "deny",
@@ -369,6 +353,28 @@ async function findFreePort(): Promise<number> {
   });
 }
 
+function createOpenCodeFetch(dispatcher: UndiciAgent): typeof globalThis.fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    // The generated SDK constructs Node's built-in Request, while the
+    // separately versioned Undici package has its own branded Request class.
+    // Normalize to primitives so fetch and its dispatcher always come from
+    // the same Undici version.
+    const request = input instanceof Request ? input : new Request(input, init);
+    const body =
+      request.method === "GET" || request.method === "HEAD"
+        ? undefined
+        : new Uint8Array(await request.arrayBuffer());
+    return (await undiciFetch(request.url, {
+      method: request.method,
+      headers: Object.fromEntries(request.headers.entries()),
+      body,
+      redirect: request.redirect,
+      signal: request.signal,
+      dispatcher,
+    })) as unknown as Response;
+  }) as typeof globalThis.fetch;
+}
+
 async function createRunContext(params: {
   projectRoot: string;
   config: Record<string, unknown>;
@@ -384,23 +390,33 @@ async function createRunContext(params: {
   }
   const detachParentAbort = () => params.signal?.removeEventListener("abort", onParentAbort);
 
-  let server: { close(): void } | undefined;
+  let server: { url: string; close(): void } | undefined;
+  const dispatcher = new UndiciAgent({
+    // session.prompt is synchronous: OpenCode does not send response headers
+    // until the entire agent loop finishes. Undici's 300-second defaults turn
+    // valid long-running batches into a misleading `fetch failed`.
+    headersTimeout: 0,
+    bodyTimeout: 0,
+  });
   try {
     const port = await findFreePort();
-    const started = await createOpencode({
+    server = await createOpencodeServer({
       hostname: "127.0.0.1",
       port,
       timeout: 15_000,
       signal: controller.signal,
       config: buildOpenCodeConfig(params.config),
     });
-    server = started.server;
+    const client = createOpencodeClient({
+      baseUrl: server.url,
+      fetch: createOpenCodeFetch(dispatcher),
+    });
 
     const cfg = readConfig(params.config);
     const requested = parseOpenCodeModel(cfg.model ?? DEFAULT_MODEL);
     const providerID = cfg.aiProvider ?? requested.providerID;
     const variant = resolveOpenCodeVariant(providerID, cfg.thinkingLevel);
-    const created = await started.client.session.create(
+    const created = await client.session.create(
       {
         directory: params.projectRoot,
         title: params.title,
@@ -415,8 +431,9 @@ async function createRunContext(params: {
     );
 
     return {
-      client: started.client,
-      server: started.server,
+      client,
+      server,
+      dispatcher,
       sessionID: created.data.id,
       directory: params.projectRoot,
       controller,
@@ -424,6 +441,7 @@ async function createRunContext(params: {
     };
   } catch (err) {
     server?.close();
+    await dispatcher.close().catch(() => undefined);
     detachParentAbort();
     throw err;
   }
@@ -443,6 +461,7 @@ async function disposeRunContext(context: OpenCodeRunContext | undefined): Promi
     }
   }
   context.server.close();
+  await context.dispatcher.close();
 }
 
 function formatAssistantError(error: NonNullable<AssistantMessage["error"]>): string {
@@ -451,6 +470,58 @@ function formatAssistantError(error: NonNullable<AssistantMessage["error"]>): st
       ? String(error.data.message)
       : JSON.stringify(error.data);
   return `${error.name}: ${message}`;
+}
+
+function assistantError(error: NonNullable<AssistantMessage["error"]>): Error {
+  const result = new Error(formatAssistantError(error));
+  result.name = error.name;
+  return result;
+}
+
+function isStructuredOutputError(error: unknown): boolean {
+  return error instanceof Error && error.name === "StructuredOutputError";
+}
+
+export function formatOpenCodeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+
+  const messages = [error.message];
+  let cause: unknown = error.cause;
+  const seen = new Set<unknown>([error]);
+  while (cause instanceof Error && !seen.has(cause)) {
+    seen.add(cause);
+    const code =
+      "code" in cause && typeof cause.code === "string" && cause.code ? ` (${cause.code})` : "";
+    const message = `${cause.message}${code}`;
+    if (!messages.includes(message)) messages.push(message);
+    cause = cause.cause;
+  }
+  return messages.join(": ");
+}
+
+export function resolveOpenCodeAssistantText(
+  info: Pick<AssistantMessage, "structured" | "error">,
+  partText: string,
+): OpenCodeResolvedText {
+  if (info.structured !== undefined) {
+    return {
+      resultText: JSON.stringify(info.structured),
+      recoveredStructuredText: false,
+    };
+  }
+  if (!info.error) {
+    return {
+      resultText: partText,
+      recoveredStructuredText: false,
+    };
+  }
+  if (info.error.name === "StructuredOutputError" && partText) {
+    return {
+      resultText: partText,
+      recoveredStructuredText: true,
+    };
+  }
+  throw assistantError(info.error);
 }
 
 function textFromParts(parts: Part[]): string {
@@ -526,19 +597,24 @@ async function runPrompt(params: {
   );
 
   const { info, parts } = response.data;
-  if (info.error) throw new Error(formatAssistantError(info.error));
-
-  const resultText =
-    info.structured !== undefined ? JSON.stringify(info.structured) : textFromParts(parts);
+  const resolved = resolveOpenCodeAssistantText(info, textFromParts(parts));
   const turnCount = Math.max(1, parts.filter((part) => part.type === "step-finish").length);
   const toolUseCount = parts.filter((part) => part.type === "tool").length;
   const completed = info.time.completed ?? Date.now();
+  const progress = progressFromParts(parts);
+  if (resolved.recoveredStructuredText) {
+    progress.push({
+      type: "thinking",
+      message:
+        "OpenCode returned text instead of calling StructuredOutput; validating the text response",
+    });
+  }
 
   return {
-    resultText,
+    resultText: resolved.resultText,
     turnCount,
     toolUseCount,
-    progress: progressFromParts(parts),
+    progress,
     meta: {
       durationApiMs: Math.max(0, completed - info.time.created),
       numTurns: turnCount,
@@ -558,7 +634,6 @@ async function runPrompt(params: {
 async function runToollessFollowUp(params: {
   context: OpenCodeRunContext | undefined;
   prompt: string;
-  format: OutputFormat;
   config: Record<string, unknown>;
 }): Promise<string | undefined> {
   if (!params.context) return undefined;
@@ -566,7 +641,7 @@ async function runToollessFollowUp(params: {
     const result = await runPrompt({
       context: params.context,
       prompt: params.prompt,
-      format: params.format,
+      format: TEXT_FORMAT,
       config: params.config,
       tools: NO_TOOLS,
       agent: JSON_AGENT,
@@ -584,7 +659,6 @@ async function runRefusalFollowUp(params: {
   const raw = await runToollessFollowUp({
     ...params,
     prompt: REFUSAL_FOLLOWUP_PROMPT,
-    format: REFUSAL_FORMAT,
   });
   return raw === undefined ? undefined : parseRefusalReport(raw);
 }
@@ -603,9 +677,11 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
     let sdkMeta: Partial<BatchMeta> = {};
     let turnCount = 0;
     let toolUseCount = 0;
+    let attempts = 0;
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        attempts = attempt;
         if (attempt > 1) {
           yield {
             type: "thinking",
@@ -645,8 +721,23 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
           toolUseCount = run.toolUseCount;
           for (const progress of run.progress) yield progress;
         } catch (err) {
-          lastError = err instanceof Error ? err.message : String(err);
-          yield { type: "error", message: `OpenCode SDK error: ${lastError.slice(0, 300)}` };
+          if (isStructuredOutputError(err)) {
+            yield {
+              type: "thinking",
+              message:
+                "OpenCode did not call StructuredOutput; requesting a tool-free JSON finalization",
+            };
+            const recovered = await runToollessFollowUp({
+              context,
+              prompt: buildInvestigateJsonRepairPrompt(batch),
+              config,
+            });
+            if (recovered) resultText = recovered;
+          }
+          if (!resultText) {
+            lastError = formatOpenCodeError(err);
+            yield { type: "error", message: `OpenCode SDK error: ${lastError.slice(0, 300)}` };
+          }
         }
 
         if (resultText) break;
@@ -658,7 +749,7 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
 
       if (!resultText) {
         throw new Error(
-          `OpenCode produced no investigation result after ${MAX_ATTEMPTS} attempt(s). ` +
+          `OpenCode produced no investigation result after ${attempts} attempt(s). ` +
             `Last error: ${lastError || "(none captured)"}.`,
         );
       }
@@ -674,7 +765,6 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
         const repairText = await runToollessFollowUp({
           context,
           prompt: buildInvestigateJsonRepairPrompt(batch),
-          format: INVESTIGATE_FORMAT,
           config,
         });
         if (repairText === undefined) {
@@ -753,9 +843,11 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
     let sdkMeta: Partial<BatchMeta> = {};
     let turnCount = 0;
     let toolUseCount = 0;
+    let attempts = 0;
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        attempts = attempt;
         if (attempt > 1) {
           yield {
             type: "thinking",
@@ -795,8 +887,23 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
           toolUseCount = run.toolUseCount;
           for (const progress of run.progress) yield progress;
         } catch (err) {
-          lastError = err instanceof Error ? err.message : String(err);
-          yield { type: "error", message: `OpenCode SDK error: ${lastError.slice(0, 300)}` };
+          if (isStructuredOutputError(err)) {
+            yield {
+              type: "thinking",
+              message:
+                "OpenCode did not call StructuredOutput; requesting a tool-free JSON finalization",
+            };
+            const recovered = await runToollessFollowUp({
+              context,
+              prompt: buildRevalidateJsonRepairPrompt(),
+              config,
+            });
+            if (recovered) resultText = recovered;
+          }
+          if (!resultText) {
+            lastError = formatOpenCodeError(err);
+            yield { type: "error", message: `OpenCode SDK error: ${lastError.slice(0, 300)}` };
+          }
         }
 
         if (resultText) break;
@@ -808,7 +915,7 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
 
       if (!resultText) {
         throw new Error(
-          `OpenCode produced no revalidation result after ${MAX_ATTEMPTS} attempt(s). ` +
+          `OpenCode produced no revalidation result after ${attempts} attempt(s). ` +
             `Last error: ${lastError || "(none captured)"}.`,
         );
       }
@@ -824,7 +931,6 @@ export class OpenCodeAgentPlugin implements AgentPlugin {
         const repairText = await runToollessFollowUp({
           context,
           prompt: buildRevalidateJsonRepairPrompt(),
-          format: REVALIDATE_FORMAT,
           config,
         });
         if (repairText === undefined) {
