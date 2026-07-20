@@ -8,6 +8,8 @@ export function defaultModelForAgent(agentType: string): string {
       return "gpt-5.5";
     case "pi":
       return "zai/glm-5.2";
+    case "opencode":
+      return "anthropic/claude-opus-4-8";
     default:
       return "claude-opus-4-8";
   }

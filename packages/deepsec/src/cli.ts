@@ -136,24 +136,27 @@ program
   .option("--run-id <id>", "Resume a specific processing run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex, claude, or pi (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, opencode, or pi (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi)",
+    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, anthropic/claude-opus-4-8 for opencode, zai/glm-5.2 for pi)",
   )
   .option(
     "--ai-provider <provider>",
-    "Pi: provider to override for --ai-base-url / --ai-api-key-env (e.g. openai)",
+    "Pi/OpenCode: provider to override for --ai-base-url / --ai-api-key-env (e.g. openai)",
   )
   .option(
     "--ai-base-url <url>",
-    "Pi: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",
+    "Pi/OpenCode: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",
   )
-  .option("--ai-api-key-env <name>", "Pi: environment variable that holds the provider API key")
+  .option(
+    "--ai-api-key-env <name>",
+    "Pi/OpenCode: environment variable that holds the provider API key",
+  )
   .option(
     "--ai-header <name=value>",
-    "Pi: extra provider request header; repeatable",
+    "Pi/OpenCode: extra provider request header; repeatable",
     collectRepeatable,
     [],
   )
@@ -215,24 +218,27 @@ program
   .option("--run-id <id>", "Resume a specific revalidation run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex, claude, or pi (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, opencode, or pi (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi)",
+    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, anthropic/claude-opus-4-8 for opencode, zai/glm-5.2 for pi)",
   )
   .option(
     "--ai-provider <provider>",
-    "Pi: provider to override for --ai-base-url / --ai-api-key-env (e.g. openai)",
+    "Pi/OpenCode: provider to override for --ai-base-url / --ai-api-key-env (e.g. openai)",
   )
   .option(
     "--ai-base-url <url>",
-    "Pi: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",
+    "Pi/OpenCode: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",
   )
-  .option("--ai-api-key-env <name>", "Pi: environment variable that holds the provider API key")
+  .option(
+    "--ai-api-key-env <name>",
+    "Pi/OpenCode: environment variable that holds the provider API key",
+  )
   .option(
     "--ai-header <name=value>",
-    "Pi: extra provider request header; repeatable",
+    "Pi/OpenCode: extra provider request header; repeatable",
     collectRepeatable,
     [],
   )
@@ -327,7 +333,7 @@ program
   .option("--require-owner", "Drop findings that have no ownership data (no assignee, no teams)")
   .option(
     "--only-agent <type>",
-    "Only export findings produced by this agent backend (e.g. codex, claude, pi)",
+    "Only export findings produced by this agent backend (e.g. codex, claude, opencode, pi)",
   )
   .option(
     "--only-marker <n>",
