@@ -5,6 +5,7 @@ import {
   parseOpenCodeModel,
   resolveOpenCodeAssistantText,
   resolveOpenCodeVariant,
+  shouldUseOpenCodeTextFormat,
 } from "../agents/opencode-sdk.js";
 
 describe("OpenCodeAgentPlugin configuration", () => {
@@ -43,6 +44,28 @@ describe("OpenCodeAgentPlugin configuration", () => {
     expect(resolveOpenCodeVariant("google", "high")).toBe("high");
     expect(resolveOpenCodeVariant("custom")).toBeUndefined();
     expect(resolveOpenCodeVariant("custom", "medium")).toBe("medium");
+  });
+
+  it("uses text output when Anthropic thinking conflicts with forced structured output", () => {
+    expect(
+      shouldUseOpenCodeTextFormat("anthropic", "high", {
+        type: "json_schema",
+        schema: { type: "object" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseOpenCodeTextFormat("anthropic", undefined, {
+        type: "json_schema",
+        schema: { type: "object" },
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseOpenCodeTextFormat("openai", "high", {
+        type: "json_schema",
+        schema: { type: "object" },
+      }),
+    ).toBe(false);
+    expect(shouldUseOpenCodeTextFormat("anthropic", "high", { type: "text" })).toBe(false);
   });
 
   it("preserves nested network error details", () => {
@@ -129,9 +152,19 @@ describe("OpenCodeAgentPlugin configuration", () => {
     expect(main?.permission).toEqual(config.permission);
     expect(config.provider?.anthropic?.options).toMatchObject({
       apiKey: "{env:ANTHROPIC_AUTH_TOKEN}",
-      baseURL: "https://ai-gateway.example",
+      baseURL: "https://ai-gateway.example/v1",
     });
     expect(JSON.stringify(config)).not.toContain("do-not-inline-this-secret");
+  });
+
+  it("does not duplicate the Anthropic API version path", () => {
+    process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/";
+
+    const config = buildOpenCodeConfig({
+      model: "anthropic/claude-haiku-4-5",
+    });
+
+    expect(config.provider?.anthropic?.options?.baseURL).toBe("https://api.anthropic.com/v1");
   });
 
   it("supports a custom provider override without changing the model id", () => {

@@ -251,6 +251,16 @@ export function resolveOpenCodeVariant(
   return explicit ? level : undefined;
 }
 
+export function shouldUseOpenCodeTextFormat(
+  providerID: string,
+  variant: string | undefined,
+  format: OutputFormat,
+): boolean {
+  return (
+    providerID.toLowerCase() === "anthropic" && Boolean(variant) && format.type === "json_schema"
+  );
+}
+
 function providerCredentialEnv(providerID: string, cfg: OpenCodeAgentConfig): string | undefined {
   if (cfg.aiApiKeyEnv) return cfg.aiApiKeyEnv;
   if (providerID === "anthropic") {
@@ -259,6 +269,12 @@ function providerCredentialEnv(providerID: string, cfg: OpenCodeAgentConfig): st
   }
   if (providerID === "openai" && process.env.OPENAI_API_KEY) return "OPENAI_API_KEY";
   return undefined;
+}
+
+function anthropicBaseUrlForOpenCode(baseURL: string | undefined): string | undefined {
+  if (!baseURL) return undefined;
+  const normalized = baseURL.replace(/\/+$/, "");
+  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }
 
 export function buildOpenCodeConfig(config: Record<string, unknown>): Config {
@@ -272,7 +288,7 @@ export function buildOpenCodeConfig(config: Record<string, unknown>): Config {
   const baseURL =
     cfg.aiBaseUrl ??
     (providerID === "anthropic"
-      ? process.env.ANTHROPIC_BASE_URL
+      ? anthropicBaseUrlForOpenCode(process.env.ANTHROPIC_BASE_URL)
       : providerID === "openai"
         ? process.env.OPENAI_BASE_URL
         : undefined);
@@ -580,6 +596,7 @@ async function runPrompt(params: {
   const requested = parseOpenCodeModel(cfg.model ?? DEFAULT_MODEL);
   const providerID = cfg.aiProvider ?? requested.providerID;
   const variant = resolveOpenCodeVariant(providerID, cfg.thinkingLevel);
+  const useTextFormat = shouldUseOpenCodeTextFormat(providerID, variant, params.format);
   const startTime = Date.now();
 
   const response = await params.context.client.session.prompt(
@@ -590,7 +607,7 @@ async function runPrompt(params: {
       agent: params.agent ?? MAIN_AGENT,
       ...(variant ? { variant } : {}),
       tools: params.tools ?? READ_ONLY_TOOLS,
-      format: params.format,
+      format: useTextFormat ? TEXT_FORMAT : params.format,
       parts: [{ type: "text", text: params.prompt }],
     },
     { throwOnError: true, signal: params.context.controller.signal },
@@ -602,6 +619,13 @@ async function runPrompt(params: {
   const toolUseCount = parts.filter((part) => part.type === "tool").length;
   const completed = info.time.completed ?? Date.now();
   const progress = progressFromParts(parts);
+  if (useTextFormat) {
+    progress.push({
+      type: "thinking",
+      message:
+        "Anthropic thinking is incompatible with forced StructuredOutput; validating the text response",
+    });
+  }
   if (resolved.recoveredStructuredText) {
     progress.push({
       type: "thinking",
