@@ -15,6 +15,7 @@ const external = [
   "@earendil-works/pi-coding-agent",
   "@openai/codex",
   "@openai/codex-sdk",
+  "@opencode-ai/sdk",
   "@vercel/sandbox",
   "jiti",
 ];

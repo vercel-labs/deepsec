@@ -36,10 +36,12 @@
     "@earendil-works/pi-coding-agent": "0.79.10",
     "@openai/codex": "^0.144.0",
     "@openai/codex-sdk": "^0.144.0",
+    "@opencode-ai/sdk": "^1.18.3",
     "@vercel/oidc": "^3.4.0",
     "@vercel/sandbox": "^1.9.0",
     "jiti": "^2.4.0",
     "minimatch": "^10.0.0",
+    "opencode-ai": "^1.18.3",
     "tar": "^7.5.20"
   },
   "devDependencies": {

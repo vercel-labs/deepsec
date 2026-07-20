@@ -29,6 +29,8 @@
     "@anthropic-ai/claude-agent-sdk",
     "@earendil-works/pi-coding-agent",
     "@openai/codex",
-    "@openai/codex-sdk"
+    "@openai/codex-sdk",
+    "@opencode-ai/sdk",
+    "opencode-ai"
   ]
 }
