@@ -112,6 +112,10 @@ const PROXY_SCRIPT_BY_MODE: Record<DeepsecMode, string> = {
   dev: `${DEEPSEC_DIR}/packages/deepsec/src/sandbox/request-proxy.mjs`,
   installed: `${DEEPSEC_DIR}/node_modules/deepsec/dist/sandbox/request-proxy.mjs`,
 };
+const OPENCODE_BINARY_BY_MODE: Record<DeepsecMode, string> = {
+  dev: `${DEEPSEC_DIR}/packages/deepsec/node_modules/opencode-ai/bin/opencode.exe`,
+  installed: `${DEEPSEC_DIR}/node_modules/deepsec/node_modules/opencode-ai/bin/opencode.exe`,
+};
 const CODEX_HOME = "/vercel/sandbox/.codex";
 const OPENCODE_PROVIDER_ENV = "DEEPSEC_OPENCODE_PROVIDER";
 const OPENCODE_CUSTOM_BASE_URL_ENV = "DEEPSEC_OPENCODE_AI_BASE_URL";
@@ -402,7 +406,7 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
       await writeCodexConfig(sandbox, opts.onLog);
     } else if (agentType === "opencode") {
       opts.onLog("Ensuring OpenCode CLI native binary is installed...");
-      await ensureOpenCodeBinary(sandbox, opts.onLog);
+      await ensureOpenCodeBinary(sandbox, opts.mode, opts.onLog);
     } else {
       opts.onLog("Ensuring Claude SDK native binaries are installed...");
       await ensureClaudeNativeBinaries(sandbox, opts.onLog);
@@ -552,10 +556,27 @@ exit 1
   }
 }
 
-async function ensureOpenCodeBinary(sandbox: Sandbox, onLog: (msg: string) => void): Promise<void> {
+export async function ensureOpenCodeBinary(
+  sandbox: Sandbox,
+  mode: DeepsecMode,
+  onLog: (msg: string) => void,
+): Promise<void> {
+  const binaryPath = OPENCODE_BINARY_BY_MODE[mode];
+  const link = await sandbox.runCommand({
+    cmd: "ln",
+    args: ["-sfn", binaryPath, "/usr/local/bin/opencode"],
+    sudo: true,
+  });
+  if (link.exitCode !== 0) {
+    const stderr = (await link.stderr()).trim();
+    throw new Error(
+      `OpenCode native binary link failed (exit ${link.exitCode})${stderr ? `: ${stderr}` : ""}`,
+    );
+  }
+
   const result = await sandbox.runCommand({
-    cmd: "pnpm",
-    args: ["exec", "opencode", "--version"],
+    cmd: "opencode",
+    args: ["--version"],
     cwd: DEEPSEC_DIR,
   });
   const stdout = (await result.stdout()).trim();
