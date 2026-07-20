@@ -206,6 +206,7 @@ export async function sandboxAllCommand(
       agentType,
       aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
       aiBaseUrl: extractFlag(passthrough, "--ai-base-url"),
+      aiProvider: extractFlag(passthrough, "--ai-provider"),
       model: extractFlag(passthrough, "--model") ?? defaultModelForAgent(agentType),
       snapshotId: undefined,
       saveSnapshot: false,

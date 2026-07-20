@@ -62,6 +62,12 @@ describe("buildWorkerNetworkPolicy", () => {
 
     const piPolicy = buildWorkerNetworkPolicy({}, "pi");
     expect(allowedHosts(piPolicy)).toEqual(["ai-gateway.vercel.sh"]);
+
+    const openCodePolicy = buildWorkerNetworkPolicy(
+      { DEEPSEC_OPENCODE_PROVIDER: "anthropic" },
+      "opencode",
+    );
+    expect(allowedHosts(openCodePolicy)).toEqual(["api.anthropic.com"]);
   });
 
   it("falls back when the URL is unparseable", () => {
@@ -120,6 +126,45 @@ describe("buildWorkerNetworkPolicy", () => {
       const policy = buildWorkerNetworkPolicy(
         { DEEPSEC_PI_AI_BASE_URL: "https://api.withmartian.com/v1" },
         "pi",
+        { customToken: { envName: "MARTIAN_API_KEY", token: "martian-real" } },
+      );
+      expect(allowedHosts(policy)).toEqual(["api.withmartian.com"]);
+      expect(bearerFor(policy, "api.withmartian.com")).toBe("Bearer martian-real");
+    });
+
+    it("uses the Anthropic route and token for the default OpenCode model", () => {
+      const policy = buildWorkerNetworkPolicy(
+        {
+          DEEPSEC_OPENCODE_PROVIDER: "anthropic",
+          ANTHROPIC_UPSTREAM_BASE_URL: "https://ai-gateway.vercel.sh",
+        },
+        "opencode",
+        { anthropicToken: "vck_opencode" },
+      );
+      expect(allowedHosts(policy)).toEqual(["ai-gateway.vercel.sh"]);
+      expect(bearerFor(policy, "ai-gateway.vercel.sh")).toBe("Bearer vck_opencode");
+    });
+
+    it("uses the OpenAI route and token for an OpenCode OpenAI model", () => {
+      const policy = buildWorkerNetworkPolicy(
+        {
+          DEEPSEC_OPENCODE_PROVIDER: "openai",
+          OPENAI_BASE_URL: "https://api.openai.com/v1",
+        },
+        "opencode",
+        { openaiToken: "sk-opencode" },
+      );
+      expect(allowedHosts(policy)).toEqual(["api.openai.com"]);
+      expect(bearerFor(policy, "api.openai.com")).toBe("Bearer sk-opencode");
+    });
+
+    it("uses a custom OpenCode provider host and brokered token", () => {
+      const policy = buildWorkerNetworkPolicy(
+        {
+          DEEPSEC_OPENCODE_PROVIDER: "martian",
+          DEEPSEC_OPENCODE_AI_BASE_URL: "https://api.withmartian.com/v1",
+        },
+        "opencode",
         { customToken: { envName: "MARTIAN_API_KEY", token: "martian-real" } },
       );
       expect(allowedHosts(policy)).toEqual(["api.withmartian.com"]);

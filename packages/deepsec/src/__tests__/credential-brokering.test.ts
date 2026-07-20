@@ -4,6 +4,7 @@ import { buildSandboxEnv, resolveBrokeredCredentials } from "../sandbox/setup.js
 const TOUCHED_KEYS = [
   "AI_GATEWAY_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
   "ANTHROPIC_BASE_URL",
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
@@ -36,6 +37,12 @@ describe("credential brokering", () => {
       expect(c.openaiToken).toBeUndefined();
     });
 
+    it("captures ANTHROPIC_API_KEY for the OpenCode sandbox path", () => {
+      process.env.ANTHROPIC_API_KEY = "sk-ant-real";
+      const c = resolveBrokeredCredentials("opencode");
+      expect(c.anthropicToken).toBe("sk-ant-real");
+    });
+
     it("falls back to ANTHROPIC token for OpenAI on the codex path", () => {
       process.env.ANTHROPIC_AUTH_TOKEN = "vck_real";
       const c = resolveBrokeredCredentials("codex");
@@ -64,6 +71,14 @@ describe("credential brokering", () => {
     it("captures a custom API key env for the pi path", () => {
       process.env.MARTIAN_API_KEY = "martian-real";
       const c = resolveBrokeredCredentials("pi", { aiApiKeyEnv: "MARTIAN_API_KEY" });
+      expect(c.customToken).toEqual({ envName: "MARTIAN_API_KEY", token: "martian-real" });
+    });
+
+    it("captures a custom API key env for the OpenCode path", () => {
+      process.env.MARTIAN_API_KEY = "martian-real";
+      const c = resolveBrokeredCredentials("opencode", {
+        aiApiKeyEnv: "MARTIAN_API_KEY",
+      });
       expect(c.customToken).toEqual({ envName: "MARTIAN_API_KEY", token: "martian-real" });
     });
   });
@@ -144,6 +159,39 @@ describe("credential brokering", () => {
       for (const v of Object.values(env)) {
         expect(v).not.toContain("martian-real-secret");
       }
+    });
+
+    it("routes OpenCode Anthropic traffic through the local proxy", () => {
+      process.env.ANTHROPIC_AUTH_TOKEN = "vck_real_opencode_secret";
+      process.env.ANTHROPIC_BASE_URL = "https://ai-gateway.vercel.sh";
+      const credentials = resolveBrokeredCredentials("opencode");
+      const env = buildSandboxEnv("opencode", credentials, {
+        model: "anthropic/claude-opus-4-8",
+      });
+
+      expect(env.DEEPSEC_OPENCODE_PROVIDER).toBe("anthropic");
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeDefined();
+      expect(env.ANTHROPIC_AUTH_TOKEN).not.toBe("vck_real_opencode_secret");
+      expect(env.ANTHROPIC_UPSTREAM_BASE_URL).toBe("https://ai-gateway.vercel.sh");
+      expect(env.ANTHROPIC_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    });
+
+    it("routes a custom OpenCode provider without exposing its key", () => {
+      process.env.MARTIAN_API_KEY = "martian-real-secret";
+      const credentials = resolveBrokeredCredentials("opencode", {
+        aiApiKeyEnv: "MARTIAN_API_KEY",
+      });
+      const env = buildSandboxEnv("opencode", credentials, {
+        aiApiKeyEnv: "MARTIAN_API_KEY",
+        aiBaseUrl: "https://api.withmartian.com/v1",
+        aiProvider: "martian",
+        model: "openai/security-model",
+      });
+
+      expect(env.DEEPSEC_OPENCODE_PROVIDER).toBe("martian");
+      expect(env.DEEPSEC_OPENCODE_AI_BASE_URL).toBe("https://api.withmartian.com/v1");
+      expect(env.MARTIAN_API_KEY).toBeDefined();
+      expect(env.MARTIAN_API_KEY).not.toBe("martian-real-secret");
     });
   });
 });
