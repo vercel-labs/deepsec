@@ -7,7 +7,7 @@ deepsec uses two Vercel products. Most people only need the first.
 
 | Product | When you need it |
 |---|---|
-| **[AI Gateway](https://vercel.com/docs/ai-gateway)** | Always — for `process` and `revalidate`. One token covers Claude, Codex, and Pi; the gateway adds provider failover, observability, and zero data retention on top. |
+| **[AI Gateway](https://vercel.com/docs/ai-gateway)** | Always — for `process` and `revalidate`. One token covers Claude, Codex, OpenCode, and Pi; the gateway adds provider failover, observability, and zero data retention on top. |
 | **[Vercel Sandbox](https://vercel.com/docs/vercel-sandbox)** | Only for `deepsec sandbox process` (distributed scans across microVMs). Skip it if you're running locally. |
 
 Both have a free tier suitable for evaluation. Real scans on production codebases will exceed the free tier — see [Costs and credits](#costs-and-credits) below.
@@ -65,7 +65,7 @@ If the second command fails with `Missing AI credentials` or a `401`, see [Troub
 
 ### How it works
 
-deepsec expands whichever credential it finds (the API key first, the OIDC token as fallback) at startup into the four vars the Claude/Codex SDKs read (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`). Pi reads `AI_GATEWAY_API_KEY` directly through its built-in `vercel-ai-gateway` provider. A single credential covers Codex (`--agent codex`, the default), Claude (`--agent claude`), and Pi (`--agent pi`).
+deepsec expands whichever credential it finds (the API key first, the OIDC token as fallback) at startup into the four vars the Claude/Codex/OpenCode harnesses read (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`). Pi reads `AI_GATEWAY_API_KEY` directly through its built-in `vercel-ai-gateway` provider. A single credential covers Codex (`--agent codex`, the default), Claude (`--agent claude`), OpenCode (`--agent opencode`), and Pi (`--agent pi`).
 
 Any of those four vars you set explicitly takes precedence over the expansion — useful for mixing direct Anthropic with gateway-routed OpenAI, etc.
 
@@ -108,6 +108,10 @@ codex login     # for --agent codex
 
 Subscriptions are useful for **evaluating** deepsec but generally do not have enough headroom for full repo scans. The Claude weekly / 5-hour and ChatGPT Plus quotas trip well before a real codebase is finished. Switch to the gateway (or a direct provider key) once you're past evaluation.
 
+OpenCode can likewise reuse its local provider store: run `opencode`, use
+`/connect`, then select `--agent opencode`. This local store is not copied into
+Vercel Sandbox workers.
+
 ---
 
 ## BYOK and direct providers
@@ -130,9 +134,9 @@ OPENAI_API_KEY=sk-…
 
 Mix freely — gateway for Claude, direct for OpenAI, etc. The explicit values always win over the `AI_GATEWAY_API_KEY` expansion.
 
-### Pi provider overrides
+### Pi and OpenCode provider overrides
 
-Pi can also point an existing provider at another gateway without a
+Pi and OpenCode can point an existing provider at another gateway without a
 plugin. This is the intended path for Martian or any OpenAI-compatible
 gateway:
 
@@ -150,6 +154,18 @@ Use `--ai-header name=value` for any extra provider headers; repeat it
 as needed. In sandbox mode, deepsec passes only a placeholder env var
 into the worker and injects the real token at egress for the
 `--ai-base-url` host.
+
+For OpenCode, use a `provider/model` model identifier:
+
+```bash
+MARTIAN_API_KEY=...
+pnpm deepsec process --project-id my-app \
+  --agent opencode \
+  --model openai/gpt-5.5 \
+  --ai-provider openai \
+  --ai-base-url https://api.withmartian.com/v1 \
+  --ai-api-key-env MARTIAN_API_KEY
+```
 
 ---
 
@@ -211,7 +227,7 @@ If the sandbox can't authenticate, the spawn fails with the SDK's error. Re-run 
 
 | Symptom | What it means | Fix |
 |---|---|---|
-| `Missing AI credentials for --agent claude` / `codex` / `pi` | No credential present on this machine. | Set `AI_GATEWAY_API_KEY=vck_…` in `.env.local`; for Claude/Codex local evaluation you can also run `claude login` / `codex login`, and for Pi you can use local Pi auth. |
+| `Missing AI credentials for --agent claude` / `codex` / `opencode` / `pi` | No credential present on this machine. | Set `AI_GATEWAY_API_KEY=vck_…` in `.env.local`; locally you can also use Claude/Codex/Pi auth, or run OpenCode and use `/connect`. |
 | `401 Unauthorized` from `process` / `revalidate` | Credential present but rejected. | OIDC: re-run `vercel env pull` (token may have expired — 12 h). API key: regenerate in the dashboard. Confirm `.env.local` is in the cwd deepsec runs from. |
 | `✘ Stopped: Vercel AI Gateway credits exhausted` | Gateway balance is $0. | [Top up](https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dtop-up), then re-run the same command — it resumes from where it stopped. |
 | `✘ Stopped: Anthropic API credits exhausted` | Direct Anthropic account out of credits. | Top up at [Anthropic Console](https://console.anthropic.com/), or switch to the gateway. |

@@ -30,7 +30,7 @@ see [`samples/webapp/deepsec.config.ts`](../samples/webapp/deepsec.config.ts).
 | `projects` | `ProjectDeclaration[]` | The codebases deepsec knows about. |
 | `plugins` | `DeepsecPlugin[]` | Loaded in order; later plugins override single-slot capabilities. |
 | `matchers` | `{ only?: string[]; exclude?: string[] }` | Filter the matcher set used by `scan`. |
-| `defaultAgent` | `string` | Default `--agent` value (`codex`, `claude`, or `pi`). See [models.md](models.md). |
+| `defaultAgent` | `string` | Default `--agent` value (`codex`, `claude`, `opencode`, or `pi`). See [models.md](models.md). |
 | `dataDir` | `string` | Override the `data/` directory. Defaults to `./data`. |
 
 ## ProjectDeclaration
@@ -107,18 +107,19 @@ backend you're using.
 
 | Var | Used by | Purpose |
 |---|---|---|
-| `AI_GATEWAY_API_KEY` | all AI commands | Shortcut. Expands at CLI startup into `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` for Claude/Codex, and is read directly by Pi's `vercel-ai-gateway` provider. Falls back to `VERCEL_OIDC_TOKEN` (from `vercel env pull`) when unset. |
-| `ANTHROPIC_AUTH_TOKEN` | `process`, `revalidate`, `triage` (Claude backend) | API token for the Claude Agent SDK. AI Gateway-issued or Anthropic-issued. Set this if you don't use `AI_GATEWAY_API_KEY`. |
+| `AI_GATEWAY_API_KEY` | all AI commands | Shortcut. Expands at CLI startup into `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` for Claude/Codex/OpenCode, and is read directly by Pi's `vercel-ai-gateway` provider. Falls back to `VERCEL_OIDC_TOKEN` (from `vercel env pull`) when unset. |
+| `ANTHROPIC_AUTH_TOKEN` | `process`, `revalidate`, `triage` (Claude or OpenCode Anthropic backend) | API token for the Claude Agent SDK or OpenCode Anthropic provider. AI Gateway-issued or Anthropic-issued. Set this if you don't use `AI_GATEWAY_API_KEY`. |
 | `ANTHROPIC_BASE_URL` | same | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh`. Set to `https://api.anthropic.com` for direct Anthropic. |
 
 ### Optional
 
 | Var | Used by | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | `--agent codex`, `--agent pi --model openai/...` | Codex SDK token or Pi OpenAI-provider token. Unset is fine if `AI_GATEWAY_API_KEY` is set. |
-| `OPENAI_BASE_URL` | `--agent codex` | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh/v1`. |
+| `OPENAI_API_KEY` | `--agent codex`, `--agent opencode --model openai/...`, `--agent pi --model openai/...` | Codex SDK, OpenCode, or Pi OpenAI-provider token. Unset is fine if `AI_GATEWAY_API_KEY` is set. |
+| `OPENAI_BASE_URL` | `--agent codex`, `--agent opencode --model openai/...` | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh/v1`. |
 | `PI_CODING_AGENT_DIR` | `--agent pi` | Optional Pi config/auth directory. Defaults to `~/.pi/agent`; local non-sandbox runs can reuse `auth.json` there. |
-| `DEEPSEC_AGENT_DEBUG` | both backends | Set to `1` to enable verbose agent logging. |
+| `XDG_DATA_HOME` | `--agent opencode` | Optional OpenCode data root. Local preflight looks for provider auth at `$XDG_DATA_HOME/opencode/auth.json` (default `~/.local/share/opencode/auth.json`). |
+| `DEEPSEC_AGENT_DEBUG` | AI backends | Set to `1` to enable verbose agent logging. |
 | `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Equivalent to `dataDir` in config. |
 
 ### Plugin-specific
