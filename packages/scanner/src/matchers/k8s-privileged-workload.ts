@@ -145,7 +145,10 @@ function dangerousCapabilityMatch(lines: string[]): CandidateMatch | undefined {
     } else if (!inline || inline.startsWith("#")) {
       for (let j = i + 1; j < lines.length; j++) {
         if (!lines[j].trim() || /^\s*#/.test(lines[j])) continue;
-        if (leadingIndent(lines[j]) <= add[1].length) break;
+        const indent = leadingIndent(lines[j]);
+        const isSequenceEntry = /^\s*-/.test(lines[j]);
+        if (indent < add[1].length) break;
+        if (indent === add[1].length && !isSequenceEntry) break;
         if (/^\s*-\s*["']?(?:ALL|NET_ADMIN|SYS_ADMIN|SYS_PTRACE)["']?\s*(?:#.*)?$/.test(lines[j])) {
           hitLines.push(j + 1);
         }

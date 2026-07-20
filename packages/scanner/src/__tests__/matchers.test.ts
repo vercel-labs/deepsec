@@ -173,6 +173,32 @@ spec:
     expect(matches[0].lineNumbers).toEqual([8]);
   });
 
+  it("supports indentationless capability sequences without scanning sibling lists", () => {
+    const dangerous = `apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - securityContext:
+        capabilities:
+          add:
+          - SYS_ADMIN`;
+    const matches = k8sPrivilegedWorkloadMatcher.match(dangerous, "deploy/pod.yaml");
+    expect(matches.map((match) => match.matchedPattern)).toEqual(["dangerous Linux capability"]);
+    expect(matches[0].lineNumbers).toEqual([8]);
+
+    const dropped = `apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - securityContext:
+        capabilities:
+          add:
+          - CHOWN
+          drop:
+          - SYS_ADMIN`;
+    expect(k8sPrivilegedWorkloadMatcher.match(dropped, "deploy/pod.yaml")).toEqual([]);
+  });
+
   it("ignores non-workload documents and capabilities being dropped", () => {
     const content = `apiVersion: v1
 kind: ConfigMap
