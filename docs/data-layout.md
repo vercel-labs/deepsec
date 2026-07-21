@@ -135,7 +135,7 @@ deleted.
 | `investigatedAt` | `string` (ISO) | Timestamp. |
 | `durationMs` | `number` | Wall-clock total. |
 | `durationApiMs` | `number?` | API time only (excludes process orchestration). |
-| `agentType` | `string` | `claude-agent-sdk` or `codex`. |
+| `agentType` | `string` | Producing backend: `claude-agent-sdk`, `codex`, `opencode`, `pi`, or a plugin agent type. |
 | `model` | `string` | Model identifier. |
 | `modelConfig` | `Record<string, unknown>` | Provider-specific settings echoed back. |
 | `agentSessionId` | `string?` | The agent's session/thread id, for reproducing or replaying. |

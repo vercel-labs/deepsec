@@ -85,6 +85,10 @@ function isPi(agentType: string | undefined): boolean {
   return agentType === "pi";
 }
 
+function isOpenCode(agentType: string | undefined): boolean {
+  return agentType === "opencode";
+}
+
 /**
  * Walk `$PATH` looking for a binary. Used as a positive signal that an
  * agent CLI (`claude`, `codex`) is set up on this host — if it's
@@ -143,11 +147,21 @@ function hasLocalPiAgent(): boolean {
   return existsSync(join(piHome, "auth.json"));
 }
 
+/**
+ * OpenCode stores provider credentials in its XDG data directory. The CLI
+ * binary is a deepsec runtime dependency, so merely finding `opencode` on
+ * PATH is not evidence that the user connected a provider.
+ */
+function hasLocalOpenCodeAuth(): boolean {
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  return existsSync(join(dataHome, "opencode", "auth.json"));
+}
+
 // Built-in backends we know how to credential-check. Agents registered
 // via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
 // their own credential resolution, so we skip the check for anything
 // other than these.
-const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi"]);
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "opencode", "pi"]);
 
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
@@ -199,6 +213,21 @@ export function assertAgentCredential(
       `Missing AI credentials for --agent pi.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
+        `  Setup: ${SETUP_DOC_URL}`,
+    );
+  }
+
+  if (isOpenCode(agentType)) {
+    if (gateway || custom || anthropic || anthropicApi || openai) return;
+    if (!options.inSandbox && hasLocalOpenCodeAuth()) return;
+    const customHint = options.aiApiKeyEnv
+      ? `, or set ${options.aiApiKeyEnv}=… for the selected --ai-api-key-env`
+      : "";
+    throw new Error(
+      `Missing AI credentials for --agent opencode.\n` +
+        `\n` +
+        `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
+        `  Or run opencode and use /connect to authenticate a provider (local runs only).\n` +
         `  Setup: ${SETUP_DOC_URL}`,
     );
   }

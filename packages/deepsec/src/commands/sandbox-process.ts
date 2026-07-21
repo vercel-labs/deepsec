@@ -76,6 +76,7 @@ function buildConfig(
     agentType,
     aiApiKeyEnv: extractFlag(args, "--ai-api-key-env"),
     aiBaseUrl: extractFlag(args, "--ai-base-url"),
+    aiProvider: extractFlag(args, "--ai-provider"),
     model: extractFlag(args, "--model") ?? defaultModelForAgent(agentType),
     snapshotId: opts.snapshotId,
     saveSnapshot: opts.saveSnapshot ?? false,

@@ -43,7 +43,7 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
   const effectiveProvider = opts.aiProvider ?? providerFromModel(opts.model);
   if (hasProviderOverride && !effectiveProvider) {
     throw new Error(
-      `Pi provider override flags require --ai-provider or a provider/model --model value.`,
+      `Pi/OpenCode provider override flags require --ai-provider or a provider/model --model value.`,
     );
   }
   const config: Record<string, unknown> = {
@@ -56,8 +56,8 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
         `--thinking-level must be one of ${THINKING_LEVELS.join(", ")}, got "${opts.thinkingLevel}"`,
       );
     }
-    // Same dial, different name per harness: pi and claude read
-    // thinkingLevel, codex reads reasoningEffort.
+    // Same dial, different name per harness: Pi, OpenCode, and Claude read
+    // thinkingLevel; Codex reads reasoningEffort.
     config.thinkingLevel = opts.thinkingLevel;
     config.reasoningEffort = opts.thinkingLevel;
   }

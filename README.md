@@ -67,14 +67,14 @@ If you feel like the `deepsec` should look at more parts of the code, give it [t
 
 ## AI provider
 
-When running locally, `deepsec` falls back to your existing `claude` /
-`codex` subscription if you've logged in on this machine. Subscriptions
-(Claude Pro/Max, ChatGPT Plus) are useful for evaluating deepsec but
-generally don't have enough headroom for full repo scans.
+When running locally, `deepsec` can reuse existing Claude, Codex, Pi, or
+OpenCode provider authentication. Subscriptions (Claude Pro/Max, ChatGPT
+Plus) are useful for evaluating deepsec but generally don't have enough
+headroom for full repo scans.
 
-For real scans, use Vercel AI Gateway. One key covers both Claude and
-Codex, and the gateway's default quotas are sized for highly concurrent
-research.
+For real scans, use Vercel AI Gateway. One key covers Claude, Codex,
+OpenCode, and Pi, and the gateway's default quotas are sized for highly
+concurrent research.
 
 ```
 AI_GATEWAY_API_KEY=vck_...

@@ -68,12 +68,13 @@ built-ins by reusing the same slug.
 - **Outputs:** FileRecord `findings[]` populated, `status: "analyzed"`,
   `analysisHistory[]` appended.
 
-Three agent backends are supported:
+Four agent backends are supported:
 
 | `--agent` | SDK | Default model |
 |---|---|---|
 | `codex` (default) | `@openai/codex-sdk` | `gpt-5.5` |
 | `claude` | `@anthropic-ai/claude-agent-sdk` | `claude-opus-4-8` |
+| `opencode` | `@opencode-ai/sdk/v2` | `anthropic/claude-opus-4-8` |
 | `pi` | `@earendil-works/pi-coding-agent` | `zai/glm-5.2` |
 
 Same prompt, same JSON output schema. You can mix backends within a

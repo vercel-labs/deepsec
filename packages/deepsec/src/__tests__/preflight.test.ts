@@ -39,6 +39,7 @@ describe("assertAgentCredential", () => {
       CLAUDE_HOME: process.env.CLAUDE_HOME,
       CODEX_HOME: process.env.CODEX_HOME,
       PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+      XDG_DATA_HOME: process.env.XDG_DATA_HOME,
       PATH: process.env.PATH,
     };
     delete process.env.ANTHROPIC_AUTH_TOKEN;
@@ -56,7 +57,9 @@ describe("assertAgentCredential", () => {
     process.env.CLAUDE_HOME = emptyClaudeHome;
     process.env.CODEX_HOME = emptyCodexHome;
     process.env.PI_CODING_AGENT_DIR = join(emptyCodexHome, "pi-agent");
+    process.env.XDG_DATA_HOME = join(emptyCodexHome, "xdg-data");
     mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+    mkdirSync(process.env.XDG_DATA_HOME, { recursive: true });
     process.env.PATH = emptyPathDir;
   });
   afterEach(() => {
@@ -151,6 +154,33 @@ describe("assertAgentCredential", () => {
     const piHome = process.env.PI_CODING_AGENT_DIR!;
     writeFileSync(join(piHome, "auth.json"), "{}");
     expect(() => assertAgentCredential("pi", { inSandbox: true })).toThrow(/AI_GATEWAY_API_KEY/);
+  });
+
+  it("passes for opencode when AI Gateway credentials are set", () => {
+    process.env.AI_GATEWAY_API_KEY = "vck_gateway";
+    expect(() => assertAgentCredential("opencode")).not.toThrow();
+  });
+
+  it("passes for opencode when local provider auth exists", () => {
+    const authDir = join(process.env.XDG_DATA_HOME!, "opencode");
+    mkdirSync(authDir, { recursive: true });
+    writeFileSync(join(authDir, "auth.json"), "{}");
+    expect(() => assertAgentCredential("opencode")).not.toThrow();
+  });
+
+  it("ignores local OpenCode auth in sandbox mode", () => {
+    const authDir = join(process.env.XDG_DATA_HOME!, "opencode");
+    mkdirSync(authDir, { recursive: true });
+    writeFileSync(join(authDir, "auth.json"), "{}");
+    expect(() => assertAgentCredential("opencode")).not.toThrow();
+    expect(() => assertAgentCredential("opencode", { inSandbox: true })).toThrow(
+      /AI_GATEWAY_API_KEY/,
+    );
+  });
+
+  it("shows OpenCode connection instructions when credentials are missing", () => {
+    expect(() => assertAgentCredential("opencode")).toThrow(/--agent opencode/);
+    expect(() => assertAgentCredential("opencode")).toThrow(/\/connect/);
   });
 });
 

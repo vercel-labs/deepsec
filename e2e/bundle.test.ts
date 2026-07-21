@@ -46,6 +46,10 @@ describe("bundle e2e", () => {
     expect(stdout).toContain("deepsec");
     expect(stdout).toContain("scan");
     expect(stdout).toContain("process");
+
+    const processHelp = runBundle(["process", "--help"]);
+    expect(processHelp.status).toBe(0);
+    expect(processHelp.stdout).toContain("opencode");
   });
 
   it("config.d.ts is self-contained (no internal @deepsec/* re-exports)", () => {

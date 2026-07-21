@@ -15,6 +15,8 @@
     "@earendil-works/pi-coding-agent": "0.79.10",
     "@openai/codex": "^0.144.0",
     "@openai/codex-sdk": "^0.144.0",
-    "jsonrepair": "^3.14.0"
+    "@opencode-ai/sdk": "^1.18.3",
+    "jsonrepair": "^3.14.0",
+    "undici": "^8.5.0"
   }
 }
