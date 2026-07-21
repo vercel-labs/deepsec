@@ -53,6 +53,95 @@ describe("detectTech", () => {
     expect(detectTech(tmpRoot).tags).toContain("nestjs");
   });
 
+  it("detects Node tech from package.json workspaces", () => {
+    write(
+      "package.json",
+      JSON.stringify({
+        workspaces: ["apps/*", "packages/*"],
+        catalog: {
+          hono: "4.0.0",
+          next: "15.0.0",
+        },
+      }),
+    );
+    write(
+      "apps/web/package.json",
+      JSON.stringify({ dependencies: { next: "catalog:", react: "catalog:" } }),
+    );
+    write(
+      "apps/api/package.json",
+      JSON.stringify({ dependencies: { hono: "catalog:", "drizzle-orm": "catalog:" } }),
+    );
+    write("node_modules/ignored/package.json", JSON.stringify({ dependencies: { express: "^4" } }));
+
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toEqual(expect.arrayContaining(["node", "nextjs", "react", "hono", "drizzle"]));
+    expect(tags).not.toContain("express");
+  });
+
+  it("does not treat package manager catalogs as dependency usage", () => {
+    write(
+      "package.json",
+      JSON.stringify({
+        workspaces: ["apps/*"],
+        catalog: {
+          next: "15.0.0",
+          hono: "4.0.0",
+        },
+      }),
+    );
+    write("apps/web/package.json", JSON.stringify({ dependencies: { "@acme/ui": "workspace:*" } }));
+
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toContain("node");
+    expect(tags).not.toContain("nextjs");
+    expect(tags).not.toContain("hono");
+  });
+
+  it("does not scan undeclared nested package manifests", () => {
+    write("package.json", JSON.stringify({ dependencies: { "@acme/root": "1.0.0" } }));
+    write("apps/web/package.json", JSON.stringify({ dependencies: { next: "15.0.0" } }));
+
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toContain("node");
+    expect(tags).not.toContain("nextjs");
+  });
+
+  it("detects Node tech from object-form package.json workspaces", () => {
+    write("package.json", JSON.stringify({ workspaces: { packages: ["apps/*"] } }));
+    write("apps/api/package.json", JSON.stringify({ dependencies: { fastify: "^5" } }));
+
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toEqual(expect.arrayContaining(["node", "fastify"]));
+  });
+
+  it("detects Node tech from pnpm workspaces and honors excluded package globs", () => {
+    write(
+      "pnpm-workspace.yaml",
+      `packages:
+  - "apps/*"
+  - "!apps/private"
+`,
+    );
+    write("apps/web/package.json", JSON.stringify({ dependencies: { next: "15.0.0" } }));
+    write("apps/private/package.json", JSON.stringify({ dependencies: { express: "^4" } }));
+
+    const detected = detectTech(tmpRoot);
+    expect(detected.tags).toEqual(expect.arrayContaining(["node", "nextjs"]));
+    expect(detected.tags).not.toContain("express");
+    expect(detected.sentinels).toContain("pnpm-workspace.yaml");
+  });
+
+  it("detects Next.js from next.config files", () => {
+    write("package.json", JSON.stringify({ workspaces: ["apps/*"] }));
+    write("apps/web/package.json", JSON.stringify({ name: "web" }));
+    write("apps/web/next.config.ts", "export default {};\n");
+
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toContain("node");
+    expect(tags).toContain("nextjs");
+  });
+
   it("detects Laravel via composer.json", () => {
     write(
       "composer.json",
@@ -96,7 +185,7 @@ describe("detectTech", () => {
 
   it("detects polyglot repos (Next.js + Django + Rails)", () => {
     write("apps/web/package.json", JSON.stringify({ dependencies: { next: "15.0.0" } }));
-    write("package.json", JSON.stringify({ dependencies: { next: "15.0.0" } }));
+    write("package.json", JSON.stringify({ workspaces: ["apps/*"] }));
     write("manage.py", "");
     write("requirements.txt", "Django==5.0");
     write("Gemfile", `gem "rails"`);

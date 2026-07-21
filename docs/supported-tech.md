@@ -18,6 +18,12 @@ Detection happens once per scan, with results persisted to
 `data/<projectId>/tech.json`. Matcher gates and prompt highlights share
 that single signal.
 
+For JavaScript/TypeScript projects, dependency-based detection reads the
+root `package.json` plus package manifests in declared npm/Yarn/Bun
+`workspaces` and `pnpm-workspace.yaml` packages. Root package-manager
+catalogs alone do not count as usage; a workspace package must actually
+depend on the framework.
+
 > **Plugin authors:** before adding a matcher for a framework already on
 > this list, check whether you can extend the existing matcher instead.
 > If your framework is missing, add a detector entry + matcher + prompt
@@ -26,8 +32,8 @@ that single signal.
 ## TypeScript / JavaScript (Node, Bun, Deno, Workers)
 
 ### Next.js (`nextjs`)
-- **Sentinel detection:** `package.json` depends on `next`; or
-  `next.config.{js,ts,mjs}` is present.
+- **Sentinel detection:** root or declared workspace `package.json`
+  depends on `next`; or `next.config.{js,ts,mjs}` is present.
 - **Matchers:** `all-route-handlers`, `all-server-actions`,
   `nextjs-middleware`, `nextjs-middleware-only-auth`,
   `framework-server-action`, `framework-untrusted-fetch`,
@@ -39,31 +45,36 @@ that single signal.
   cache-tag cross-tenant leaks.
 
 ### React (`react`)
-- **Sentinel detection:** `react` or `react-dom` in `package.json`.
+- **Sentinel detection:** `react` or `react-dom` in root or declared
+  workspace `package.json`.
 - **Matchers:** `dangerous-html`, `xss`, `postmessage-origin`.
 - **Prompt highlights:** `dangerouslySetInnerHTML` with DB-stored HTML,
   ref/effect-driven open redirects, JSON-in-script escapes.
 
 ### Express (`express`)
-- **Sentinel detection:** `express` in `package.json`.
+- **Sentinel detection:** `express` in root or declared workspace
+  `package.json`.
 - **Matchers:** `js-express-route` (gated), plus all generic JS matchers.
 - **Prompt highlights:** route-vs-middleware ordering, `req.*` injection
   surfaces, `express.static` traversal, error-leak responses, CORS reflect.
 
 ### Fastify (`fastify`)
-- **Sentinel detection:** `fastify` in `package.json`.
+- **Sentinel detection:** `fastify` in root or declared workspace
+  `package.json`.
 - **Matchers:** `js-fastify-route` (gated).
 - **Prompt highlights:** `preHandler`/`onRequest` auth, schema validation
   as the FP mitigation, plugin scope inheritance.
 
 ### NestJS (`nestjs`)
-- **Sentinel detection:** any `@nestjs/*` package in `package.json`.
+- **Sentinel detection:** any `@nestjs/*` package in root or declared
+  workspace `package.json`.
 - **Matchers:** `js-nestjs-controller` (gated).
 - **Prompt highlights:** missing `@UseGuards`, untyped `@Body()`,
   `@Public()` opt-outs of global auth.
 
 ### Hono (`hono`)
-- **Sentinel detection:** `hono` in `package.json`.
+- **Sentinel detection:** `hono` in root or declared workspace
+  `package.json`.
 - **Matchers:** `js-hono-route` (gated).
 - **Prompt highlights:** middleware-before-routes ordering, `c.req.*`
   trust, edge-runtime trust boundary to backend.
