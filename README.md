@@ -1,5 +1,7 @@
 # deepsec
 
+**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
 `deepsec` an agent-powered vulnerability scanner that you can run in your own infrastructure, optimized to perform on-demand review of all code in existing 
 large-scale repos.
 
