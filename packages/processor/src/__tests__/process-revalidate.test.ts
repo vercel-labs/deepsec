@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { defineConfig, type FileRecord, setLoadedConfig } from "@deepsec/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { defineConfig, type FileRecord, readFileRecord, setLoadedConfig } from "@deepsec/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QuotaExhaustedError } from "../agents/shared.js";
 import { process as processProject, revalidate } from "../index.js";
 import { StubAgent } from "./stub-agent.js";
@@ -1722,5 +1722,88 @@ describe("revalidate() reconciliation, repair, and adaptive splitting", () => {
     const after = fx.readRecord("app.ts");
     expect(after.findings[0].revalidation?.verdict).toBe("accepted-risk");
     expect(after.findings[0].revalidation?.reasoning).toBe("team decision");
+  });
+});
+
+describe("revalidate() field-invalid verdicts (regression: revalidations evaporating)", () => {
+  let prevDataRoot: string | undefined;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    prevDataRoot = process.env.DEEPSEC_DATA_ROOT;
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    if (prevDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+    else process.env.DEEPSEC_DATA_ROOT = prevDataRoot;
+    setLoadedConfig(defineConfig({ projects: [] }));
+  });
+
+  it("never persists a verdict the read-side schema would reject", async () => {
+    // Regression: a plugin (or future code path) hands the apply loop a
+    // verdict with a malformed enum. It used to be copied verbatim into
+    // `finding.revalidation` and written to disk; the next read then
+    // rejected the finding against `findingSchema` and both the verdict
+    // and the finding itself evaporated from every report.
+    const fx = setupProject({ files: ["app.ts"] });
+    const rec = pendingRecord(fx.projectId, "app.ts");
+    rec.status = "analyzed";
+    rec.findings = ["good verdict", "bad verdict"].map((title) => ({
+      severity: "HIGH" as const,
+      vulnSlug: "auth-bypass",
+      title,
+      description: "d",
+      lineNumbers: [1],
+      recommendation: "x",
+      confidence: "high" as const,
+    }));
+    fx.writeRecord(rec);
+
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        return {
+          verdicts: params.batch.flatMap((r) =>
+            r.findings.map((f) => ({
+              findingId: f.findingId,
+              // The malformed enum a real model emits ("True Positive").
+              // Plugins now filter these at parse time; this stub feeds
+              // one straight to the apply loop to pin the last-line guard.
+              verdict: (f.title === "bad verdict" ? "True Positive" : "true-positive") as never,
+              reasoning: "r",
+            })),
+          ),
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+
+    // The invalid verdict is refused (finding stays unresolved), never written.
+    expect(result.unresolved.map((u) => u.title)).toEqual(["bad verdict"]);
+    expect(warnSpy.mock.calls.join("\n")).toContain("refusing to persist invalid revalidation");
+
+    // Disk state is intact: both findings survive, the record passes the
+    // strict schema on read-back, and the valid verdict stuck.
+    const after = fx.readRecord("app.ts");
+    expect(after.findings).toHaveLength(2);
+    expect(after.findings.find((f) => f.title === "good verdict")?.revalidation?.verdict).toBe(
+      "true-positive",
+    );
+    expect(after.findings.find((f) => f.title === "bad verdict")?.revalidation).toBeUndefined();
+    const reloaded = readFileRecord(fx.projectId, "app.ts");
+    expect(reloaded?.findings).toHaveLength(2);
   });
 });

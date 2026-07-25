@@ -7,11 +7,13 @@ import {
   createRunMeta,
   dataDir,
   defaultConcurrency,
+  formatSchemaIssues,
   loadAllFileRecords,
   readProjectConfig,
   writeFileRecord,
   writeRunMeta,
 } from "@deepsec/core";
+import { z } from "zod";
 
 const TRIAGE_BATCH_SIZE = 30;
 
@@ -21,6 +23,52 @@ interface TriageVerdict {
   exploitability: "trivial" | "moderate" | "difficult";
   impact: "critical" | "high" | "medium" | "low";
   reasoning: string;
+}
+
+/**
+ * Wire contract for one triage verdict. Enforced at parse time because
+ * the apply loop copies these fields verbatim into `finding.triage` —
+ * an invalid enum written there makes the finding fail the read-side
+ * schema on the next load and get dropped (with a warning) from every
+ * report. Triage is a one-shot `query` with no live session, so there is
+ * no in-session repair: invalid verdicts are skipped loudly and the
+ * finding simply stays untriaged for the next run.
+ */
+const triageVerdictWireSchema = z.object({
+  title: z.string(),
+  priority: z.enum(["P0", "P1", "P2", "skip"]),
+  exploitability: z.enum(["trivial", "moderate", "difficult"]),
+  impact: z.enum(["critical", "high", "medium", "low"]),
+  reasoning: z.string(),
+});
+
+/**
+ * Parse a triage response into field-valid verdicts. Returns the invalid
+ * entries alongside so the caller can report them instead of silently
+ * writing (or silently skipping) them.
+ */
+export function parseTriageVerdicts(resultText: string): {
+  verdicts: TriageVerdict[];
+  invalid: Array<{ raw: unknown; issues: string }>;
+} {
+  const jsonMatch = resultText.match(/```json\s*([\s\S]*?)```/);
+  const jsonStr = jsonMatch ? jsonMatch[1].trim() : resultText.trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    return { verdicts: [], invalid: [] };
+  }
+  if (!Array.isArray(parsed)) return { verdicts: [], invalid: [] };
+
+  const verdicts: TriageVerdict[] = [];
+  const invalid: Array<{ raw: unknown; issues: string }> = [];
+  for (const raw of parsed) {
+    const v = triageVerdictWireSchema.safeParse(raw);
+    if (v.success) verdicts.push(v.data);
+    else invalid.push({ raw, issues: formatSchemaIssues(v.error) });
+  }
+  return { verdicts, invalid };
 }
 
 interface TriageProgress {
@@ -193,12 +241,10 @@ ${findingsList}
         }
       }
 
-      const jsonMatch = resultText.match(/```json\s*([\s\S]*?)```/);
-      const jsonStr = jsonMatch ? jsonMatch[1].trim() : resultText.trim();
-      let verdicts: TriageVerdict[] = [];
-      try {
-        verdicts = JSON.parse(jsonStr);
-      } catch {}
+      const { verdicts, invalid } = parseTriageVerdicts(resultText);
+      for (const inv of invalid) {
+        console.warn(`[deepsec] skipping field-invalid triage verdict: ${inv.issues}`);
+      }
 
       for (const verdict of verdicts) {
         const item = batch.find((b) => b.finding.title === verdict.title);

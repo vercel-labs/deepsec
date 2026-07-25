@@ -10,6 +10,7 @@ import {
   type RefusalReport,
 } from "@deepsec/core";
 import { jsonrepair } from "jsonrepair";
+import { z } from "zod";
 import {
   type ExpectedFinding,
   expectedFindingsForBatch,
@@ -639,7 +640,14 @@ export async function* runRevalidateIdRepairLoop(params: {
 
     let repairVerdicts: RevalidateVerdict[];
     try {
-      repairVerdicts = parseRevalidateVerdicts(repairText);
+      const parsed = parseRevalidateVerdicts(repairText);
+      repairVerdicts = parsed.verdicts;
+      if (parsed.invalid.length > 0) {
+        yield {
+          type: "thinking",
+          message: `${agentLabel}: dropped ${parsed.invalid.length} field-invalid verdict(s) from id-repair response: ${summarizeInvalidVerdicts(parsed.invalid)}`,
+        };
+      }
     } catch {
       rawResponses.push({ kind: "id-repair", prompt, rawText: repairText });
       yield {
@@ -1081,7 +1089,50 @@ ${expected.map((e) => `- ${e.alias ?? e.findingId} — "${e.title}"`).join("\n")
   return { prompt, totalFindings, expected };
 }
 
-export function parseRevalidateVerdicts(resultText: string): RevalidateVerdict[] {
+/**
+ * The response contract for one revalidation verdict, enforced at parse
+ * time. `verdict` deliberately excludes `accepted-risk` (a manual marker
+ * the agent must never produce). `adjustedSeverity` tolerates `LOW` even
+ * though the prompt doesn't advertise it — the persisted schema allows it
+ * and models reach for it.
+ *
+ * This validation exists because the apply loop copies verdict fields
+ * verbatim into `finding.revalidation` and writes them to disk. An
+ * invalid enum (e.g. `"True Positive"`) used to be persisted as-is; the
+ * strict read-side schema then rejected the finding on the next load and
+ * the revalidation — and the finding itself — silently evaporated.
+ */
+const revalidateVerdictWireSchema = z.object({
+  findingId: z.string().optional(),
+  filePath: z.string().optional(),
+  title: z.string().optional(),
+  verdict: z.enum(["true-positive", "false-positive", "fixed", "uncertain", "duplicate"]),
+  reasoning: z.string(),
+  adjustedSeverity: z.enum(["CRITICAL", "HIGH", "MEDIUM", "HIGH_BUG", "BUG", "LOW"]).optional(),
+  duplicateOf: z.string().optional(),
+});
+
+export interface InvalidVerdictEntry {
+  /** The verdict as the agent emitted it, verbatim. */
+  raw: unknown;
+  /** Compact zod issue summary. */
+  issues: string;
+}
+
+interface ParsedRevalidateVerdicts {
+  verdicts: RevalidateVerdict[];
+  invalid: InvalidVerdictEntry[];
+}
+
+/** One-line summary of dropped verdicts for progress messages. */
+export function summarizeInvalidVerdicts(invalid: InvalidVerdictEntry[]): string {
+  return invalid
+    .slice(0, 3)
+    .map((e) => e.issues)
+    .join(" | ");
+}
+
+export function parseRevalidateVerdicts(resultText: string): ParsedRevalidateVerdicts {
   // Same fail-loud rationale as parseInvestigateResults: only accept a
   // strict or repaired JSON array. Anything else should mark the batch as
   // errored instead of looking like "no verdicts produced".
@@ -1091,5 +1142,17 @@ export function parseRevalidateVerdicts(resultText: string): RevalidateVerdict[]
     nonArrayMessage: (parsed) =>
       `Agent produced revalidation JSON but not an array. Got: ${typeof parsed}`,
   });
-  return parsed as RevalidateVerdict[];
+
+  // Field-validate each verdict. Invalid ones are excluded from the
+  // returned list, so their findings reconcile as "missing" — which the
+  // in-session id-repair loop then re-requests (its prompt restates the
+  // legal enum values), and the processor's split retries cover the rest.
+  const verdicts: RevalidateVerdict[] = [];
+  const invalid: InvalidVerdictEntry[] = [];
+  for (const raw of parsed) {
+    const v = revalidateVerdictWireSchema.safeParse(raw);
+    if (v.success) verdicts.push(v.data);
+    else invalid.push({ raw, issues: formatSchemaIssues(v.error) });
+  }
+  return { verdicts, invalid };
 }

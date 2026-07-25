@@ -20,6 +20,7 @@ import {
   buildRevalidatePrompt,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  type InvalidVerdictEntry,
   isTransientError,
   jsonRepairFailureError,
   MAX_ATTEMPTS,
@@ -31,6 +32,7 @@ import {
   REFUSAL_FOLLOWUP_PROMPT,
   runInvestigateFieldRepairLoop,
   runRevalidateIdRepairLoop,
+  summarizeInvalidVerdicts,
   writeParseFailureDebug,
 } from "./shared.js";
 import type {
@@ -1161,8 +1163,9 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       const preResponses: RevalidateRawResponse[] = [];
       let parsedText = resultText;
       let verdicts: RevalidateVerdict[];
+      let invalidVerdicts: InvalidVerdictEntry[] = [];
       try {
-        verdicts = parseRevalidateVerdicts(resultText);
+        ({ verdicts, invalid: invalidVerdicts } = parseRevalidateVerdicts(resultText));
       } catch (err) {
         yield {
           type: "thinking" as const,
@@ -1188,7 +1191,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           throw err;
         }
         try {
-          verdicts = parseRevalidateVerdicts(repairText);
+          ({ verdicts, invalid: invalidVerdicts } = parseRevalidateVerdicts(repairText));
           preResponses.push({ kind: "json-repair", prompt: jsonRepairPrompt, rawText: resultText });
           parsedText = repairText;
           yield { type: "thinking" as const, message: "Codex JSON repair succeeded" };
@@ -1204,6 +1207,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           });
           throw combinedError;
         }
+      }
+      if (invalidVerdicts.length > 0) {
+        yield {
+          type: "thinking" as const,
+          message: `Codex: dropped ${invalidVerdicts.length} field-invalid verdict(s) (${summarizeInvalidVerdicts(invalidVerdicts)}); affected findings will be re-requested via id-repair`,
+        };
       }
       if (DEBUG) {
         yield {

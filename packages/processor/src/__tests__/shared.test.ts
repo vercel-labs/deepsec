@@ -517,23 +517,58 @@ describe("parseRevalidateVerdicts", () => {
   it("parses verdicts from fenced JSON", () => {
     const text =
       '```json\n[{"filePath":"a.ts","title":"x","verdict":"true-positive","reasoning":"r"}]\n```';
-    const v = parseRevalidateVerdicts(text);
-    expect(v).toHaveLength(1);
-    expect(v[0].verdict).toBe("true-positive");
+    const { verdicts, invalid } = parseRevalidateVerdicts(text);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].verdict).toBe("true-positive");
+    expect(invalid).toEqual([]);
   });
 
   it("repairs common malformed model JSON before parsing verdicts", () => {
     const text =
       'Here are the verdicts:\n```json\n[{"filePath":"a.ts","title":"x","verdict":"true-positive","reasoning":"Line says "unsafe" but is mitigated",}]';
 
-    const v = parseRevalidateVerdicts(text);
+    const { verdicts } = parseRevalidateVerdicts(text);
 
-    expect(v).toHaveLength(1);
-    expect(v[0].reasoning).toBe('Line says "unsafe" but is mitigated');
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0].reasoning).toBe('Line says "unsafe" but is mitigated');
   });
 
   it("throws on parse failure", () => {
     expect(() => parseRevalidateVerdicts("garbage")).toThrow(/wasn't parseable JSON/);
+  });
+
+  it("excludes field-invalid verdicts so they reconcile as missing (not persisted as poison)", () => {
+    // Regression: a verdict like `"True Positive"` was applied verbatim
+    // to `finding.revalidation` and written to disk; the strict read-side
+    // schema then rejected the finding on the next load and the
+    // revalidation — and the finding — evaporated. Excluding it here
+    // makes the finding reconcile as missing, which the in-session
+    // id-repair loop re-requests with the legal enum values restated.
+    const text = JSON.stringify([
+      { findingId: "F1", verdict: "true-positive", reasoning: "r" },
+      { findingId: "F2", verdict: "True Positive", reasoning: "r" },
+      { findingId: "F3", verdict: "fixed" }, // reasoning missing
+      "not even an object",
+    ]);
+
+    const { verdicts, invalid } = parseRevalidateVerdicts(text);
+
+    expect(verdicts.map((v) => v.findingId)).toEqual(["F1"]);
+    expect(invalid).toHaveLength(3);
+    expect(invalid[0].issues).toContain("verdict");
+    expect(invalid[1].issues).toContain("reasoning");
+  });
+
+  it("rejects the agent-illegal 'accepted-risk' verdict but tolerates adjustedSeverity LOW", () => {
+    const { verdicts, invalid } = parseRevalidateVerdicts(
+      JSON.stringify([
+        { findingId: "F1", verdict: "accepted-risk", reasoning: "r" },
+        { findingId: "F2", verdict: "false-positive", reasoning: "r", adjustedSeverity: "LOW" },
+      ]),
+    );
+    expect(verdicts.map((v) => v.findingId)).toEqual(["F2"]);
+    expect(verdicts[0].adjustedSeverity).toBe("LOW");
+    expect(invalid).toHaveLength(1);
   });
 });
 

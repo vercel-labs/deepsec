@@ -9,6 +9,7 @@ import {
   dataDir,
   defaultConcurrency,
   ensureFindingIds,
+  formatSchemaIssues,
   getRegistry,
   isPidAlive,
   loadAllFileRecords,
@@ -16,6 +17,7 @@ import {
   readProjectConfig,
   readRunMeta,
   registerActiveRun,
+  revalidationSchema,
   writeFileRecord,
   writeRunMeta,
 } from "@deepsec/core";
@@ -1192,16 +1194,29 @@ export async function revalidate(params: {
           resolvedIds.add(m.expected.findingId);
           continue;
         }
-        finding.revalidation = {
+        // Last-line guard: never persist a revalidation object the
+        // read-side schema would reject — a bad enum written here made
+        // the whole finding (verdict included) evaporate on the next
+        // load. The wire parser validates upstream, so this only fires
+        // if a new code path bypasses it; the finding stays unresolved
+        // and is retried by the split stages instead.
+        const proposed = revalidationSchema.safeParse({
           verdict: m.verdict.verdict,
           reasoning: m.verdict.reasoning,
           adjustedSeverity: m.verdict.adjustedSeverity,
           revalidatedAt: nowIso,
           runId,
           model,
-        };
-        if (m.verdict.adjustedSeverity) {
-          finding.severity = m.verdict.adjustedSeverity;
+        });
+        if (!proposed.success) {
+          console.warn(
+            `[deepsec] refusing to persist invalid revalidation for ${m.expected.findingId}: ${formatSchemaIssues(proposed.error)}`,
+          );
+          continue;
+        }
+        finding.revalidation = proposed.data;
+        if (proposed.data.adjustedSeverity) {
+          finding.severity = proposed.data.adjustedSeverity;
         }
         resolvedIds.add(m.expected.findingId);
         dupeRejectedIds.delete(m.expected.findingId);
@@ -1251,7 +1266,8 @@ export async function revalidate(params: {
           dupeRejectedIds.add(m.expected.findingId);
           continue;
         }
-        finding.revalidation = {
+        // Same guard as pass 1 — see the comment there.
+        const proposedDupe = revalidationSchema.safeParse({
           verdict: "duplicate",
           reasoning: m.verdict.reasoning,
           // Persist the primary's stable id (falls back to the raw ref
@@ -1260,7 +1276,15 @@ export async function revalidate(params: {
           revalidatedAt: nowIso,
           runId,
           model,
-        };
+        });
+        if (!proposedDupe.success) {
+          console.warn(
+            `[deepsec] refusing to persist invalid duplicate revalidation for ${m.expected.findingId}: ${formatSchemaIssues(proposedDupe.error)}`,
+          );
+          dupeRejectedIds.add(m.expected.findingId);
+          continue;
+        }
+        finding.revalidation = proposedDupe.data;
         resolvedIds.add(m.expected.findingId);
         dupeRejectedIds.delete(m.expected.findingId);
         persistedCount++;

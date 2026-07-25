@@ -15,6 +15,7 @@
     "@earendil-works/pi-coding-agent": "0.81.1",
     "@openai/codex": "^0.145.0",
     "@openai/codex-sdk": "^0.145.0",
-    "jsonrepair": "^3.14.0"
+    "jsonrepair": "^3.14.0",
+    "zod": "^3.24.0"
   }
 }

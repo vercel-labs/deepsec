@@ -25,6 +25,7 @@ import {
   buildRevalidatePrompt,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  type InvalidVerdictEntry,
   isTransientError,
   isUsingAiGateway,
   jsonRepairFailureError,
@@ -37,6 +38,7 @@ import {
   REFUSAL_FOLLOWUP_PROMPT,
   runInvestigateFieldRepairLoop,
   runRevalidateIdRepairLoop,
+  summarizeInvalidVerdicts,
   writeParseFailureDebug,
 } from "./shared.js";
 import type {
@@ -1080,8 +1082,9 @@ export class PiAgentPlugin implements AgentPlugin {
     const preResponses: RevalidateRawResponse[] = [];
     const jsonRepairPrompt = buildRevalidateJsonRepairPrompt(expected);
     let verdicts: RevalidateVerdict[];
+    let invalidVerdicts: InvalidVerdictEntry[] = [];
     try {
-      verdicts = parseRevalidateVerdicts(resultText);
+      ({ verdicts, invalid: invalidVerdicts } = parseRevalidateVerdicts(resultText));
     } catch (err) {
       yield {
         type: "thinking",
@@ -1101,7 +1104,7 @@ export class PiAgentPlugin implements AgentPlugin {
         throw err;
       }
       try {
-        verdicts = parseRevalidateVerdicts(repairText);
+        ({ verdicts, invalid: invalidVerdicts } = parseRevalidateVerdicts(repairText));
         preResponses.push({ kind: "json-repair", prompt: jsonRepairPrompt, rawText: resultText });
         resultText = repairText;
         yield { type: "thinking", message: "Pi JSON repair succeeded" };
@@ -1118,6 +1121,13 @@ export class PiAgentPlugin implements AgentPlugin {
         session?.dispose();
         throw combinedError;
       }
+    }
+
+    if (invalidVerdicts.length > 0) {
+      yield {
+        type: "thinking",
+        message: `Pi: dropped ${invalidVerdicts.length} field-invalid verdict(s) (${summarizeInvalidVerdicts(invalidVerdicts)}); affected findings will be re-requested via id-repair`,
+      };
     }
 
     // Id-repair against the still-live in-memory Pi session (must run

@@ -93,7 +93,7 @@ export interface RevalidateVerdict {
   title?: string;
   verdict: RevalidationVerdict;
   reasoning: string;
-  adjustedSeverity?: "CRITICAL" | "HIGH" | "MEDIUM" | "HIGH_BUG" | "BUG";
+  adjustedSeverity?: "CRITICAL" | "HIGH" | "MEDIUM" | "HIGH_BUG" | "BUG" | "LOW";
   /**
    * Required when `verdict === "duplicate"`. The `findingId` of the
    * primary finding (preferred), or its `title` for legacy responses —
