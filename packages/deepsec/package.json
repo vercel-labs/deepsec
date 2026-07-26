@@ -1,12 +1,13 @@
 {
   "name": "deepsec",
-  "version": "2.2.8",
+  "version": "2.2.9",
   "description": "AI-powered vulnerability scanner for any codebase",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/vercel-labs/deepsec"
   },
+  "homepage": "https://deepsec.sh",
   "type": "module",
   "bin": {
     "deepsec": "./dist/cli.mjs"
