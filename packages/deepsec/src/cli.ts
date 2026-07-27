@@ -297,9 +297,12 @@ program
 
 program
   .command("export")
-  .description("Export findings as JSON or as a directory of per-finding markdown files")
-  .option("--format <kind>", "Output format: json (default) or md-dir", "json")
-  .option("--project-id <csv>", "Comma-separated project IDs (omit for all)")
+  .description("Export findings as JSON, SARIF, or per-finding markdown files")
+  .option("--format <kind>", "Output format: json (default), sarif, or md-dir", "json")
+  .option(
+    "--project-id <csv>",
+    "Comma-separated project IDs (omit for all; SARIF requires exactly one)",
+  )
   .option(
     "--min-severity <sev>",
     "Only export findings at this severity or above (CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG, LOW)",
@@ -335,7 +338,7 @@ program
   )
   .option(
     "--out <path>",
-    "Output path. JSON format: file (default: stdout). md-dir format: directory (required).",
+    "Output path. JSON: file (default: stdout). SARIF: file (required). md-dir: directory (required).",
   )
   .action(exportCommand);
 

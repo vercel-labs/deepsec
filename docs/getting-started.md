@@ -166,11 +166,29 @@ Both optional, but worth running on the HIGH/CRITICAL set.
 ```bash
 pnpm deepsec export --format md-dir --out ./findings
 pnpm deepsec export --format json   --out findings.json
+pnpm deepsec export --format sarif  --out findings.sarif
 ```
 
 `md-dir` writes one markdown file per finding under
 `./findings/{CRITICAL,HIGH,MEDIUM,…}/`. `json` writes a single array
-suitable for piping to a downstream issue tracker.
+suitable for piping to a downstream issue tracker. `sarif` writes a
+[SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+log for code-scanning tools such as GitHub code scanning. SARIF output requires
+`--out` and exactly one project, and honors the same severity, slug, date, and
+revalidation filters. Pass `--project-id <id>` when your config has multiple projects.
+
+To upload the file to GitHub code scanning, run the official action after DeepSec
+exports the findings:
+
+```yaml
+- uses: github/codeql-action/upload-sarif@v4
+  with:
+    sarif_file: findings.sarif
+```
+
+The workflow needs `security-events: write` permission. The upload action also adds
+GitHub's source-based `primaryLocationLineHash`; DeepSec keeps its own stable finding
+identity in the SARIF file for other consumers.
 
 For a quick aggregate look:
 
@@ -178,9 +196,8 @@ For a quick aggregate look:
 pnpm deepsec metrics
 ```
 
-(Each of these commands accepts `--project-id <id>` if your config has
-multiple projects; the auto-resolution only kicks in when there's
-exactly one.)
+(`md-dir` and `json` accept comma-separated project IDs. SARIF accepts one project
+per file so repository-relative source locations remain unambiguous.)
 
 ## Next
 
