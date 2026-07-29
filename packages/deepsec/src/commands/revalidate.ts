@@ -89,7 +89,9 @@ export async function revalidateCommand(opts: {
   const onlySlugs = parseCsv(opts.onlySlugs);
   const skipSlugs = parseCsv(opts.skipSlugs);
 
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, {
+    aiApiKeyEnv: typeof agentConfig.aiApiKeyEnv === "string" ? agentConfig.aiApiKeyEnv : undefined,
+  });
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);
   console.log(`  Agent: ${agentType} (${model})`);

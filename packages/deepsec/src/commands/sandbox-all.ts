@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDataRoot, readProjectConfig } from "@deepsec/core";
+import { buildAgentConfig } from "../agent-config.js";
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
 import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
@@ -89,12 +90,22 @@ export async function sandboxAllCommand(
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
   const timeout = opts.timeout ?? 5 * 60 * 60 * 1000;
   const agentType = resolveAgentType(extractFlag(passthrough, "--agent"));
+  const model = extractFlag(passthrough, "--model") ?? defaultModelForAgent(agentType);
+  const agentConfig = buildAgentConfig({
+    model,
+    aiProvider: extractFlag(passthrough, "--ai-provider"),
+    aiBaseUrl: extractFlag(passthrough, "--ai-base-url"),
+    aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
+  });
+  const aiApiKeyEnv =
+    typeof agentConfig.aiApiKeyEnv === "string" ? agentConfig.aiApiKeyEnv : undefined;
+  const aiBaseUrl = typeof agentConfig.aiBaseUrl === "string" ? agentConfig.aiBaseUrl : undefined;
 
   // Same preflight as sandbox-process — fail fast before fanning out.
   assertSandboxCredential();
   assertAgentCredential(agentType, {
     inSandbox: true,
-    aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
+    aiApiKeyEnv,
   });
 
   console.log(`${BOLD}Sandbox All${RESET} — ${CYAN}${command}${RESET}`);
@@ -204,9 +215,9 @@ export async function sandboxAllCommand(
       concurrency,
       batchSize: parseInt(extractFlag(passthrough, "--batch-size") ?? "5", 10) || 5,
       agentType,
-      aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
-      aiBaseUrl: extractFlag(passthrough, "--ai-base-url"),
-      model: extractFlag(passthrough, "--model") ?? defaultModelForAgent(agentType),
+      aiApiKeyEnv,
+      aiBaseUrl,
+      model,
       snapshotId: undefined,
       saveSnapshot: false,
       keepAlive: false,

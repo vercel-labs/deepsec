@@ -1,4 +1,8 @@
 const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+const FIREWORKS_KIMI_K3_MODEL = "fireworks/accounts/fireworks/models/kimi-k3";
+const FIREWORKS_PROVIDER = "fireworks";
+const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
+const FIREWORKS_API_KEY_ENV = "FIREWORKS_API_KEY";
 
 interface AgentRuntimeOpts {
   model?: string;
@@ -39,8 +43,17 @@ function providerFromModel(model: string | undefined): string | undefined {
 
 export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown> {
   const aiHeaders = parseAiHeaders(opts.aiHeader);
-  const hasProviderOverride = Boolean(opts.aiBaseUrl || opts.aiApiKeyEnv || aiHeaders);
-  const effectiveProvider = opts.aiProvider ?? providerFromModel(opts.model);
+  const useFireworksKimiK3Preset =
+    opts.model === FIREWORKS_KIMI_K3_MODEL &&
+    (!opts.aiProvider || opts.aiProvider === FIREWORKS_PROVIDER);
+  const aiBaseUrl = opts.aiBaseUrl ?? (useFireworksKimiK3Preset ? FIREWORKS_BASE_URL : undefined);
+  const aiBaseUrlFromPreset = !opts.aiBaseUrl && useFireworksKimiK3Preset;
+  const aiApiKeyEnv =
+    opts.aiApiKeyEnv ?? (useFireworksKimiK3Preset ? FIREWORKS_API_KEY_ENV : undefined);
+  const hasProviderOverride = Boolean(aiBaseUrl || aiApiKeyEnv || aiHeaders);
+  const effectiveProvider =
+    opts.aiProvider ??
+    (useFireworksKimiK3Preset ? FIREWORKS_PROVIDER : providerFromModel(opts.model));
   if (hasProviderOverride && !effectiveProvider) {
     throw new Error(
       `Pi provider override flags require --ai-provider or a provider/model --model value.`,
@@ -62,8 +75,9 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
     config.reasoningEffort = opts.thinkingLevel;
   }
   if (opts.aiProvider || hasProviderOverride) config.aiProvider = effectiveProvider;
-  if (opts.aiBaseUrl) config.aiBaseUrl = opts.aiBaseUrl;
-  if (opts.aiApiKeyEnv) config.aiApiKeyEnv = opts.aiApiKeyEnv;
+  if (aiBaseUrl) config.aiBaseUrl = aiBaseUrl;
+  if (aiBaseUrlFromPreset) config.aiBaseUrlFromPreset = true;
+  if (aiApiKeyEnv) config.aiApiKeyEnv = aiApiKeyEnv;
   if (aiHeaders) config.aiHeaders = aiHeaders;
   return config;
 }

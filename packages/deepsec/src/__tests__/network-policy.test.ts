@@ -126,6 +126,37 @@ describe("buildWorkerNetworkPolicy", () => {
       expect(bearerFor(policy, "api.withmartian.com")).toBe("Bearer martian-real");
     });
 
+    it("restricts Fireworks traffic to its API host and injects the brokered key", () => {
+      const policy = buildWorkerNetworkPolicy(
+        { DEEPSEC_PI_AI_BASE_URL: "https://api.fireworks.ai/inference/v1" },
+        "pi",
+        {
+          customToken: {
+            envName: "FIREWORKS_API_KEY",
+            token: "fireworks-real",
+          },
+        },
+      );
+      expect(allowedHosts(policy)).toEqual(["api.fireworks.ai"]);
+      expect(bearerFor(policy, "api.fireworks.ai")).toBe("Bearer fireworks-real");
+    });
+
+    it("does not attach the Fireworks credential to extra allowed hosts", () => {
+      const policy = buildWorkerNetworkPolicy(
+        { DEEPSEC_PI_AI_BASE_URL: "https://api.fireworks.ai/inference/v1" },
+        "pi",
+        {
+          customToken: {
+            envName: "FIREWORKS_API_KEY",
+            token: "fireworks-real",
+          },
+        },
+        ["telemetry.example.com"],
+      );
+      expect(bearerFor(policy, "api.fireworks.ai")).toBe("Bearer fireworks-real");
+      expect(bearerFor(policy, "telemetry.example.com")).toBeNull();
+    });
+
     it("emits no transform when no matching credential is provided", () => {
       const policy = buildWorkerNetworkPolicy(
         { ANTHROPIC_UPSTREAM_BASE_URL: "https://ai-gateway.vercel.sh" },

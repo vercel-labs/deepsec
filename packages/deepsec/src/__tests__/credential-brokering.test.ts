@@ -8,6 +8,7 @@ const TOUCHED_KEYS = [
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
   "MARTIAN_API_KEY",
+  "FIREWORKS_API_KEY",
 ] as const;
 
 describe("credential brokering", () => {
@@ -65,6 +66,15 @@ describe("credential brokering", () => {
       process.env.MARTIAN_API_KEY = "martian-real";
       const c = resolveBrokeredCredentials("pi", { aiApiKeyEnv: "MARTIAN_API_KEY" });
       expect(c.customToken).toEqual({ envName: "MARTIAN_API_KEY", token: "martian-real" });
+    });
+
+    it("captures the Fireworks preset key for the pi path", () => {
+      process.env.FIREWORKS_API_KEY = "fireworks-real";
+      const c = resolveBrokeredCredentials("pi", { aiApiKeyEnv: "FIREWORKS_API_KEY" });
+      expect(c.customToken).toEqual({
+        envName: "FIREWORKS_API_KEY",
+        token: "fireworks-real",
+      });
     });
   });
 
@@ -143,6 +153,24 @@ describe("credential brokering", () => {
       expect(env.DEEPSEC_PI_AI_BASE_URL).toBe("https://api.withmartian.com/v1");
       for (const v of Object.values(env)) {
         expect(v).not.toContain("martian-real-secret");
+      }
+    });
+
+    it("brokers the Fireworks preset key and base URL without exposing the key", () => {
+      process.env.FIREWORKS_API_KEY = "fireworks-real-secret";
+      const credentials = resolveBrokeredCredentials("pi", {
+        aiApiKeyEnv: "FIREWORKS_API_KEY",
+      });
+      const env = buildSandboxEnv("pi", credentials, {
+        aiApiKeyEnv: "FIREWORKS_API_KEY",
+        aiBaseUrl: "https://api.fireworks.ai/inference/v1",
+      });
+
+      expect(env.FIREWORKS_API_KEY).toBeDefined();
+      expect(env.FIREWORKS_API_KEY).not.toBe("fireworks-real-secret");
+      expect(env.DEEPSEC_PI_AI_BASE_URL).toBe("https://api.fireworks.ai/inference/v1");
+      for (const value of Object.values(env)) {
+        expect(value).not.toContain("fireworks-real-secret");
       }
     });
   });
