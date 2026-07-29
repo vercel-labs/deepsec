@@ -5,6 +5,7 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createPiReadOnlyToolDefinitions,
+  registerMiniMaxProvider,
   resolvePiModelWithDynamicGateway,
 } from "../agents/pi-sdk.js";
 
@@ -70,6 +71,9 @@ describe("Pi model resolution", () => {
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "MINIMAX_API_KEY",
+    "MINIMAX_BASE_URL",
+    "MINIMAX_REGION",
   ] as const;
   const originalEnv = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
   const originalFetch = globalThis.fetch;
@@ -167,5 +171,68 @@ describe("Pi model resolution", () => {
       }),
     ).rejects.toThrow(/Pi model not found: acme\/nonexistent-model-1/);
     expect(called).toBe(false);
+  });
+
+  it("registers the built-in MiniMax presets and resolves them offline", async () => {
+    for (const key of KEYS) delete process.env[key];
+    let called = false;
+    globalThis.fetch = async () => {
+      called = true;
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {});
+
+    const m3 = await resolvePiModelWithDynamicGateway(registry, "minimax/MiniMax-M3", {});
+    expect(m3.provider).toBe("minimax");
+    expect(m3.id).toBe("MiniMax-M3");
+    expect(m3.api).toBe("openai-completions");
+    expect(m3.reasoning).toBe(true);
+    expect(m3.input).toEqual(["text", "image"]);
+    expect(m3.contextWindow).toBe(1_000_000);
+    expect(m3.cost.input).toBe(0.6);
+
+    const m27 = await resolvePiModelWithDynamicGateway(registry, "minimax/MiniMax-M2.7", {});
+    expect(m27.provider).toBe("minimax");
+    expect(m27.id).toBe("MiniMax-M2.7");
+    expect(m27.contextWindow).toBe(204_800);
+    expect(m27.cost.cacheWrite).toBe(0.375);
+
+    expect(called).toBe(false);
+  });
+
+  it("selects the CN MiniMax endpoint preset via MINIMAX_REGION", async () => {
+    for (const key of KEYS) delete process.env[key];
+    process.env.MINIMAX_REGION = "cn";
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {});
+
+    expect(registry.getRegisteredProviderConfig("minimax")?.baseUrl).toBe(
+      "https://api.minimaxi.com/v1",
+    );
+  });
+
+  it("defaults MiniMax to the global endpoint preset", async () => {
+    for (const key of KEYS) delete process.env[key];
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {});
+
+    expect(registry.getRegisteredProviderConfig("minimax")?.baseUrl).toBe(
+      "https://api.minimax.io/v1",
+    );
+  });
+
+  it("lets --ai-base-url override the MiniMax region preset", async () => {
+    for (const key of KEYS) delete process.env[key];
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, { aiBaseUrl: "https://example.test/v1" });
+
+    expect(registry.getRegisteredProviderConfig("minimax")?.baseUrl).toBe(
+      "https://example.test/v1",
+    );
   });
 });

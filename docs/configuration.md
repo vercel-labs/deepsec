@@ -117,6 +117,9 @@ backend you're using.
 |---|---|---|
 | `OPENAI_API_KEY` | `--agent codex`, `--agent pi --model openai/...` | Codex SDK token or Pi OpenAI-provider token. Unset is fine if `AI_GATEWAY_API_KEY` is set. |
 | `OPENAI_BASE_URL` | `--agent codex` | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh/v1`. |
+| `MINIMAX_API_KEY` | `--agent pi --model minimax/...` | Auth for the built-in MiniMax provider preset. |
+| `MINIMAX_REGION` | `--agent pi --model minimax/...` | Endpoint preset: `global` (default) or `cn`. See [models.md](models.md). |
+| `MINIMAX_BASE_URL` | `--agent pi --model minimax/...` | Override the region preset with a custom base URL. |
 | `PI_CODING_AGENT_DIR` | `--agent pi` | Optional Pi config/auth directory. Defaults to `~/.pi/agent`; local non-sandbox runs can reuse `auth.json` there. |
 | `DEEPSEC_AGENT_DEBUG` | both backends | Set to `1` to enable verbose agent logging. |
 | `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Equivalent to `dataDir` in config. |

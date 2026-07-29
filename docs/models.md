@@ -132,6 +132,37 @@ Repeat `--ai-header name=value` for provider-specific headers. There is
 no Martian-specific first-class integration; these flags are the generic
 provider override path.
 
+### MiniMax (`minimax/…`) presets
+
+MiniMax ships as a built-in Pi provider preset, so you can select its
+models by id without spelling out the base URL. The provider registers
+`minimax/MiniMax-M3` (1M-token context) and `minimax/MiniMax-M2.7`
+(204,800-token context):
+
+```bash
+MINIMAX_API_KEY=...
+pnpm deepsec process --project-id my-app --agent pi --model minimax/MiniMax-M3
+```
+
+Two regional endpoint presets are built in. The default is the global
+endpoint (`https://api.minimax.io/v1`); set `MINIMAX_REGION=cn` to use
+the CN endpoint (`https://api.minimaxi.com/v1`) instead:
+
+```bash
+MINIMAX_API_KEY=...
+MINIMAX_REGION=cn
+pnpm deepsec process --project-id my-app --agent pi --model minimax/MiniMax-M2.7
+```
+
+`MINIMAX_BASE_URL` (or `--ai-base-url`) overrides the region preset for a
+custom endpoint. Auth comes from `MINIMAX_API_KEY`, or point
+`--ai-api-key-env` at a different variable.
+
+`--thinking-level` flows through to the model: `MiniMax-M3`'s reasoning is
+adaptive and can be dialed down for cheaper waves, while `MiniMax-M2.7`
+always reasons. In sandbox mode, add the endpoint host to `allowedHosts`
+so worker egress can reach it.
+
 ### `claude-sonnet-4-6` for `triage`
 
 Triage buckets findings into P0/P1/P2/skip without re-reading the code
