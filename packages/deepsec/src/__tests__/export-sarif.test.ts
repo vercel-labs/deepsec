@@ -141,6 +141,18 @@ describe("buildSarifLog()", () => {
     expect(fp1).not.toBe(fp2);
   });
 
+  it("produces different fingerprints for different vulnSlugs on the same line", () => {
+    const log = buildSarifLog([
+      makeFinding({ filePath: "src/a.ts", lineNumbers: [10], vulnSlug: "sql-injection" }),
+      makeFinding({ filePath: "src/a.ts", lineNumbers: [10], vulnSlug: "xss" }),
+    ]);
+
+    const fp1 = log.runs[0].results[0].partialFingerprints.primaryLocationLineHash;
+    const fp2 = log.runs[0].results[1].partialFingerprints.primaryLocationLineHash;
+
+    expect(fp1).not.toBe(fp2);
+  });
+
   it("preserves original severity in result.properties", () => {
     const log = buildSarifLog([makeFinding({ severity: "CRITICAL" })]);
     const props = log.runs[0].results[0].properties;

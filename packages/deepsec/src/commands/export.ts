@@ -347,13 +347,14 @@ function humanizeSlug(slug: string): string {
  * GitHub's upload-sarif action will auto-compute fingerprints when this field
  * is absent, but providing a stable value ourselves avoids relying on that
  * fallback and works with tools that don't recompute. We derive the hash from
- * the same immutable identity fields deepsec uses for `findingId`
- * (projectId + normalized filePath + title), plus the first line number —
- * matching the "primary location" semantics SARIF expects.
+ * projectId + normalized filePath + vulnSlug + first line number.
+ * vulnSlug is included so that distinct findings on the same file+line
+ * (e.g. both SQL injection and XSS on the same line) produce different
+ * fingerprints — otherwise GitHub Code Scanning would drop one alert.
  */
 function sarifFingerprint(f: ExportedFinding): string {
   const normPath = f.metadata.filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  const raw = `${f.metadata.projectId}\0${normPath}\0${f.metadata.lineNumbers[0] ?? 1}`;
+  const raw = `${f.metadata.projectId}\0${normPath}\0${f.metadata.vulnSlug}\0${f.metadata.lineNumbers[0] ?? 1}`;
   return crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
 }
 
