@@ -85,6 +85,78 @@ type PiModel = ReturnType<ModelRegistry["getAll"]>[number];
 type PiProviderConfig = Parameters<ModelRegistry["registerProvider"]>[1];
 type PiProviderModelConfig = NonNullable<PiProviderConfig["models"]>[number];
 
+// MiniMax exposes an OpenAI-compatible endpoint on two regional hosts that
+// share the same model catalog. We register the provider so `--model
+// minimax/<id>` resolves offline (deepsec pins PI_OFFLINE, so pi never
+// fetches a remote catalog for it). The region is selected with
+// MINIMAX_REGION, or overridden outright with MINIMAX_BASE_URL /
+// --ai-base-url; the model ids stay stable across regions.
+const MINIMAX_PROVIDER = "minimax";
+const MINIMAX_API = "openai-completions" as const;
+const MINIMAX_REGION_BASE_URLS = {
+  global: "https://api.minimax.io/v1",
+  cn: "https://api.minimaxi.com/v1",
+} as const;
+type MiniMaxRegion = keyof typeof MINIMAX_REGION_BASE_URLS;
+const MINIMAX_DEFAULT_REGION: MiniMaxRegion = "global";
+// Output cap applied on the deepsec side; matches the generic pass-through
+// default. deepsec's investigation JSON fits well under this.
+const MINIMAX_MAX_TOKENS = 32_000;
+
+// Built-in model presets. cost is USD per million tokens (pi divides usage
+// by 1e6). `reasoning: true` routes deepsec's --thinking-level through to
+// each model: MiniMax-M3's thinking is adaptive and can be turned down for
+// cheaper waves, while MiniMax-M2.7 always reasons. pi's `input` union
+// covers only text/image, so the video modality is not represented here.
+const MINIMAX_MODELS: PiProviderModelConfig[] = [
+  {
+    id: "MiniMax-M3",
+    name: "MiniMax-M3",
+    api: MINIMAX_API,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: MINIMAX_MAX_TOKENS,
+  },
+  {
+    id: "MiniMax-M2.7",
+    name: "MiniMax-M2.7",
+    api: MINIMAX_API,
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+    contextWindow: 204_800,
+    maxTokens: MINIMAX_MAX_TOKENS,
+  },
+];
+
+function resolveMiniMaxBaseUrl(cfg: PiAgentConfig): string {
+  if (cfg.aiBaseUrl) return cfg.aiBaseUrl;
+  if (process.env.MINIMAX_BASE_URL) return process.env.MINIMAX_BASE_URL;
+  const region = process.env.MINIMAX_REGION as MiniMaxRegion | undefined;
+  if (region && region in MINIMAX_REGION_BASE_URLS) return MINIMAX_REGION_BASE_URLS[region];
+  return MINIMAX_REGION_BASE_URLS[MINIMAX_DEFAULT_REGION];
+}
+
+/**
+ * Register the built-in MiniMax provider preset (regional base URL + model
+ * catalog). Auth is layered separately in configureRuntimeAuth, or via the
+ * generic --ai-api-key-env override; a missing key just leaves the provider
+ * unauthenticated. Registering an unused provider is cheap.
+ */
+export function registerMiniMaxProvider(registry: ModelRegistry, cfg: PiAgentConfig): void {
+  const override: PiProviderConfig = {
+    baseUrl: resolveMiniMaxBaseUrl(cfg),
+    api: MINIMAX_API,
+    models: MINIMAX_MODELS,
+  };
+  const key = cfg.aiApiKeyEnv ? process.env[cfg.aiApiKeyEnv] : process.env.MINIMAX_API_KEY;
+  if (key) override.apiKey = key;
+  if (cfg.aiHeaders && Object.keys(cfg.aiHeaders).length > 0) override.headers = cfg.aiHeaders;
+  registry.registerProvider(MINIMAX_PROVIDER, override);
+}
+
 interface PiSessionSetup {
   session: AgentSession;
   modelLabel: string;
@@ -335,6 +407,9 @@ async function configureRuntimeAuth(runtime: ModelRuntime, cfg: PiAgentConfig): 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (openaiKey) await runtime.setRuntimeApiKey("openai", openaiKey, offline);
 
+  const minimaxKey = process.env.MINIMAX_API_KEY;
+  if (minimaxKey) await runtime.setRuntimeApiKey(MINIMAX_PROVIDER, minimaxKey, offline);
+
   const customProvider = cfg.aiProvider ?? modelProviderFromName(cfg.model);
   if (customProvider && cfg.aiApiKeyEnv) {
     const key = process.env[cfg.aiApiKeyEnv];
@@ -512,6 +587,7 @@ async function createPiSession(projectRoot: string, cfg: PiAgentConfig): Promise
   // their tests) on the same ModelRegistry API as before.
   const modelRegistry = new ModelRegistry(runtime);
   configureProviderOverrides(modelRegistry, cfg);
+  registerMiniMaxProvider(modelRegistry, cfg);
 
   const modelName = cfg.model ?? DEFAULT_MODEL;
   const model = await resolvePiModelWithDynamicGateway(modelRegistry, modelName, cfg);
