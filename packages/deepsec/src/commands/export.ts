@@ -5,6 +5,7 @@ import type { FileRecord, Finding, Severity } from "@deepsec/core";
 import { dataDir, getDataRoot, loadAllFileRecords } from "@deepsec/core";
 import { BOLD, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
+import { getDeepsecVersion } from "../version.js";
 
 const SEVERITY_ORDER: Record<Severity, number> = {
   CRITICAL: 0,
@@ -25,7 +26,7 @@ interface OwnerSummary {
   recentCommitters: { name: string; email: string; date: string }[];
 }
 
-interface ExportedFinding {
+export interface ExportedFinding {
   title: string;
   description: string;
   severity: Severity;
@@ -309,6 +310,193 @@ function writeMdDir(findings: ExportedFinding[], out: string) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// SARIF 2.1.0 export
+// Spec: https://docs.oasis.org/projects/sarif/sarif-spec/v2.1.0/sarif-v2.1.0.html
+// GitHub Code Scanning accepts a subset of SARIF 2.1.0; this implementation
+// targets that subset so results can be uploaded via
+// github/codeql-action/upload-sarif@v4 and displayed as PR annotations.
+// ---------------------------------------------------------------------------
+
+/** SARIF `level` only has three values; deepsec has six severities. */
+function severityToSarifLevel(severity: Severity): "error" | "warning" | "note" {
+  switch (severity) {
+    case "CRITICAL":
+    case "HIGH":
+      return "error";
+    case "HIGH_BUG":
+    case "MEDIUM":
+      return "warning";
+    case "BUG":
+    case "LOW":
+      return "note";
+  }
+}
+
+/** Convert "sql-injection" → "SQL Injection" for human-readable rule names. */
+function humanizeSlug(slug: string): string {
+  return slug
+    .split("-")
+    .map((w) => (w.length <= 2 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+/**
+ * Deterministic fingerprint for SARIF `partialFingerprints.primaryLocationLineHash`.
+ *
+ * GitHub's upload-sarif action will auto-compute fingerprints when this field
+ * is absent, but providing a stable value ourselves avoids relying on that
+ * fallback and works with tools that don't recompute. We derive the hash from
+ * the same immutable identity fields deepsec uses for `findingId`
+ * (projectId + normalized filePath + title), plus the first line number —
+ * matching the "primary location" semantics SARIF expects.
+ */
+function sarifFingerprint(f: ExportedFinding): string {
+  const normPath = f.metadata.filePath.replaceAll("\\", "/").replace(/^\.\//, "");
+  const raw = `${f.metadata.projectId}\0${normPath}\0${f.metadata.lineNumbers[0] ?? 1}`;
+  return crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
+}
+
+interface SarifRule {
+  id: string;
+  name: string;
+  shortDescription: { text: string };
+}
+
+interface SarifResult {
+  ruleId: string;
+  level: "error" | "warning" | "note";
+  message: { text: string };
+  locations: Array<{
+    physicalLocation: {
+      artifactLocation: { uri: string };
+      region: { startLine: number; endLine?: number };
+    };
+  }>;
+  partialFingerprints: { primaryLocationLineHash: string };
+  properties: Record<string, string>;
+}
+
+interface SarifRun {
+  tool: {
+    driver: {
+      name: string;
+      version: string;
+      informationUri: string;
+      rules: SarifRule[];
+    };
+  };
+  results: SarifResult[];
+  properties?: Record<string, string>;
+}
+
+interface SarifLog {
+  $schema: string;
+  version: string;
+  runs: SarifRun[];
+}
+
+/**
+ * Build a SARIF 2.1.0 log from exported findings. Each project becomes one
+ * `run` so multi-project exports stay isolated. Rules are deduped per run by
+ * `vulnSlug` (the SARIF `ruleId`).
+ *
+ * Exported so unit tests can call it directly without touching the filesystem.
+ */
+export function buildSarifLog(findings: ExportedFinding[]): SarifLog {
+  const version = getDeepsecVersion();
+
+  // Group by project so each project gets its own run.
+  const byProject = new Map<string, ExportedFinding[]>();
+  for (const f of findings) {
+    const list = byProject.get(f.metadata.projectId) ?? [];
+    list.push(f);
+    byProject.set(f.metadata.projectId, list);
+  }
+
+  const runs: SarifRun[] = [];
+
+  for (const [projectId, projectFindings] of byProject) {
+    // Collect deduped rules keyed by vulnSlug.
+    const ruleMap = new Map<string, SarifRule>();
+    for (const f of projectFindings) {
+      if (!ruleMap.has(f.metadata.vulnSlug)) {
+        ruleMap.set(f.metadata.vulnSlug, {
+          id: f.metadata.vulnSlug,
+          name: humanizeSlug(f.metadata.vulnSlug),
+          shortDescription: { text: f.title },
+        });
+      }
+    }
+
+    const results: SarifResult[] = projectFindings.map((f) => {
+      const lines = f.metadata.lineNumbers;
+      const startLine = lines[0] ?? 1;
+      const region: { startLine: number; endLine?: number } = { startLine };
+      if (lines.length > 1) {
+        region.endLine = lines[lines.length - 1];
+      }
+
+      const props: Record<string, string> = {
+        "deepsec-severity": f.metadata.severity,
+        "deepsec-confidence": f.metadata.confidence,
+        "deepsec-vuln-slug": f.metadata.vulnSlug,
+        "deepsec-project-id": f.metadata.projectId,
+      };
+      if (f.metadata.revalidation) {
+        props["deepsec-revalidation"] = f.metadata.revalidation.verdict;
+      }
+
+      return {
+        ruleId: f.metadata.vulnSlug,
+        level: severityToSarifLevel(f.metadata.severity),
+        message: { text: f.description },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: f.metadata.filePath },
+              region,
+            },
+          },
+        ],
+        partialFingerprints: { primaryLocationLineHash: sarifFingerprint(f) },
+        properties: props,
+      };
+    });
+
+    runs.push({
+      tool: {
+        driver: {
+          name: "deepsec",
+          version,
+          informationUri: "https://deepsec.sh",
+          rules: [...ruleMap.values()],
+        },
+      },
+      results,
+      properties: { "deepsec-project-id": projectId },
+    });
+  }
+
+  return {
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs,
+  };
+}
+
+function writeSarif(findings: ExportedFinding[], out: string | undefined) {
+  const log = buildSarifLog(findings);
+  const json = JSON.stringify(log, null, 2);
+  if (out) {
+    fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    fs.writeFileSync(out, json + "\n");
+    console.log(`\n${GREEN}Exported ${findings.length} finding(s)${RESET} → ${BOLD}${out}${RESET}`);
+  } else {
+    process.stdout.write(json + "\n");
+  }
+}
+
 export async function exportCommand(opts: {
   projectId?: string;
   minSeverity?: string;
@@ -342,8 +530,8 @@ export async function exportCommand(opts: {
     : listProjectIds();
 
   const format = opts.format ?? "json";
-  if (format !== "json" && format !== "md-dir") {
-    throw new Error(`--format must be "json" or "md-dir", got "${format}"`);
+  if (format !== "json" && format !== "md-dir" && format !== "sarif") {
+    throw new Error(`--format must be "json", "md-dir", or "sarif", got "${format}"`);
   }
   if (format === "md-dir" && !opts.out) {
     throw new Error(`--format md-dir requires --out <dir>`);
@@ -534,6 +722,8 @@ export async function exportCommand(opts: {
 
   if (format === "md-dir") {
     writeMdDir(findings, opts.out!);
+  } else if (format === "sarif") {
+    writeSarif(findings, opts.out);
   } else {
     writeJson(findings, opts.out);
   }
