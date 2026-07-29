@@ -4,7 +4,9 @@ import path from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  configureProviderOverrides,
   createPiReadOnlyToolDefinitions,
+  registerFireworksKimiK3ModelIfNeeded,
   resolvePiModelWithDynamicGateway,
 } from "../agents/pi-sdk.js";
 
@@ -70,6 +72,7 @@ describe("Pi model resolution", () => {
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "FIREWORKS_API_KEY",
   ] as const;
   const originalEnv = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
   const originalFetch = globalThis.fetch;
@@ -167,5 +170,200 @@ describe("Pi model resolution", () => {
       }),
     ).rejects.toThrow(/Pi model not found: acme\/nonexistent-model-1/);
     expect(called).toBe(false);
+  });
+
+  it("registers the Fireworks Kimi K3 preset offline without replacing the catalog", async () => {
+    for (const key of KEYS) delete process.env[key];
+    let called = false;
+    globalThis.fetch = async () => {
+      called = true;
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    const registry = await freshRegistry();
+    const existingFireworksModel = registry.find("fireworks", "accounts/fireworks/models/glm-5p2");
+    expect(existingFireworksModel).toBeDefined();
+
+    const config = {
+      model: "fireworks/accounts/fireworks/models/kimi-k3",
+      aiProvider: "fireworks",
+      aiBaseUrl: "https://api.fireworks.ai/inference/v1",
+      aiApiKeyEnv: "FIREWORKS_API_KEY",
+    };
+    registerFireworksKimiK3ModelIfNeeded(
+      registry,
+      "fireworks/accounts/fireworks/models/kimi-k3",
+      config,
+    );
+
+    const model = await resolvePiModelWithDynamicGateway(
+      registry,
+      "fireworks/accounts/fireworks/models/kimi-k3",
+      config,
+    );
+    expect(model.provider).toBe("fireworks");
+    expect(model.id).toBe("accounts/fireworks/models/kimi-k3");
+    expect(model.name).toBe("Kimi K3");
+    expect(model.api).toBe("openai-completions");
+    expect(model.reasoning).toBe(true);
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual({
+      input: 3,
+      output: 15,
+      cacheRead: 0.3,
+      cacheWrite: 0,
+    });
+    expect(model.contextWindow).toBe(1_048_576);
+    expect(model.maxTokens).toBe(131_072);
+    expect(registry.find("fireworks", "accounts/fireworks/models/glm-5p2")).toBeDefined();
+    expect(called).toBe(false);
+  });
+
+  it("registers the Fireworks Kimi K3 preset idempotently", async () => {
+    const registry = await freshRegistry();
+    const requested = "fireworks/accounts/fireworks/models/kimi-k3";
+    const config = {
+      model: requested,
+      aiProvider: "fireworks",
+      aiBaseUrl: "https://api.fireworks.ai/inference/v1",
+    };
+
+    registerFireworksKimiK3ModelIfNeeded(registry, requested, config);
+    registerFireworksKimiK3ModelIfNeeded(registry, requested, config);
+
+    expect(
+      registry
+        .getAll()
+        .filter(
+          (model) =>
+            model.provider === "fireworks" && model.id === "accounts/fireworks/models/kimi-k3",
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("preserves an existing Fireworks Kimi K3 model entry", async () => {
+    const registry = await freshRegistry();
+    registry.registerProvider("fireworks", {
+      baseUrl: "https://user-fireworks.example.test/v1",
+      api: "openai-completions",
+      models: [
+        {
+          id: "accounts/fireworks/models/kimi-k3",
+          name: "User-configured Kimi K3",
+          api: "openai-completions",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 196_608,
+          maxTokens: 32_768,
+        },
+      ],
+    });
+
+    registerFireworksKimiK3ModelIfNeeded(registry, "fireworks/accounts/fireworks/models/kimi-k3", {
+      model: "fireworks/accounts/fireworks/models/kimi-k3",
+      aiProvider: "fireworks",
+      aiBaseUrl: "https://api.fireworks.ai/inference/v1",
+      aiBaseUrlFromPreset: true,
+    });
+
+    const model = registry.find("fireworks", "accounts/fireworks/models/kimi-k3");
+    expect(model?.name).toBe("User-configured Kimi K3");
+    expect(model?.contextWindow).toBe(196_608);
+    expect(registry.getRegisteredProviderConfig("fireworks")?.baseUrl).toBe(
+      "https://user-fireworks.example.test/v1",
+    );
+  });
+
+  it("preserves a user Fireworks endpoint when the base URL came from the preset", async () => {
+    const registry = await freshRegistry();
+    registry.registerProvider("fireworks", {
+      baseUrl: "https://user-fireworks.example.test/v1",
+      api: "openai-completions",
+      models: [
+        {
+          id: "accounts/fireworks/models/kimi-k3",
+          name: "User-configured Kimi K3",
+          api: "openai-completions",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 196_608,
+          maxTokens: 32_768,
+        },
+      ],
+    });
+    const config = {
+      model: "fireworks/accounts/fireworks/models/kimi-k3",
+      aiProvider: "fireworks",
+      aiBaseUrl: "https://api.fireworks.ai/inference/v1",
+      aiBaseUrlFromPreset: true,
+    };
+
+    configureProviderOverrides(registry, config);
+    registerFireworksKimiK3ModelIfNeeded(
+      registry,
+      "fireworks/accounts/fireworks/models/kimi-k3",
+      config,
+    );
+
+    expect(registry.getRegisteredProviderConfig("fireworks")?.baseUrl).toBe(
+      "https://user-fireworks.example.test/v1",
+    );
+  });
+
+  it("applies an explicit Fireworks base URL to an existing Kimi K3 entry", async () => {
+    const registry = await freshRegistry();
+    registry.registerProvider("fireworks", {
+      baseUrl: "https://user-fireworks.example.test/v1",
+      api: "openai-completions",
+      models: [
+        {
+          id: "accounts/fireworks/models/kimi-k3",
+          name: "User-configured Kimi K3",
+          api: "openai-completions",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 196_608,
+          maxTokens: 32_768,
+        },
+      ],
+    });
+
+    configureProviderOverrides(registry, {
+      model: "fireworks/accounts/fireworks/models/kimi-k3",
+      aiProvider: "fireworks",
+      aiBaseUrl: "https://explicit-fireworks.example.test/v1",
+    });
+
+    expect(registry.getRegisteredProviderConfig("fireworks")?.baseUrl).toBe(
+      "https://explicit-fireworks.example.test/v1",
+    );
+  });
+
+  it("keeps explicit Fireworks base URL and headers on the preset", async () => {
+    const registry = await freshRegistry();
+    registerFireworksKimiK3ModelIfNeeded(registry, "fireworks/accounts/fireworks/models/kimi-k3", {
+      model: "fireworks/accounts/fireworks/models/kimi-k3",
+      aiProvider: "fireworks",
+      aiBaseUrl: "https://fireworks.example.test/v1",
+      aiHeaders: { "x-fireworks-account": "test" },
+    });
+
+    expect(registry.getRegisteredProviderConfig("fireworks")).toMatchObject({
+      baseUrl: "https://fireworks.example.test/v1",
+      headers: { "x-fireworks-account": "test" },
+    });
+  });
+
+  it("does not register Kimi K3 for a conflicting provider override", async () => {
+    const registry = await freshRegistry();
+    registerFireworksKimiK3ModelIfNeeded(registry, "fireworks/accounts/fireworks/models/kimi-k3", {
+      model: "fireworks/accounts/fireworks/models/kimi-k3",
+      aiProvider: "custom",
+    });
+
+    expect(registry.find("fireworks", "accounts/fireworks/models/kimi-k3")).toBeUndefined();
   });
 });

@@ -65,6 +65,11 @@ const GATEWAY_PROVIDER = "vercel-ai-gateway";
 // the same api/baseUrl as the built-in provider.
 const GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 const GATEWAY_API = "anthropic-messages" as const;
+const FIREWORKS_PROVIDER = "fireworks";
+const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
+const FIREWORKS_API = "openai-completions" as const;
+const FIREWORKS_KIMI_K3_MODEL_ID = "accounts/fireworks/models/kimi-k3";
+const FIREWORKS_KIMI_K3_MODEL = `${FIREWORKS_PROVIDER}/${FIREWORKS_KIMI_K3_MODEL_ID}`;
 const TOOL_ERROR_DETAIL_LIMIT = 500;
 
 const DEEPSEC_SYSTEM_NOTE =
@@ -76,6 +81,7 @@ interface PiAgentConfig {
   maxTurns?: number;
   aiProvider?: string;
   aiBaseUrl?: string;
+  aiBaseUrlFromPreset?: boolean;
   aiApiKeyEnv?: string;
   aiHeaders?: Record<string, string>;
   thinkingLevel?: string;
@@ -84,6 +90,22 @@ interface PiAgentConfig {
 type PiModel = ReturnType<ModelRegistry["getAll"]>[number];
 type PiProviderConfig = Parameters<ModelRegistry["registerProvider"]>[1];
 type PiProviderModelConfig = NonNullable<PiProviderConfig["models"]>[number];
+
+const FIREWORKS_KIMI_K3_CONFIG: PiProviderModelConfig = {
+  id: FIREWORKS_KIMI_K3_MODEL_ID,
+  name: "Kimi K3",
+  api: FIREWORKS_API,
+  reasoning: true,
+  input: ["text", "image"],
+  cost: {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 0,
+  },
+  contextWindow: 1_048_576,
+  maxTokens: 131_072,
+};
 
 interface PiSessionSetup {
   session: AgentSession;
@@ -274,6 +296,8 @@ function readConfig(config: Record<string, unknown>): PiAgentConfig {
     maxTurns: typeof config.maxTurns === "number" ? config.maxTurns : undefined,
     aiProvider: typeof config.aiProvider === "string" ? config.aiProvider : undefined,
     aiBaseUrl: typeof config.aiBaseUrl === "string" ? config.aiBaseUrl : undefined,
+    aiBaseUrlFromPreset:
+      typeof config.aiBaseUrlFromPreset === "boolean" ? config.aiBaseUrlFromPreset : undefined,
     aiApiKeyEnv: typeof config.aiApiKeyEnv === "string" ? config.aiApiKeyEnv : undefined,
     aiHeaders:
       config.aiHeaders && typeof config.aiHeaders === "object" && !Array.isArray(config.aiHeaders)
@@ -342,7 +366,7 @@ async function configureRuntimeAuth(runtime: ModelRuntime, cfg: PiAgentConfig): 
   }
 }
 
-function configureProviderOverrides(registry: ModelRegistry, cfg: PiAgentConfig): void {
+export function configureProviderOverrides(registry: ModelRegistry, cfg: PiAgentConfig): void {
   if (process.env.ANTHROPIC_BASE_URL) {
     registry.registerProvider("anthropic", { baseUrl: process.env.ANTHROPIC_BASE_URL });
   }
@@ -353,7 +377,13 @@ function configureProviderOverrides(registry: ModelRegistry, cfg: PiAgentConfig)
   const provider = cfg.aiProvider ?? modelProviderFromName(cfg.model);
   if (!provider) return;
   const override: Parameters<ModelRegistry["registerProvider"]>[1] = {};
-  if (cfg.aiBaseUrl) override.baseUrl = cfg.aiBaseUrl;
+  const preserveExistingFireworksKimiK3BaseUrl =
+    cfg.aiBaseUrlFromPreset &&
+    cfg.model === FIREWORKS_KIMI_K3_MODEL &&
+    Boolean(registry.find(FIREWORKS_PROVIDER, FIREWORKS_KIMI_K3_MODEL_ID));
+  if (cfg.aiBaseUrl && !preserveExistingFireworksKimiK3BaseUrl) {
+    override.baseUrl = cfg.aiBaseUrl;
+  }
   if (cfg.aiHeaders && Object.keys(cfg.aiHeaders).length > 0) override.headers = cfg.aiHeaders;
   if (Object.keys(override).length > 0) {
     registry.registerProvider(provider, override);
@@ -397,6 +427,29 @@ function dedupeProviderModels(models: PiProviderModelConfig[]): PiProviderModelC
   const byId = new Map<string, PiProviderModelConfig>();
   for (const model of models) byId.set(model.id, model);
   return Array.from(byId.values());
+}
+
+export function registerFireworksKimiK3ModelIfNeeded(
+  registry: ModelRegistry,
+  requested: string,
+  cfg: PiAgentConfig,
+): void {
+  if (requested !== FIREWORKS_KIMI_K3_MODEL) return;
+  if (cfg.aiProvider && cfg.aiProvider !== FIREWORKS_PROVIDER) return;
+  if (registry.find(FIREWORKS_PROVIDER, FIREWORKS_KIMI_K3_MODEL_ID)) return;
+
+  const existingFireworksModels = registry
+    .getAll()
+    .filter((model) => model.provider === FIREWORKS_PROVIDER)
+    .map(piModelToProviderModelConfig);
+  const models = dedupeProviderModels([...existingFireworksModels, FIREWORKS_KIMI_K3_CONFIG]);
+
+  registry.registerProvider(FIREWORKS_PROVIDER, {
+    baseUrl: cfg.aiBaseUrl ?? FIREWORKS_BASE_URL,
+    api: FIREWORKS_API,
+    ...(cfg.aiHeaders && Object.keys(cfg.aiHeaders).length > 0 ? { headers: cfg.aiHeaders } : {}),
+    models,
+  });
 }
 
 function registerGatewayModelIfNeeded(
@@ -514,6 +567,7 @@ async function createPiSession(projectRoot: string, cfg: PiAgentConfig): Promise
   configureProviderOverrides(modelRegistry, cfg);
 
   const modelName = cfg.model ?? DEFAULT_MODEL;
+  registerFireworksKimiK3ModelIfNeeded(modelRegistry, modelName, cfg);
   const model = await resolvePiModelWithDynamicGateway(modelRegistry, modelName, cfg);
   const settingsManager = SettingsManager.inMemory({
     defaultThinkingLevel: (cfg.thinkingLevel ?? DEFAULT_THINKING_LEVEL) as never,

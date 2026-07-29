@@ -132,6 +132,57 @@ Repeat `--ai-header name=value` for provider-specific headers. There is
 no Martian-specific first-class integration; these flags are the generic
 provider override path.
 
+### Kimi K3 on Fireworks
+
+Kimi K3 is available through the Pi backend using deepsec's built-in
+Fireworks preset. Set a Fireworks API key and select the full provider/model
+identifier:
+
+```bash
+FIREWORKS_API_KEY=...
+pnpm deepsec process --project-id my-app \
+  --agent pi \
+  --model fireworks/accounts/fireworks/models/kimi-k3
+```
+
+The same selection works for revalidation:
+
+```bash
+FIREWORKS_API_KEY=...
+pnpm deepsec revalidate --project-id my-app \
+  --agent pi \
+  --model fireworks/accounts/fireworks/models/kimi-k3
+```
+
+No Pi `models.json` entry is required. deepsec registers the model in Pi's
+offline catalog with Fireworks' OpenAI-compatible endpoint, 1,048,576-token
+context window, text/image input metadata, and current serverless pricing:
+$3.00 input, $0.30 cached input, and $15.00 output per million tokens.
+deepsec's Pi harness currently exposes source-reading text tools only, so the
+model's image support is not used during an investigation.
+
+`--thinking-level` uses the same Pi reasoning control described above. For a
+small smoke run, `--thinking-level low --limit 1 --concurrency 1` keeps the
+test bounded.
+
+The preset supplies `https://api.fireworks.ai/inference/v1` and reads
+`FIREWORKS_API_KEY`. Explicit provider options still win, so a compatible
+proxy can replace either value:
+
+```bash
+CUSTOM_FIREWORKS_KEY=...
+pnpm deepsec process --project-id my-app \
+  --agent pi \
+  --model fireworks/accounts/fireworks/models/kimi-k3 \
+  --ai-base-url https://fireworks-proxy.example.com/v1 \
+  --ai-api-key-env CUSTOM_FIREWORKS_KEY \
+  --ai-header x-account=my-team
+```
+
+Sandbox runs use the same model command. The orchestrator places only a
+placeholder key in the worker, restricts AI egress to the selected base URL
+host, and injects the real Fireworks credential at the firewall.
+
 ### `claude-sonnet-4-6` for `triage`
 
 Triage buckets findings into P0/P1/P2/skip without re-reading the code

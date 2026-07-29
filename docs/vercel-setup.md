@@ -151,6 +151,23 @@ as needed. In sandbox mode, deepsec passes only a placeholder env var
 into the worker and injects the real token at egress for the
 `--ai-base-url` host.
 
+Kimi K3 has a built-in Fireworks preset, so it does not need those routing
+flags:
+
+```bash
+FIREWORKS_API_KEY=...
+pnpm deepsec process --project-id my-app \
+  --agent pi \
+  --model fireworks/accounts/fireworks/models/kimi-k3
+```
+
+The preset selects `https://api.fireworks.ai/inference/v1` and
+`FIREWORKS_API_KEY`. It works in sandbox mode too: the orchestrator derives
+the same values, gives the worker a placeholder, allowlists
+`api.fireworks.ai`, and injects the real bearer token at egress. See
+[models.md](models.md#kimi-k3-on-fireworks) for model metadata, pricing, and
+override examples.
+
 ---
 
 ## Vercel Sandbox

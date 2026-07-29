@@ -36,6 +36,7 @@ describe("assertAgentCredential", () => {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
       AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY,
       MARTIAN_API_KEY: process.env.MARTIAN_API_KEY,
+      FIREWORKS_API_KEY: process.env.FIREWORKS_API_KEY,
       CLAUDE_HOME: process.env.CLAUDE_HOME,
       CODEX_HOME: process.env.CODEX_HOME,
       PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
@@ -46,6 +47,7 @@ describe("assertAgentCredential", () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.AI_GATEWAY_API_KEY;
     delete process.env.MARTIAN_API_KEY;
+    delete process.env.FIREWORKS_API_KEY;
     // Point CLAUDE_HOME / CODEX_HOME and PATH at empty tmp dirs so the
     // suite is hermetic — the dev running tests may have a real
     // ~/.codex/auth.json or `claude` on $PATH, which would cause
@@ -139,6 +141,26 @@ describe("assertAgentCredential", () => {
   it("passes for pi when a custom --ai-api-key-env is set", () => {
     process.env.MARTIAN_API_KEY = "martian-key";
     expect(() => assertAgentCredential("pi", { aiApiKeyEnv: "MARTIAN_API_KEY" })).not.toThrow();
+  });
+
+  it("passes for pi when the Fireworks preset key is set", () => {
+    process.env.FIREWORKS_API_KEY = "fireworks-key";
+    expect(() => assertAgentCredential("pi", { aiApiKeyEnv: "FIREWORKS_API_KEY" })).not.toThrow();
+    expect(() =>
+      assertAgentCredential("pi", {
+        inSandbox: true,
+        aiApiKeyEnv: "FIREWORKS_API_KEY",
+      }),
+    ).not.toThrow();
+  });
+
+  it("names the missing Fireworks preset key in the credential error", () => {
+    expect(() =>
+      assertAgentCredential("pi", {
+        inSandbox: true,
+        aiApiKeyEnv: "FIREWORKS_API_KEY",
+      }),
+    ).toThrow(/FIREWORKS_API_KEY/);
   });
 
   it("passes for pi when local Pi auth exists outside sandbox", () => {

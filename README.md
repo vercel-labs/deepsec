@@ -86,6 +86,10 @@ for the Vercel Sandbox setup. To bypass the gateway, set
 explicitly. Explicit values always win over the `AI_GATEWAY_API_KEY`
 expansion.
 
+The Pi backend also includes a direct
+[Kimi K3 on Fireworks](docs/models.md#kimi-k3-on-fireworks) preset for
+`FIREWORKS_API_KEY`; no custom Pi model registry entry is required.
+
 If a `process` or `revalidate` run halts because the upstream credential
 ran out of quota or credits, deepsec stops gracefully and tells you
 where to top up. Re-run the same command afterward and it picks up
