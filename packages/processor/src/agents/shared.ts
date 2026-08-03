@@ -218,6 +218,74 @@ export class QuotaExhaustedError extends Error {
   }
 }
 
+// --- Policy refusal --------------------------------------------------------
+
+/**
+ * Hard provider refusals (safety policy), distinct from quota: the provider
+ * declined the request itself, so the agent never produced findings JSON.
+ *   - `anthropic-usage-policy` — Claude Code usage-policy (AUP) block
+ *   - `openai-safety-system`   — OpenAI `invalid_prompt` / safety-system prose
+ *   - `content-policy`         — generic `content_policy_violation` envelope
+ */
+type RefusalSource = "anthropic-usage-policy" | "openai-safety-system" | "content-policy";
+
+/**
+ * Classify agent output as a hard provider policy refusal, or `undefined`.
+ *
+ * Matching is intentionally strict — the opposite trade-off from
+ * `classifyQuotaError`: a false positive here would relabel ordinary
+ * malformed JSON as "the model declined" (zero coverage over the batch),
+ * which is worse than the status quo. Misses fall through to the existing
+ * fail-loud parse error, which stays accurate.
+ */
+export function classifyPolicyRefusal(msg: string): RefusalSource | undefined {
+  if (!msg) return undefined;
+  const m = msg.toLowerCase();
+
+  // Claude Code usage-policy block:
+  //   "API Error: Claude Code is unable to respond to this request, which
+  //   appears to violate our Usage Policy (https://www.anthropic.com/legal/aup)."
+  if (
+    /anthropic\.com\/legal\/aup/.test(m) ||
+    (/unable to respond to this request/.test(m) && /usage polic/.test(m))
+  ) {
+    return "anthropic-usage-policy";
+  }
+
+  // OpenAI safety-system rejection: the `invalid_prompt` error code, or the
+  // prose form that accompanies it.
+  if (/\binvalid_prompt\b/.test(m) || /rejected as a result of our safety system/.test(m)) {
+    return "openai-safety-system";
+  }
+
+  if (/\bcontent_policy_violation\b/.test(m)) {
+    return "content-policy";
+  }
+
+  return undefined;
+}
+
+/**
+ * Thrown when the provider refused the request on policy grounds instead of
+ * producing findings JSON. Unlike `QuotaExhaustedError` this does NOT abort
+ * the run: a refusal depends on the batch's content, so other batches can
+ * proceed — but this batch must surface as errored, and must skip the
+ * JSON-repair follow-up (which would otherwise ask a declining model to
+ * re-emit conclusions it never produced, and accepts an empty findings
+ * array as a valid answer).
+ */
+export class AgentPolicyRefusalError extends Error {
+  readonly source: RefusalSource;
+  readonly rawMessage: string;
+
+  constructor(source: RefusalSource, rawMessage: string) {
+    super(`Agent refused the request on policy grounds (${source}): ${rawMessage.slice(0, 300)}`);
+    this.name = "AgentPolicyRefusalError";
+    this.source = source;
+    this.rawMessage = rawMessage;
+  }
+}
+
 /**
  * Vercel AI Gateway endpoints — duplicated from preflight.ts on purpose:
  * processor doesn't depend on the deepsec CLI package. Keep these in sync
@@ -710,6 +778,14 @@ function parseAgentJsonArray(params: {
   try {
     parsed = JSON.parse(jsonPayload);
   } catch (strictErr) {
+    // Classify before attempting repair, so a refusal is never "repaired"
+    // into a valid-but-empty findings array. Doing it inside the catch —
+    // rather than before JSON.parse — means valid findings JSON that merely
+    // quotes refusal text as evidence parses normally.
+    const refusalSource = classifyPolicyRefusal(resultText);
+    if (refusalSource) {
+      throw new AgentPolicyRefusalError(refusalSource, resultText);
+    }
     const repairCandidate = extractArrayCandidateForRepair(jsonPayload);
     try {
       parsed = JSON.parse(jsonrepair(repairCandidate));
