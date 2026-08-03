@@ -1,5 +1,6 @@
 import type { CandidateMatch } from "@deepsec/core";
 import type { MatcherPlugin } from "../types.js";
+import { hasFileDirective } from "./utils.js";
 
 export const serverActionNoAuthMatcher: MatcherPlugin = {
   noiseTier: "precise" as const,
@@ -24,7 +25,7 @@ export const serverActionNoAuthMatcher: MatcherPlugin = {
     const lines = content.split("\n");
 
     // File-level "use server"
-    const hasFileDirective = /^['"]use server['"]/.test(content.trim());
+    const hasFileLevelDirective = hasFileDirective(content, "use server");
 
     const authCalls = [
       /getSession\s*\(/,
@@ -49,7 +50,7 @@ export const serverActionNoAuthMatcher: MatcherPlugin = {
         /['"]use server['"]/.test(lines[i + 1]) &&
         /export\s+(async\s+)?function/.test(line);
 
-      const isFileExport = hasFileDirective && /export\s+(async\s+)?function\s+\w+/.test(line);
+      const isFileExport = hasFileLevelDirective && /export\s+(async\s+)?function\s+\w+/.test(line);
 
       if (!isInlineServerAction && !isFileExport) continue;
 

@@ -1,5 +1,6 @@
 import type { CandidateMatch } from "@deepsec/core";
 import type { MatcherPlugin } from "../types.js";
+import { hasFileDirective } from "./utils.js";
 
 /**
  * 100% server action coverage. Every exported function from a 'use server'
@@ -35,7 +36,7 @@ export const serverActionMatcher: MatcherPlugin = {
     const lines = content.split("\n");
 
     // File-level directive
-    const hasFileDirective = /^['"]use server['"]/.test(content.trim());
+    const hasFileLevelDirective = hasFileDirective(content, "use server");
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -46,7 +47,7 @@ export const serverActionMatcher: MatcherPlugin = {
       // Check for inline "use server" on the next line
       const hasInlineDirective = i + 1 < lines.length && /['"]use server['"]/.test(lines[i + 1]);
 
-      if (!hasFileDirective && !hasInlineDirective) continue;
+      if (!hasFileLevelDirective && !hasInlineDirective) continue;
 
       const start = Math.max(0, i - 1);
       const end = Math.min(lines.length, i + 4);
