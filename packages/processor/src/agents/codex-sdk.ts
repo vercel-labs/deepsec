@@ -13,6 +13,7 @@ import {
   type ThreadItem,
 } from "@openai/codex-sdk";
 import {
+  AgentPolicyRefusalError,
   backoff,
   buildInvestigateJsonRepairPrompt,
   buildInvestigatePrompt,
@@ -879,6 +880,17 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       try {
         parsedOutcome = parseInvestigateResults(resultText, batch);
       } catch (err) {
+        if (err instanceof AgentPolicyRefusalError) {
+          writeParseFailureDebug({
+            projectId,
+            phase: "investigate",
+            agentType: this.type,
+            resultText,
+            error: err,
+            batch,
+          });
+          throw err;
+        }
         yield {
           type: "thinking" as const,
           message: "Codex returned non-JSON investigation output; requesting JSON-only repair",
@@ -1164,6 +1176,17 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       try {
         verdicts = parseRevalidateVerdicts(resultText);
       } catch (err) {
+        if (err instanceof AgentPolicyRefusalError) {
+          writeParseFailureDebug({
+            projectId,
+            phase: "revalidate",
+            agentType: this.type,
+            resultText,
+            error: err,
+            batch,
+          });
+          throw err;
+        }
         yield {
           type: "thinking" as const,
           message: "Codex returned non-JSON revalidation output; requesting JSON-only repair",
