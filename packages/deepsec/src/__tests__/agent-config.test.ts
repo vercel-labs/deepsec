@@ -62,4 +62,31 @@ describe("buildAgentConfig", () => {
       aiHeaders: { "x-test": "one", "x-other": "two" },
     });
   });
+
+  it("applies Atlas Cloud defaults for the atlas provider", () => {
+    expect(
+      buildAgentConfig({
+        model: "atlas/deepseek-ai/deepseek-v4-pro",
+        aiProvider: "atlas",
+      }),
+    ).toMatchObject({
+      aiProvider: "atlas",
+      aiBaseUrl: "https://api.atlascloud.ai/v1",
+      aiApiKeyEnv: "ATLASCLOUD_API_KEY",
+    });
+  });
+
+  it("preserves explicit Atlas Cloud provider overrides", () => {
+    expect(
+      buildAgentConfig({
+        model: "atlas/custom-model",
+        aiProvider: "atlas",
+        aiBaseUrl: "https://atlas.example/v1",
+        aiApiKeyEnv: "CUSTOM_ATLAS_KEY",
+      }),
+    ).toMatchObject({
+      aiBaseUrl: "https://atlas.example/v1",
+      aiApiKeyEnv: "CUSTOM_ATLAS_KEY",
+    });
+  });
 });

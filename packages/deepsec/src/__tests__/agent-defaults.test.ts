@@ -5,6 +5,7 @@ describe("defaultModelForAgent", () => {
   it("returns the backend-specific default models", () => {
     expect(defaultModelForAgent("codex")).toBe("gpt-5.5");
     expect(defaultModelForAgent("pi")).toBe("zai/glm-5.2");
+    expect(defaultModelForAgent("pi", "atlas")).toBe("atlas/deepseek-ai/deepseek-v4-pro");
     expect(defaultModelForAgent("claude-agent-sdk")).toBe("claude-opus-4-8");
   });
 });

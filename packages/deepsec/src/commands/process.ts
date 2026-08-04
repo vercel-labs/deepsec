@@ -126,10 +126,12 @@ async function processStandardMode(opts: Parameters<typeof processCommand>[0]) {
   const project = readProjectConfig(projectId);
   const effectiveRoot = opts.root ?? project.rootPath;
   const agentType = resolveAgentType(opts.agent);
-  const model = opts.model ?? defaultModelForAgent(agentType);
+  const model = opts.model ?? defaultModelForAgent(agentType, opts.aiProvider);
   const agentConfig = buildAgentConfig({ ...opts, model });
 
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, {
+    aiApiKeyEnv: agentConfig.aiApiKeyEnv as string | undefined,
+  });
 
   // --reinvestigate  → true (re-investigate all)
   // --reinvestigate 2 → number (only files with < 2 analyses)
@@ -273,9 +275,11 @@ async function processDirectMode(opts: Parameters<typeof processCommand>[0]) {
   ensureProject(projectId, rootPath);
 
   const agentType = resolveAgentType(opts.agent);
-  const model = opts.model ?? defaultModelForAgent(agentType);
+  const model = opts.model ?? defaultModelForAgent(agentType, opts.aiProvider);
   const agentConfig = buildAgentConfig({ ...opts, model });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, {
+    aiApiKeyEnv: agentConfig.aiApiKeyEnv as string | undefined,
+  });
 
   // Resolve the file list.
   const resolved = resolveFiles({

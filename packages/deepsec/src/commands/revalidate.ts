@@ -83,13 +83,15 @@ export async function revalidateCommand(opts: {
   const projectId = resolveProjectId(opts.projectId);
   const _project = readProjectConfig(projectId);
   const agentType = resolveAgentType(opts.agent);
-  const model = opts.model ?? defaultModelForAgent(agentType);
+  const model = opts.model ?? defaultModelForAgent(agentType, opts.aiProvider);
   const agentConfig = buildAgentConfig({ ...opts, model });
   const minSeverity = opts.minSeverity as Severity | undefined;
   const onlySlugs = parseCsv(opts.onlySlugs);
   const skipSlugs = parseCsv(opts.skipSlugs);
 
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, {
+    aiApiKeyEnv: agentConfig.aiApiKeyEnv as string | undefined,
+  });
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);
   console.log(`  Agent: ${agentType} (${model})`);

@@ -142,10 +142,7 @@ program
     "--model <model>",
     "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi)",
   )
-  .option(
-    "--ai-provider <provider>",
-    "Pi: provider to override for --ai-base-url / --ai-api-key-env (e.g. openai)",
-  )
+  .option("--ai-provider <provider>", "Pi: provider preset or override target (e.g. atlas, openai)")
   .option(
     "--ai-base-url <url>",
     "Pi: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",
@@ -221,10 +218,7 @@ program
     "--model <model>",
     "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi)",
   )
-  .option(
-    "--ai-provider <provider>",
-    "Pi: provider to override for --ai-base-url / --ai-api-key-env (e.g. openai)",
-  )
+  .option("--ai-provider <provider>", "Pi: provider preset or override target (e.g. atlas, openai)")
   .option(
     "--ai-base-url <url>",
     "Pi: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",

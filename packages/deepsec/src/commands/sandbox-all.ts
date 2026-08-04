@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDataRoot, readProjectConfig } from "@deepsec/core";
+import { buildAgentConfig } from "../agent-config.js";
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
 import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
@@ -89,12 +90,20 @@ export async function sandboxAllCommand(
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
   const timeout = opts.timeout ?? 5 * 60 * 60 * 1000;
   const agentType = resolveAgentType(extractFlag(passthrough, "--agent"));
+  const aiProvider = extractFlag(passthrough, "--ai-provider");
+  const model = extractFlag(passthrough, "--model") ?? defaultModelForAgent(agentType, aiProvider);
+  const agentConfig = buildAgentConfig({
+    model,
+    aiProvider,
+    aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
+    aiBaseUrl: extractFlag(passthrough, "--ai-base-url"),
+  });
 
   // Same preflight as sandbox-process — fail fast before fanning out.
   assertSandboxCredential();
   assertAgentCredential(agentType, {
     inSandbox: true,
-    aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
+    aiApiKeyEnv: agentConfig.aiApiKeyEnv as string | undefined,
   });
 
   console.log(`${BOLD}Sandbox All${RESET} — ${CYAN}${command}${RESET}`);
@@ -204,9 +213,9 @@ export async function sandboxAllCommand(
       concurrency,
       batchSize: parseInt(extractFlag(passthrough, "--batch-size") ?? "5", 10) || 5,
       agentType,
-      aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
-      aiBaseUrl: extractFlag(passthrough, "--ai-base-url"),
-      model: extractFlag(passthrough, "--model") ?? defaultModelForAgent(agentType),
+      aiApiKeyEnv: agentConfig.aiApiKeyEnv as string | undefined,
+      aiBaseUrl: agentConfig.aiBaseUrl as string | undefined,
+      model,
       snapshotId: undefined,
       saveSnapshot: false,
       keepAlive: false,

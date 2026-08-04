@@ -1,3 +1,4 @@
+import { buildAgentConfig } from "../agent-config.js";
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../formatters.js";
 import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
@@ -64,6 +65,14 @@ function buildConfig(
   // Auto-derive vCPUs from concurrency if not explicitly set (max 8, must be even)
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
   const agentType = resolveAgentType(extractFlag(args, "--agent"));
+  const aiProvider = extractFlag(args, "--ai-provider");
+  const model = extractFlag(args, "--model") ?? defaultModelForAgent(agentType, aiProvider);
+  const agentConfig = buildAgentConfig({
+    model,
+    aiProvider,
+    aiApiKeyEnv: extractFlag(args, "--ai-api-key-env"),
+    aiBaseUrl: extractFlag(args, "--ai-base-url"),
+  });
   return {
     projectId,
     command: subcommand,
@@ -74,9 +83,9 @@ function buildConfig(
     concurrency,
     batchSize: parseInt(extractFlag(args, "--batch-size") ?? "5", 10) || 5,
     agentType,
-    aiApiKeyEnv: extractFlag(args, "--ai-api-key-env"),
-    aiBaseUrl: extractFlag(args, "--ai-base-url"),
-    model: extractFlag(args, "--model") ?? defaultModelForAgent(agentType),
+    aiApiKeyEnv: agentConfig.aiApiKeyEnv as string | undefined,
+    aiBaseUrl: agentConfig.aiBaseUrl as string | undefined,
+    model,
     snapshotId: opts.snapshotId,
     saveSnapshot: opts.saveSnapshot ?? false,
     keepAlive: opts.keepAlive ?? false,
