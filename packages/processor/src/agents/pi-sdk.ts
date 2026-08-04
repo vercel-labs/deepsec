@@ -56,6 +56,9 @@ const DEFAULT_MODEL = "zai/glm-5.2";
 const DEFAULT_THINKING_LEVEL = "xhigh";
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 const GATEWAY_PROVIDER = "vercel-ai-gateway";
+const ATLAS_PROVIDER = "atlas";
+const ATLAS_BASE_URL = "https://api.atlascloud.ai/v1";
+const ATLAS_MODEL_ID = "deepseek-ai/deepseek-v4-pro";
 // pi's built-in gateway provider speaks the gateway's Anthropic Messages
 // endpoint (since pi 0.81) — NOT the OpenAI-compat one. This matters for
 // Gemini 3.x: the Anthropic wire format round-trips thinking signatures,
@@ -342,7 +345,7 @@ async function configureRuntimeAuth(runtime: ModelRuntime, cfg: PiAgentConfig): 
   }
 }
 
-function configureProviderOverrides(registry: ModelRegistry, cfg: PiAgentConfig): void {
+export function configurePiProviders(registry: ModelRegistry, cfg: PiAgentConfig): void {
   if (process.env.ANTHROPIC_BASE_URL) {
     registry.registerProvider("anthropic", { baseUrl: process.env.ANTHROPIC_BASE_URL });
   }
@@ -353,6 +356,32 @@ function configureProviderOverrides(registry: ModelRegistry, cfg: PiAgentConfig)
   const provider = cfg.aiProvider ?? modelProviderFromName(cfg.model);
   if (!provider) return;
   const override: Parameters<ModelRegistry["registerProvider"]>[1] = {};
+  if (provider === ATLAS_PROVIDER) {
+    const existingModels = registry
+      .getAll()
+      .filter((model) => model.provider === ATLAS_PROVIDER)
+      .map(piModelToProviderModelConfig);
+    override.baseUrl = cfg.aiBaseUrl ?? ATLAS_BASE_URL;
+    override.api = "openai-completions";
+    override.models = dedupeProviderModels([
+      ...existingModels,
+      {
+        id: ATLAS_MODEL_ID,
+        name: "DeepSeek V4 Pro",
+        api: "openai-completions",
+        reasoning: true,
+        input: ["text"],
+        cost: {
+          input: 1.68,
+          output: 3.38,
+          cacheRead: 0.13,
+          cacheWrite: 0,
+        },
+        contextWindow: 1_048_576,
+        maxTokens: 393_216,
+      },
+    ]);
+  }
   if (cfg.aiBaseUrl) override.baseUrl = cfg.aiBaseUrl;
   if (cfg.aiHeaders && Object.keys(cfg.aiHeaders).length > 0) override.headers = cfg.aiHeaders;
   if (Object.keys(override).length > 0) {
@@ -511,7 +540,7 @@ async function createPiSession(projectRoot: string, cfg: PiAgentConfig): Promise
   // Sync facade over the runtime — keeps our resolution helpers (and
   // their tests) on the same ModelRegistry API as before.
   const modelRegistry = new ModelRegistry(runtime);
-  configureProviderOverrides(modelRegistry, cfg);
+  configurePiProviders(modelRegistry, cfg);
 
   const modelName = cfg.model ?? DEFAULT_MODEL;
   const model = await resolvePiModelWithDynamicGateway(modelRegistry, modelName, cfg);

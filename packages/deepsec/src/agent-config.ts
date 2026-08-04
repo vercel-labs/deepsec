@@ -1,3 +1,5 @@
+import { ATLAS_API_KEY_ENV, ATLAS_BASE_URL, ATLAS_PROVIDER } from "./atlas-provider.js";
+
 const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 
 interface AgentRuntimeOpts {
@@ -62,8 +64,14 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
     config.reasoningEffort = opts.thinkingLevel;
   }
   if (opts.aiProvider || hasProviderOverride) config.aiProvider = effectiveProvider;
-  if (opts.aiBaseUrl) config.aiBaseUrl = opts.aiBaseUrl;
-  if (opts.aiApiKeyEnv) config.aiApiKeyEnv = opts.aiApiKeyEnv;
+  if (effectiveProvider === ATLAS_PROVIDER) {
+    config.aiProvider = ATLAS_PROVIDER;
+    config.aiBaseUrl = opts.aiBaseUrl ?? ATLAS_BASE_URL;
+    config.aiApiKeyEnv = opts.aiApiKeyEnv ?? ATLAS_API_KEY_ENV;
+  } else {
+    if (opts.aiBaseUrl) config.aiBaseUrl = opts.aiBaseUrl;
+    if (opts.aiApiKeyEnv) config.aiApiKeyEnv = opts.aiApiKeyEnv;
+  }
   if (aiHeaders) config.aiHeaders = aiHeaders;
   return config;
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  configurePiProviders,
   createPiReadOnlyToolDefinitions,
   resolvePiModelWithDynamicGateway,
 } from "../agents/pi-sdk.js";
@@ -70,6 +71,7 @@ describe("Pi model resolution", () => {
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "ATLASCLOUD_API_KEY",
   ] as const;
   const originalEnv = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
   const originalFetch = globalThis.fetch;
@@ -167,5 +169,27 @@ describe("Pi model resolution", () => {
       }),
     ).rejects.toThrow(/Pi model not found: acme\/nonexistent-model-1/);
     expect(called).toBe(false);
+  });
+
+  it("registers and resolves the Atlas Cloud default model", async () => {
+    process.env.ATLASCLOUD_API_KEY = "atlas_test";
+    const registry = await freshRegistry();
+    configurePiProviders(registry, {
+      model: "atlas/deepseek-ai/deepseek-v4-pro",
+      aiProvider: "atlas",
+      aiApiKeyEnv: "ATLASCLOUD_API_KEY",
+    });
+
+    const model = await resolvePiModelWithDynamicGateway(
+      registry,
+      "atlas/deepseek-ai/deepseek-v4-pro",
+      { aiProvider: "atlas" },
+    );
+
+    expect(model.provider).toBe("atlas");
+    expect(model.id).toBe("deepseek-ai/deepseek-v4-pro");
+    expect(model.api).toBe("openai-completions");
+    expect(model.contextWindow).toBe(1_048_576);
+    expect(model.maxTokens).toBe(393_216);
   });
 });

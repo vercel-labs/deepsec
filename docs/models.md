@@ -115,6 +115,17 @@ pnpm deepsec process --project-id my-app --agent pi
 If `.env.local` has `VERCEL_OIDC_TOKEN` from `vercel env pull`, deepsec
 uses that as the gateway credential automatically.
 
+Atlas Cloud is available as a first-class OpenAI-compatible Pi provider:
+
+```bash
+ATLASCLOUD_API_KEY=...
+pnpm deepsec process --project-id my-app --agent pi --ai-provider atlas
+```
+
+This defaults to `https://api.atlascloud.ai/v1` and
+`atlas/deepseek-ai/deepseek-v4-pro`. Use `--model`, `--ai-base-url`, or
+`--ai-api-key-env` to override any preset value.
+
 For OpenAI/Anthropic-compatible gateways such as Martian, point an
 existing Pi provider at the gateway with command-line flags:
 
