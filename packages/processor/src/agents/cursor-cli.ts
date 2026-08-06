@@ -8,6 +8,7 @@ import {
   formatJsonRepairFailureDebugText,
   jsonRepairFailureError,
   parseInvestigateResults,
+  type ParsedInvestigateResults,
   parseRevalidateVerdicts,
   QuotaExhaustedError,
   writeParseFailureDebug,
@@ -329,7 +330,7 @@ export class CursorCliPlugin implements AgentPlugin {
       );
     }
 
-    let parsed: InvestigateResult[];
+    let parsed: ParsedInvestigateResults;
     try {
       parsed = parseInvestigateResults(resultText, batch);
     } catch (err) {
@@ -373,7 +374,10 @@ export class CursorCliPlugin implements AgentPlugin {
       message: `Investigation complete (${(durationMs / 1000).toFixed(1)}s, ${state.turnCount} turns, ${state.toolUseCount} tool calls${tokensStr})`,
     };
 
-    return { results: parsed, meta: { durationMs, ...sdkMeta } };
+    return {
+      results: parsed.results,
+      meta: { durationMs, ...sdkMeta },
+    };
   }
 
   async *revalidate(params: RevalidateParams): AsyncGenerator<AgentProgress, RevalidateOutput> {
