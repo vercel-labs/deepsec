@@ -59,6 +59,40 @@ describe("fileRecordSchema", () => {
     expect(() => fileRecordSchema.parse(valid)).not.toThrow();
   });
 
+  it("preserves optional report fields", () => {
+    const valid = {
+      filePath: "src/db/query.ts",
+      projectId: "test",
+      candidates: [],
+      lastScannedAt: "2026-04-01T14:30:52.000Z",
+      lastScannedRunId: "run1",
+      fileHash: "abc",
+      findings: [
+        {
+          severity: "HIGH",
+          vulnSlug: "sql-injection",
+          title: "SQL injection in user lookup",
+          description: "User input reaches a raw SQL query.",
+          lineNumbers: [10],
+          recommendation: "Use a parameterized query.",
+          confidence: "high",
+          impact: "An attacker can read or modify database records.",
+          stepsToReproduce: "Trace the request id into the raw query.",
+          cvssScore: 8.1,
+          cvssVector: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+          cweId: "CWE-89",
+          limitations: ["Static analysis did not execute the query."],
+        },
+      ],
+      analysisHistory: [],
+      status: "analyzed",
+    };
+
+    const parsed = fileRecordSchema.parse(valid);
+
+    expect(parsed.findings[0]).toMatchObject(valid.findings[0]);
+  });
+
   it("rejects invalid status", () => {
     const invalid = {
       filePath: "test.ts",

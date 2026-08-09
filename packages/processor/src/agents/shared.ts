@@ -425,10 +425,16 @@ After your investigation, output a JSON block with your findings for EACH file. 
         "severity": "CRITICAL|HIGH|MEDIUM|HIGH_BUG|BUG",
         "vulnSlug": "the-vuln-slug-or-other",
         "title": "Brief title of the issue",
-        "description": "Detailed description of the vulnerability, the attack scenario, and evidence from the code",
+        "description": "Detailed description of the vulnerability, attack scenario, source evidence, and security boundary failure",
         "lineNumbers": [10, 15],
-        "recommendation": "How to fix this vulnerability",
-        "confidence": "high|medium|low"
+        "recommendation": "Concrete code changes and regression checks",
+        "confidence": "high|medium|low",
+        "impact": "Optional concrete technical and business impact",
+        "stepsToReproduce": "Optional source-level procedure that explains how the vulnerable path is reached; do not execute it",
+        "cvssScore": 8.1,
+        "cvssVector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+        "cweId": "CWE-89",
+        "limitations": ["Optional evidence limits or assumptions"]
       }
     ]
   }
@@ -441,6 +447,8 @@ After your investigation, output a JSON block with your findings for EACH file. 
 - **BUG** — notable non-security bugs (logic errors, race conditions, resource leaks) that don't rise to HIGH_BUG
 
 **vulnSlug** can be any of the known categories OR a custom slug for issues not covered by the scanner. Use \`"other"\` as the slug prefix for novel findings (e.g., \`"other-race-condition"\`, \`"other-logic-bug"\`, \`"other-info-disclosure"\`).
+
+The report fields after **confidence** are optional. Populate each one only when the source evidence supports it. Do not invent impact, reproduction details, CVSS data, CWE classifications, or limitations.
 
 If a file has no real vulnerabilities after thorough investigation, include it with an empty findings array.`;
 }
@@ -516,7 +524,13 @@ Use this exact schema:
         "description": "Detailed description of the vulnerability, the attack scenario, and evidence from the code",
         "lineNumbers": [10, 15],
         "recommendation": "How to fix this vulnerability",
-        "confidence": "high"
+        "confidence": "high",
+        "impact": "Optional concrete impact",
+        "stepsToReproduce": "Optional source-level reproduction procedure",
+        "cvssScore": 8.1,
+        "cvssVector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+        "cweId": "CWE-89",
+        "limitations": ["Optional evidence limit"]
       }
     ]
   }
@@ -884,7 +898,13 @@ Return ONLY a JSON array in this exact shape, containing one entry per filePath 
         "description": "Detailed description",
         "lineNumbers": [10, 15],
         "recommendation": "How to fix this vulnerability",
-        "confidence": "high"
+        "confidence": "high",
+        "impact": "Optional concrete impact",
+        "stepsToReproduce": "Optional source-level reproduction procedure",
+        "cvssScore": 8.1,
+        "cvssVector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+        "cweId": "CWE-89",
+        "limitations": ["Optional evidence limit"]
       }
     ]
   }

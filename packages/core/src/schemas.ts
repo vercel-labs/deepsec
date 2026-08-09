@@ -45,6 +45,12 @@ export const findingSchema = z.object({
   lineNumbers: z.array(z.number()),
   recommendation: z.string(),
   confidence: z.enum(["high", "medium", "low"]),
+  impact: z.string().optional(),
+  stepsToReproduce: z.string().optional(),
+  cvssScore: z.number().min(0).max(10).optional(),
+  cvssVector: z.string().optional(),
+  cweId: z.string().optional(),
+  limitations: z.array(z.string()).optional(),
   triage: z
     .object({
       priority: z.enum(["P0", "P1", "P2", "skip"]),

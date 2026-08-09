@@ -226,6 +226,12 @@ export interface Finding {
   lineNumbers: number[];
   recommendation: string;
   confidence: Confidence;
+  impact?: string;
+  stepsToReproduce?: string;
+  cvssScore?: number;
+  cvssVector?: string;
+  cweId?: string;
+  limitations?: string[];
   triage?: Triage;
   revalidation?: Revalidation;
   /**

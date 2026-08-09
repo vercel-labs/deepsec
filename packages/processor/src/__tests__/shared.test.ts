@@ -324,6 +324,10 @@ describe("JSON repair prompts", () => {
     expect(prompt).toContain("- apps/web/a.ts");
     expect(prompt).toContain("- lib/b.ts");
     expect(prompt).toContain('"findings"');
+    expect(prompt).toContain('"impact"');
+    expect(prompt).toContain('"stepsToReproduce"');
+    expect(prompt).toContain('"cvssScore"');
+    expect(prompt).toContain('"cweId"');
   });
 
   it("asks revalidation agents to re-output only JSON verdicts", () => {
@@ -369,6 +373,22 @@ describe("parseInvestigateResults", () => {
     expect(out.results.find((r) => r.filePath === "a.ts")?.findings.length).toBe(1);
     expect(out.results.find((r) => r.filePath === "b.ts")?.findings).toEqual([]);
     expect(out.invalid).toEqual([]);
+  });
+
+  it("preserves optional report fields", () => {
+    const finding = validFinding({
+      impact: "An attacker can read arbitrary rows.",
+      stepsToReproduce: "Trace req.query.id into db.raw().",
+      cvssScore: 8.1,
+      cvssVector: "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+      cweId: "CWE-89",
+      limitations: ["Static analysis only."],
+    });
+    const text = JSON.stringify([{ filePath: "a.ts", findings: [finding] }]);
+
+    const out = parseInvestigateResults(text, batch);
+
+    expect(out.results[0].findings[0]).toMatchObject(finding);
   });
 
   it("repairs common malformed model JSON before parsing findings", () => {
@@ -448,6 +468,8 @@ describe("buildInvestigateFieldRepairPrompt", () => {
     expect(prompt).toContain('"severity": "INFO"');
     expect(prompt).toContain("Do not redo the investigation");
     expect(prompt).toContain("do not repeat findings that were already accepted");
+    expect(prompt).toContain('"impact"');
+    expect(prompt).toContain('"stepsToReproduce"');
   });
 });
 
