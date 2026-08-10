@@ -26,6 +26,14 @@ const url = "postgres://user:pass@db:5432/app?sslmode=disable";
     );
   });
 
+  it("does not fire verify=False on non-HTTP kwargs", () => {
+    expect(m.match(`claims = jwt.decode(encoded, verify=False)`, "src/auth.py")).toEqual([]);
+    expect(m.match(`t = ctx.findroot(f, ab, solver='illinois', verify=False)`, "src/m.py")).toEqual(
+      [],
+    );
+    expect(m.match(`@array_function_dispatch(_dispatcher, verify=False)`, "src/np.py")).toEqual([]);
+  });
+
   it("does not flag verification-enabled configurations", () => {
     const src = `
 const agent = new https.Agent({ rejectUnauthorized: true });

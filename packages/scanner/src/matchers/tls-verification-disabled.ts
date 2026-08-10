@@ -19,8 +19,14 @@ const PATTERNS: { regex: RegExp; label: string }[] = [
   { regex: /strictSSL\s*[:=]\s*false/, label: "strictSSL: false" },
   // Go
   { regex: /InsecureSkipVerify\s*:\s*true/, label: "tls.Config InsecureSkipVerify: true" },
-  // Python
-  { regex: /\bverify\s*=\s*False\b/, label: "requests verify=False" },
+  // Python — anchor verify=False to an HTTP-call context so it does not
+  // fire on unrelated `verify=False` kwargs (jwt.decode, numpy dispatch,
+  // mpmath.findroot, etc.).
+  {
+    regex:
+      /(?:\b(?:requests|httpx|session|client|aiohttp)\b|\.(?:get|post|put|patch|delete|head|options|request|Session|Client)\s*\()[^\n]*\bverify\s*=\s*False\b/,
+    label: "requests/httpx verify=False",
+  },
   { regex: /ssl\._create_unverified_context/, label: "ssl._create_unverified_context" },
   { regex: /\bcheck_hostname\s*=\s*False\b/, label: "SSLContext check_hostname = False" },
   // Ruby
@@ -90,6 +96,7 @@ export const tlsVerificationDisabledMatcher: MatcherPlugin = {
     `const client = request.defaults({ strictSSL: false });`,
     `conf := &tls.Config{InsecureSkipVerify: true}`,
     `resp = requests.get(url, verify=False)`,
+    `resp = httpx.get(url, verify=False)`,
     `ctx = ssl._create_unverified_context()`,
     `ctx.check_hostname = False`,
     `http.verify_mode = OpenSSL::SSL::VERIFY_NONE`,
