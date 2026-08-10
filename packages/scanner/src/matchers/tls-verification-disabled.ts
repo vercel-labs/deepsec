@@ -33,7 +33,8 @@ const PATTERNS: { regex: RegExp; label: string }[] = [
   { regex: /\bVERIFY_NONE\b/, label: "OpenSSL VERIFY_NONE" },
   // JVM (Apache HttpClient / HttpsURLConnection idioms)
   {
-    regex: /\b(?:NoopHostnameVerifier|AllowAllHostnameVerifier|ALLOW_ALL_HOSTNAME_VERIFIER|TrustAllStrategy)\b/,
+    regex:
+      /\b(?:NoopHostnameVerifier|AllowAllHostnameVerifier|ALLOW_ALL_HOSTNAME_VERIFIER|TrustAllStrategy)\b/,
     label: "permissive JVM hostname verifier / trust strategy",
   },
   // PHP
