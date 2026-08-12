@@ -11,6 +11,7 @@ import { enrichCommand } from "./commands/enrich.js";
 import { exportCommand } from "./commands/export.js";
 import { initCommand } from "./commands/init.js";
 import { initProjectCommand } from "./commands/init-project.js";
+import { liveHuntCommand, liveReconCommand, liveVerifyPlanCommand } from "./commands/live.js";
 import { metricsCommand } from "./commands/metrics.js";
 import { processCommand } from "./commands/process.js";
 import { reportCommand } from "./commands/report.js";
@@ -348,6 +349,75 @@ program
     "Write a PR-comment-shaped markdown summary to <path> (only when findings exist)",
   )
   .action(processCommand);
+
+const live = program
+  .command("live")
+  .description(
+    "Runtime phases: confirm findings against an authorized deployment (verify) and hunt the source-derived attack surface",
+  );
+
+live
+  .command("verify")
+  .description(
+    "Live verification: offline planning (--plan-out/--scope-out) or execution of an approved scope (--scope/--approve-scope; loopback targets only in M1)",
+  )
+  .option(
+    "--project-id <id>",
+    "Project identifier (default: the only project in deepsec.config.ts; required if there are multiple)",
+  )
+  .option("--target <target-id>", "Target profile ID (required for --scope-out)")
+  .option("--plan-out <path>", "Write the proposed test plans to <path> (offline)")
+  .option("--scope-out <path>", "Write the scope manifest for approval to <path> (offline)")
+  .option("--scope <path>", "Execute an approved scope manifest (sends requests)")
+  .option(
+    "--approve-scope <digest>",
+    "Digest approving --scope (recomputed and verified; no-op for loopback targets)",
+  )
+  .option("--run-id <id>", "Run ID for artifacts under data/<projectId>/live/<runId>/")
+  .option(
+    "--finding <finding-id>",
+    "Restrict to this finding ID (repeatable)",
+    collectRepeatable,
+    [],
+  )
+  .option(
+    "--min-severity <sev>",
+    "Only verify findings at this effective severity or above (CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG)",
+  )
+  .option(
+    "--include-unrevalidated",
+    "Also select findings with no revalidation verdict (default: only true-positive/uncertain)",
+  )
+  .action(liveVerifyPlanCommand);
+
+live
+  .command("recon")
+  .description("Extract the source-derived attack surface (offline; no target requests)")
+  .option(
+    "--project-id <id>",
+    "Project identifier (default: the only project in deepsec.config.ts; required if there are multiple)",
+  )
+  .option("--root <path>", "Root of the Next.js app to extract (default: current directory)")
+  .option("--out <path>", "Also write the surface map to <path> (default: cached under data/)")
+  .action(liveReconCommand);
+
+live
+  .command("hunt")
+  .description(
+    "Hunt the source-derived attack surface: recon -> per-route plans -> execute (passive security-headers, loopback only in M1)",
+  )
+  .option(
+    "--project-id <id>",
+    "Project identifier (default: the only project in deepsec.config.ts; required if there are multiple)",
+  )
+  .option("--root <path>", "Root of the Next.js app to extract (default: current directory)")
+  .option("--target <target-id>", "Target profile ID with the base URL to probe (required)")
+  .option("--run-id <id>", "Run ID for artifacts under data/<projectId>/live/<runId>/")
+  .option(
+    "--approve-scope <digest>",
+    "Digest approving the assembled scope (recomputed and verified; no-op for loopback targets)",
+  )
+  .action(liveHuntCommand);
 
 program
   .command("report")

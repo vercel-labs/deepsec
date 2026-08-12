@@ -1,5 +1,7 @@
 export * from "./config.js";
 export * from "./finding-id.js";
+export * from "./live.js";
+export * from "./live-execute.js";
 export * from "./paths.js";
 export * from "./plugin.js";
 export * from "./run.js";

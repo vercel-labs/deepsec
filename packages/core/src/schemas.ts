@@ -56,6 +56,10 @@ export const findingSchema = z.object({
     })
     .optional(),
   revalidation: revalidationSchema.optional(),
+  // "process" (default) = static analysis; "hunt" = live-hunt runtime
+  // observation. Optional for backward compat with records written before the
+  // field existed.
+  origin: z.enum(["process", "hunt"]).optional(),
   producedByRunId: z.string().optional(),
 });
 
@@ -246,7 +250,7 @@ export const runMetaSchema = z.object({
   rootPath: z.string(),
   createdAt: z.string(),
   completedAt: z.string().optional(),
-  type: z.enum(["scan", "process", "revalidate"]),
+  type: z.enum(["scan", "process", "revalidate", "live"]),
   phase: z.enum(["running", "done", "error"]),
   pid: z.number().optional(),
   hostname: z.string().optional(),

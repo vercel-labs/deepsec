@@ -6,7 +6,7 @@ export interface RunMeta {
   rootPath: string;
   createdAt: string;
   completedAt?: string;
-  type: "scan" | "process" | "revalidate";
+  type: "scan" | "process" | "revalidate" | "live";
   phase: "running" | "done" | "error";
   /**
    * OS process id of the run owner, captured at `createRunMeta`. Combined
@@ -228,6 +228,12 @@ export interface Finding {
   confidence: Confidence;
   triage?: Triage;
   revalidation?: Revalidation;
+  /**
+   * Where this finding originated. `process` (default, omitted on legacy
+   * records) is the static-analysis pipeline; `hunt` is a live-hunt runtime
+   * observation. Optional for backward compatibility.
+   */
+  origin?: "process" | "hunt";
   /**
    * The run that first surfaced this finding (the one that appended it
    * to `FileRecord.findings`). Set once at append time and never updated

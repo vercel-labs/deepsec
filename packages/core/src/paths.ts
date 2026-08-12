@@ -105,3 +105,41 @@ export function reportCsvPath(projectId: string, runId?: string): string {
   const name = runId ? `report-${runId}.csv` : "report.csv";
   return path.join(reportsDir(projectId), name);
 }
+
+// --- Live investigation (target profiles, setup readiness) ---
+
+export function liveDir(projectId: string): string {
+  return path.join(dataDir(projectId), "live");
+}
+
+export function targetsDir(projectId: string): string {
+  return path.join(liveDir(projectId), "targets");
+}
+
+export function targetProfilePath(projectId: string, targetId: string): string {
+  assertSafeSegment(targetId, "targetId");
+  return path.join(targetsDir(projectId), `${targetId}.json`);
+}
+
+// --- Live run artifacts (evidence, audit, blockers, summary) ---
+
+export function liveRunDir(projectId: string, runId: string): string {
+  assertSafeSegment(runId, "runId");
+  return path.join(liveDir(projectId), runId);
+}
+
+export function liveEvidenceDir(projectId: string, runId: string): string {
+  return path.join(liveRunDir(projectId, runId), "evidence");
+}
+
+export function liveAuditLogPath(projectId: string, runId: string): string {
+  return path.join(liveRunDir(projectId, runId), "audit.jsonl");
+}
+
+export function liveBlockersPath(projectId: string, runId: string): string {
+  return path.join(liveRunDir(projectId, runId), "blockers.json");
+}
+
+export function liveRunSummaryPath(projectId: string, runId: string): string {
+  return path.join(liveRunDir(projectId, runId), "run.json");
+}

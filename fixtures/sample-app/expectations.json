@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "description": "Ground-truth manifest for the reference sample app. Each entry records, per route/behavior, the verdict a correct live run must produce and which template should fire. The confusion matrix and per-template corroboration metrics are computed against this file — grow it whenever a milestone adds a capability.",
+  "identities": {
+    "anonymous": null,
+    "user-a": "token-user-a",
+    "user-b": "token-user-b"
+  },
+  "expectations": [
+    {
+      "route": "/api/health",
+      "method": "GET",
+      "behavior": "public health check with full security headers (control)",
+      "authExpectation": "public",
+      "templates": {
+        "security-headers": "not-observed",
+        "auth-expectation": "not-observed"
+      }
+    },
+    {
+      "route": "/api/profile",
+      "method": "GET",
+      "behavior": "requires auth; anonymous gets 401, authenticated gets 200",
+      "authExpectation": "required",
+      "templates": {
+        "auth-expectation": "not-observed"
+      }
+    },
+    {
+      "route": "/api/public-info",
+      "method": "GET",
+      "behavior": "data-shaped 200 with no auth and no public marker (exposure)",
+      "authExpectation": "unknown",
+      "templates": {
+        "auth-expectation": "candidate"
+      },
+      "note": "unknown-expectation exposure produces a capped-severity candidate, never an auto-confirmed finding"
+    },
+    {
+      "route": "/api/users/[id]",
+      "method": "GET",
+      "behavior": "any authenticated user can read any other user (IDOR / tenant isolation)",
+      "authExpectation": "required",
+      "templates": {
+        "cross-identity-differential": "confirmed"
+      }
+    },
+    {
+      "route": "/api/secure",
+      "method": "GET",
+      "behavior": "requires auth and sets full security headers (hardened control); the 401 challenge carries the same headers, so the anonymous security-header probe observes the hardened posture",
+      "authExpectation": "required",
+      "templates": {
+        "security-headers": "not-observed"
+      }
+    },
+    {
+      "route": "/api/weak-headers",
+      "method": "GET",
+      "behavior": "public route served with no security headers",
+      "authExpectation": "public",
+      "templates": {
+        "security-headers": "confirmed"
+      }
+    }
+  ]
+}

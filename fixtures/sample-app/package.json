@@ -1,0 +1,11 @@
+{
+  "name": "@deepsec-fixtures/sample-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference sample application: the versioned ground-truth target deepsec's live phases are built and tested against. See expectations.json.",
+  "scripts": {
+    "start": "node server.mjs",
+    "reset": "node server.mjs --reset-only"
+  }
+}
