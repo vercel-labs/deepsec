@@ -192,9 +192,7 @@ describe("assertAgentCredential", () => {
 
   it("still requires a brokered token in sandbox mode despite a local route", () => {
     setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
-    expect(() => assertAgentCredential("codex", { inSandbox: true })).toThrow(
-      /AI_GATEWAY_API_KEY/,
-    );
+    expect(() => assertAgentCredential("codex", { inSandbox: true })).toThrow(/AI_GATEWAY_API_KEY/);
     // An ambient gateway key still unlocks sandbox runs.
     process.env.AI_GATEWAY_API_KEY = "vck_gateway";
     process.env.OPENAI_API_KEY = "vck_gateway";

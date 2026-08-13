@@ -103,6 +103,10 @@ describe("ensureConnectedWorkspace", () => {
     expect(result.modelRouteVerified).toBe(false);
     expect(result.verification.route).toEqual(localRoute);
     // No model credential env vars were injected.
-    expect(env).toEqual({ VERCEL_TOKEN: "v", VERCEL_TEAM_ID: "team", VERCEL_PROJECT_ID: "project" });
+    expect(env).toEqual({
+      VERCEL_TOKEN: "v",
+      VERCEL_TEAM_ID: "team",
+      VERCEL_PROJECT_ID: "project",
+    });
   });
 });
