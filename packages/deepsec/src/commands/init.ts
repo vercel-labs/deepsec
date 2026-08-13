@@ -523,7 +523,9 @@ skip completed work. The linked Vercel project is always in Sandbox scope.
 
 Use \`--model-auth direct --ai-provider <provider>
 --ai-api-key-env <ENV_NAME>\` to use a user-owned model credential; secret
-values remain in the environment or \`.env.local\`.
+values remain in the environment or \`.env.local\`. Use \`--model-auth local\`
+to rely on a machine-wide \`claude\`/\`codex\` login instead — no API key or
+env vars needed.
 
 ## Daily commands
 

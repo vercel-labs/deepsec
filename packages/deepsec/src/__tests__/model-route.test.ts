@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { applyResolvedModelRoute, resolveModelRoute } from "../auth/model-route.js";
 
 describe("resolveModelRoute", () => {
+  it("refuses to resolve a local-subscription route to a brokered credential", async () => {
+    await expect(
+      resolveModelRoute({ mode: "local", provider: "local" }, { agentType: "codex", env: {} }),
+    ).rejects.toThrow(/machine-wide agent logins/);
+  });
+
   it("still rejects an explicitly selected route that is incompatible with the harness", async () => {
     await expect(
       resolveModelRoute(

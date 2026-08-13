@@ -6,6 +6,10 @@ describe("modelRouteFromCli", () => {
     expect(modelRouteFromCli({})).toEqual({ mode: "gateway", provider: "vercel" });
   });
 
+  it("supports local subscriptions with no credential wiring", () => {
+    expect(modelRouteFromCli({ modelAuth: "local" })).toEqual({ mode: "local", provider: "local" });
+  });
+
   it("supports a direct user-owned key", () => {
     expect(
       modelRouteFromCli({

@@ -110,6 +110,9 @@ export async function applyConfiguredModelRoute(
   // Preserve the pre-onboarding behavior for cross-agent invocations by
   // falling back to that harness's normal credential discovery.
   if (modelRouteCompatibilityError(route, agentType)) return undefined;
+  // A local-subscription route is an explicit "do nothing": model auth comes
+  // from the machine-wide claude/codex/pi login, so leave env untouched.
+  if (route.mode === "local") return undefined;
   // Older scaffold-only workspaces persisted Gateway as a default even when
   // the user intended to rely on a logged-in Codex/Claude/Pi subscription.
   // With no explicit Gateway credential, leave env untouched and let the
@@ -214,6 +217,15 @@ export function assertAgentCredential(
 ): void {
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
 
+  // A local-subscription route is the user saying "claude/codex are set up
+  // machine-wide" — skip the env-var checks entirely and let the agent SDK
+  // error clearly at first call if the login is actually missing. Sandboxes
+  // are the exception: they must broker a real token through the firewall,
+  // so fall through to the normal checks (an ambient AI_GATEWAY_API_KEY
+  // still works there, and the standard actionable error fires otherwise).
+  const selectedRoute = options.modelRoute ?? (getConfig()?.ai as ModelRoute | undefined);
+  if (selectedRoute?.mode === "local" && !options.inSandbox) return;
+
   const gateway = process.env.AI_GATEWAY_API_KEY;
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;
   const anthropicApi = process.env.ANTHROPIC_API_KEY;
@@ -223,7 +235,7 @@ export function assertAgentCredential(
   // A selected route has already made precedence explicit. In particular,
   // direct Anthropic uses ANTHROPIC_API_KEY and its x-api-key broker contract;
   // ambient Gateway/OIDC must not be considered as a fallback.
-  if (options.modelRoute) {
+  if (options.modelRoute && options.modelRoute.mode !== "local") {
     const keyEnv =
       options.modelRoute.apiKeyEnv ??
       (options.modelRoute.mode === "gateway"

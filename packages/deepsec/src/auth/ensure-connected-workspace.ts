@@ -130,6 +130,29 @@ export async function ensureConnectedWorkspace(
 
   // Link success is not enough: the credential must still be available now.
   assertSandboxCredential({ env });
+
+  if (options.modelRoute.mode === "local") {
+    // Local subscriptions delegate model auth to the machine-wide
+    // claude/codex/pi logins. There is no credential to resolve, apply to
+    // env, or verify — the agent SDK errors clearly at first call if the
+    // machine login is actually missing.
+    const verification: ConnectionVerificationCheckpoint = {
+      project: platform.project,
+      route: options.modelRoute,
+      agentTypes: [...options.agentTypes],
+      modelVerifiedAt: now.toISOString(),
+    };
+    return {
+      platformAuth: { method: platform.method },
+      project: platform.project,
+      modelAuth: options.modelRoute,
+      agentTypes: [...options.agentTypes],
+      modelRouteVerified: false,
+      sandboxReady: true,
+      verification,
+    };
+  }
+
   const resolvedRoutes: ResolvedModelRoute[] = [];
   for (const agentType of options.agentTypes) {
     const resolved = await (deps.resolveRoute ?? resolveModelRoute)(options.modelRoute, {

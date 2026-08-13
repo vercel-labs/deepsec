@@ -110,6 +110,50 @@ Export the variable again for later commands, or put it in
 `.deepsec/.env.local`. See [vercel-setup](vercel-setup.md) for other
 providers and the full credential reference.
 
+## Using local subscriptions
+
+If the `claude` or `codex` CLI is already logged in on your machine, you
+can skip model credentials entirely. Pick **Use local subscriptions** at
+the interactive model-access prompt, or pass the flag directly:
+
+```bash
+npx deepsec init --model-auth local
+```
+
+Deepsec then configures nothing for model access: no API key, no gateway
+token, no environment variables. Later commands (`process`,
+`revalidate`, `triage`) skip their credential checks and rely on the
+machine-wide login — if it's missing, the agent SDK itself reports a
+clear error on first use.
+
+Two caveats: the login must exist for the harness you actually run
+(`claude` for `--agent claude`, a logged-in `codex` for `--agent codex`),
+and `sandbox` commands still need a real API token
+(`AI_GATEWAY_API_KEY`), because a machine-local login can't be brokered
+into an isolated sandbox.
+
+## Scaffold only
+
+To create the workspace files without running any of the setup:
+
+```bash
+npx deepsec init --scaffold-only
+```
+
+This writes the `.deepsec/` skeleton — `deepsec.config.ts`,
+`package.json`, `README.md`, `AGENTS.md`, `.gitignore`, and
+`data/<project>/{INFO.md,SETUP.md,project.json}` for the first project —
+and stops. It does not install dependencies, log in to Vercel, pick a
+model, scan, or start AI processing.
+
+Use it when you want to review or commit the scaffold before anything
+runs, drive the remaining setup from a coding agent, or do the steps by
+hand. The command prints the manual path: `pnpm install` inside
+`.deepsec/`, an agent prompt for filling in `INFO.md`, then
+`pnpm deepsec scan` and `pnpm deepsec process`. You can also run
+`pnpm deepsec setup` (or re-run `npx deepsec init`) later to complete
+the normal automated flow from where the scaffold left off.
+
 ## Two files worth a look
 
 Setup writes two things you may want to review:

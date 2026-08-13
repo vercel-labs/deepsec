@@ -18,8 +18,11 @@ creates the project threat model, checks scan coverage, generates safe
 project-specific matchers when needed, and processes candidates. Re-run it
 to resume, or use `pnpm deepsec setup` from inside `.deepsec/`.
 
-Use `npx deepsec init --scaffold-only` if you only want the files, and
-`--model-auth direct` with `--ai-api-key-env` to use your own model key.
+Use `npx deepsec init --scaffold-only` if you only want the files,
+`--model-auth direct` with `--ai-api-key-env` to use your own model key,
+or `--model-auth local` to rely on machine-wide `claude`/`codex` logins
+without any API key. See
+[getting-started](getting-started.md) for details on both.
 
 `.deepsec/` has its own `package.json` and `node_modules/` — separate
 from the parent repo's lockfile and tooling. The parent repo only

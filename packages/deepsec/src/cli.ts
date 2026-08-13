@@ -96,7 +96,7 @@ program
   .option("--model <model>", "Model for repository analysis and processing")
   .option("--model-profile <profile>", "Benchmark profile: best, value, or budget")
   .option("--thinking-level <level>", "Reasoning effort: minimal, low, medium, high, or xhigh")
-  .option("--model-auth <mode>", "Credential route: gateway, direct, or custom")
+  .option("--model-auth <mode>", "Credential route: gateway, direct, custom, or local")
   .option("--ai-provider <provider>", "Provider for direct/custom credentials")
   .option("--ai-api-key-env <name>", "Environment variable containing a direct/custom API key")
   .option("--ai-base-url <url>", "Direct/custom provider base URL")
@@ -141,6 +141,7 @@ Examples:
   $ npx deepsec init --scaffold-only          # files only; manual legacy flow
   $ npx deepsec init --package-manager npm    # use npm in the isolated workspace
   $ MY_KEY=... npx deepsec init --agent codex --model-auth direct --ai-provider openai --ai-api-key-env MY_KEY
+  $ npx deepsec init --model-auth local       # machine-wide claude/codex logins; no API key
   $ npx deepsec init audits ../my-app         # custom workspace + target
   $ npx deepsec init .deepsec . --id my-app   # override the auto-derived id`,
   )
@@ -190,7 +191,7 @@ program
   .option("--model <model>", "Model for repository analysis and processing")
   .option("--model-profile <profile>", "Benchmark profile: best, value, or budget")
   .option("--thinking-level <level>", "Reasoning effort: minimal, low, medium, high, or xhigh")
-  .option("--model-auth <mode>", "Credential route: gateway, direct, or custom")
+  .option("--model-auth <mode>", "Credential route: gateway, direct, custom, or local")
   .option("--ai-provider <provider>", "Provider for direct/custom credentials")
   .option("--ai-api-key-env <name>", "Environment variable containing a direct/custom API key")
   .option("--ai-base-url <url>", "Direct/custom provider base URL")

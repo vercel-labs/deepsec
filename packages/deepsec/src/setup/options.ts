@@ -1,7 +1,7 @@
 import { defaultCredentialHeaderScheme, type ModelRoute } from "../auth/model-route.js";
 
 export interface ModelRouteCliOptions {
-  modelAuth?: "gateway" | "direct" | "custom";
+  modelAuth?: "gateway" | "direct" | "custom" | "local";
   aiProvider?: string;
   aiApiKeyEnv?: string;
   aiBaseUrl?: string;
@@ -11,10 +11,11 @@ export interface ModelRouteCliOptions {
 
 export function modelRouteFromCli(options: ModelRouteCliOptions): ModelRoute {
   const mode = options.modelAuth ?? "gateway";
-  if (mode !== "gateway" && mode !== "direct" && mode !== "custom") {
-    throw new Error("--model-auth must be gateway, direct, or custom");
+  if (mode !== "gateway" && mode !== "direct" && mode !== "custom" && mode !== "local") {
+    throw new Error("--model-auth must be gateway, direct, custom, or local");
   }
   if (mode === "gateway") return { mode, provider: "vercel" };
+  if (mode === "local") return { mode, provider: "local" };
   const provider =
     options.aiProvider ??
     (options.agent === "claude" || options.agent === "claude-agent-sdk"

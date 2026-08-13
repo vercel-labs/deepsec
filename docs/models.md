@@ -48,6 +48,13 @@ Vercel/Sandbox project link and is persisted as non-secret `ai` config. Direct
 OpenAI/Anthropic and custom Pi routes are documented in
 [vercel-setup](vercel-setup.md).
 
+There is also a `local` route (`--model-auth local`, or "Use local
+subscriptions" in the interactive prompt) for machines where the `claude` or
+`codex` CLI is already logged in. It configures no credential at all and
+disables the env-var preflight checks — the machine-wide login is used
+directly. Sandbox commands are the exception: they must broker a real token,
+so they still require `AI_GATEWAY_API_KEY` (or an equivalent key).
+
 ## CLI selection
 
 ```bash

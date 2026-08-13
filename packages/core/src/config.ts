@@ -35,7 +35,7 @@ export interface DeepsecConfig {
   defaultThinkingLevel?: string;
   /** Non-secret default model credential route. Secret values stay in env/.env.local. */
   ai?: {
-    mode: "gateway" | "direct" | "custom";
+    mode: "gateway" | "direct" | "custom" | "local";
     provider: string;
     apiKeyEnv?: string;
     baseUrl?: string;

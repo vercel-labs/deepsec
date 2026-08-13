@@ -50,6 +50,14 @@ describe("applyConfiguredModelRoute", () => {
     expect(env).toEqual({});
   });
 
+  it("leaves a local-subscription route entirely to machine-wide agent logins", async () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    const env = {};
+    await expect(applyConfiguredModelRoute("codex", env)).resolves.toBeUndefined();
+    await expect(applyConfiguredModelRoute("claude-agent-sdk", env)).resolves.toBeUndefined();
+    expect(env).toEqual({});
+  });
+
   it("ignores a persisted route that is incompatible with the requested harness", async () => {
     setLoadedConfig({
       projects: [],
@@ -104,6 +112,7 @@ describe("assertAgentCredential", () => {
     rmSync(emptyClaudeHome, { recursive: true, force: true });
     rmSync(emptyCodexHome, { recursive: true, force: true });
     rmSync(emptyPathDir, { recursive: true, force: true });
+    setLoadedConfig({ projects: [] });
   });
 
   it("passes for claude-agent-sdk when ANTHROPIC_AUTH_TOKEN is set", () => {
@@ -171,6 +180,25 @@ describe("assertAgentCredential", () => {
     // require fake ANTHROPIC_AUTH_TOKEN env vars.
     expect(() => assertAgentCredential("stub")).not.toThrow();
     expect(() => assertAgentCredential("anything-else")).not.toThrow();
+  });
+
+  it("skips all env-var checks when the configured route is local subscriptions", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    // Nothing set anywhere — no env vars, no CLI on PATH, no auth.json.
+    expect(() => assertAgentCredential("claude-agent-sdk")).not.toThrow();
+    expect(() => assertAgentCredential("codex")).not.toThrow();
+    expect(() => assertAgentCredential("pi")).not.toThrow();
+  });
+
+  it("still requires a brokered token in sandbox mode despite a local route", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    expect(() => assertAgentCredential("codex", { inSandbox: true })).toThrow(
+      /AI_GATEWAY_API_KEY/,
+    );
+    // An ambient gateway key still unlocks sandbox runs.
+    process.env.AI_GATEWAY_API_KEY = "vck_gateway";
+    process.env.OPENAI_API_KEY = "vck_gateway";
+    expect(() => assertAgentCredential("codex", { inSandbox: true })).not.toThrow();
   });
 
   it("passes for pi when AI_GATEWAY_API_KEY is set", () => {
