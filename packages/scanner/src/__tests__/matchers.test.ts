@@ -49,6 +49,22 @@ describe("missing-auth matcher", () => {
     const matches = missingAuthMatcher.match(content, "src/lib/db.ts");
     expect(matches.length).toBe(0);
   });
+
+  it("flags default exports with request and response parameters", () => {
+    const content = `export default async function handler(req: Request, res: Response) {
+  return res.json({ ok: true });
+}`;
+    const matches = missingAuthMatcher.match(content, "src/handler.ts");
+    expect(matches).toHaveLength(1);
+    expect(matches[0].matchedPattern).toContain("default export handler");
+  });
+
+  it("does not flag ordinary default-exported functions", () => {
+    const content = `export default function formatDescription(value: string) {
+  return value.trim();
+}`;
+    expect(missingAuthMatcher.match(content, "src/format.ts")).toEqual([]);
+  });
 });
 
 describe("xss matcher", () => {
@@ -111,6 +127,17 @@ describe("insecure-crypto matcher", () => {
     const patterns = matches.map((m) => m.matchedPattern);
     expect(patterns.some((p) => p.includes("MD5"))).toBe(true);
     expect(patterns.some((p) => p.includes("Math.random"))).toBe(true);
+  });
+
+  it("requires weak cipher names to be standalone words", () => {
+    const ordinaryCode = `
+      const description = "desktop notification";
+      const desiredWidth = 120;
+    `;
+    expect(insecureCryptoMatcher.match(ordinaryCode, "src/layout.ts")).toEqual([]);
+
+    const weakCipher = `const algorithm = "DES";`;
+    expect(insecureCryptoMatcher.match(weakCipher, "src/crypto.ts")).toHaveLength(1);
   });
 });
 
