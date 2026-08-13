@@ -56,7 +56,8 @@ export const missingAuthMatcher: MatcherPlugin = {
       },
       // Next.js Pages API routes
       {
-        regex: /export\s+default\s+(async\s+)?function/,
+        regex:
+          /export\s+default\s+(async\s+)?function(?:\s+\w+)?\s*\(\s*_?(req|request)\b[^,]*,\s*_?(res|response)\b/,
         label: "default export handler",
       },
       // Express / Fastify / Hono style
