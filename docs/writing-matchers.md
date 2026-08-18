@@ -40,7 +40,9 @@ backtracking shapes, huge repeats, and examples that do not fire.
 After compilation, setup rescans and applies an explosion policy. A generated
 matcher that reaches too many source files is removed from the plugin and its
 persisted candidates are deleted before another attempt. Setup makes at most
-two attempts and stops before processing if coverage still fails.
+two attempts per invocation and stops before processing if coverage still
+fails. The stop is resumable: its actions point to the saved proposals and
+coverage evidence, and re-running setup makes two fresh repair attempts.
 
 ## When to keep or edit a generated matcher
 

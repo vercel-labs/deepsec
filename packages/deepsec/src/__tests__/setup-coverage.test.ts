@@ -291,6 +291,7 @@ describe("evaluateCoverage", () => {
     });
 
     expect(DEFAULT_COVERAGE_POLICY.matcherMaximumSourceRatio).toBe(0.2);
+    expect(DEFAULT_COVERAGE_POLICY.matcherSourceRatioMinimumFiles).toBe(5);
     expect(atBoundary.passed).toBe(true);
     expect(aboveBoundary.passed).toBe(false);
     expect(aboveBoundary.explosionWarnings[0]).toMatchObject({
@@ -298,5 +299,18 @@ describe("evaluateCoverage", () => {
       matchedFiles: 3,
       sourceRatio: 0.3,
     });
+  });
+
+  it("does not reject a one-file matcher solely by ratio in a tiny repository", () => {
+    const report = evaluateCoverage({
+      inventory: [expanded()],
+      sourceFiles: ["src/routes/users.ts", "src/helper.ts"],
+      candidateRecords: [candidate("src/routes/users.ts")],
+      newMatcherHits: { "generated-route": ["src/routes/users.ts"] },
+      scanResult: { runId: "scan-1" },
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.explosionWarnings).toEqual([]);
   });
 });

@@ -257,6 +257,19 @@ export default defineConfig({
     expect(result.stdout).not.toContain("Model access");
   });
 
+  it("human-mode needs-input errors use the resumable exit code without a crash hint", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-headless-human-e2e-"));
+    const targetRoot = path.join(tmp, "app");
+    const workspace = path.join(tmp, ".deepsec");
+    fs.mkdirSync(targetRoot);
+
+    const result = runBundle(["init", workspace, targetRoot]);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("MODEL_SELECTION_REQUIRED");
+    expect(result.stderr).not.toContain("DEEPSEC_DEBUG");
+  });
+
   it("rejects a bare --max-duration instead of treating it as milliseconds", () => {
     const result = runBundle(["init", "--max-duration", "30"]);
     expect(result.status).toBe(1);

@@ -63,6 +63,7 @@ import {
   readSetupState,
   type SetupPhase,
   type SetupState,
+  setupStatePath,
   startPhase,
   writeSetupState,
 } from "./state.js";
@@ -208,6 +209,10 @@ function hitsForSlugs(records: FileRecord[], slugs: string[]): Record<string, st
     }
   }
   return Object.fromEntries(Object.entries(hits).map(([slug, files]) => [slug, [...files].sort()]));
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function reportAgentProgress(
@@ -399,12 +404,13 @@ export async function runSetupWorkflow(
     }
 
     const installInput = installFingerprint(workspaceDir);
+    let installResult: Awaited<ReturnType<typeof ensureWorkspaceInstall>>;
     if (
       !isCheckpointCurrent(state, "install", installInput, () =>
         fs.existsSync("node_modules/deepsec"),
       )
     ) {
-      await runPhase(state, reporter, "install", installInput, () =>
+      installResult = await runPhase(state, reporter, "install", installInput, () =>
         services.install({
           workspaceDir,
           packageManager: options.packageManager,
@@ -417,7 +423,7 @@ export async function runSetupWorkflow(
       );
     } else {
       // Re-run the cheap probe so a deleted/corrupt node_modules cannot hide behind state.
-      await services.install({
+      installResult = await services.install({
         workspaceDir,
         packageManager: options.packageManager,
         skipInstall: options.skipInstall,
@@ -548,7 +554,9 @@ export async function runSetupWorkflow(
       return workflowResult(state, "threat-model");
     }
 
-    const baselineInput = digest({ sourceFingerprint, matcherDigest: "builtins" });
+    let generated: DeclarativeMatcherPlugin[] = readGeneratedMatchers(workspaceDir);
+    const configuredMatcherDigest = digest(generated.map((matcher) => matcher.declarativeSpec));
+    const baselineInput = digest({ sourceFingerprint, matcherDigest: configuredMatcherDigest });
     let baselineResult: Awaited<ReturnType<typeof scan>>;
     if (!isCheckpointCurrent(state, "baseline-scan", baselineInput) || !state.baselineScanSummary) {
       baselineResult = await runPhase(state, reporter, "baseline-scan", baselineInput, () =>
@@ -563,6 +571,9 @@ export async function runSetupWorkflow(
         runId: baselineResult.runId,
         languageStats: baselineResult.languageStats,
       };
+      state.finalScanRunId = undefined;
+      state.finalScanSummary = undefined;
+      state.matcherDigest = configuredMatcherDigest;
       writeSetupState(state);
     } else {
       const activeScanSummary = state.finalScanSummary ?? state.baselineScanSummary;
@@ -603,7 +614,6 @@ export async function runSetupWorkflow(
     state.coverageReport = coverage;
     writeSetupState(state);
 
-    let generated: DeclarativeMatcherPlugin[] = readGeneratedMatchers(workspaceDir);
     const maxAttempts = 2;
     for (let attempt = 0; !coverage.passed && attempt < maxAttempts; attempt++) {
       reporter.emit({
@@ -640,7 +650,17 @@ export async function runSetupWorkflow(
             onProgress: (progress) => reportAgentProgress(reporter, "matchers", progress),
           }),
       );
-      if (proposal.plugins.length === 0) break;
+      if (proposal.plugins.length === 0) {
+        state.matcherAttempts.push({
+          proposedSlugs: [],
+          proposedSpecs: [],
+          acceptedSlugs: [],
+          rejected: [],
+          outcome: "empty-proposal",
+        });
+        writeSetupState(state);
+        continue;
+      }
       generated.push(...proposal.plugins);
       writeGeneratedMatchers(
         workspaceDir,
@@ -677,6 +697,9 @@ export async function runSetupWorkflow(
         ),
       });
       const exploding = new Set(coverage.explosionWarnings.map((warning) => warning.matcherSlug));
+      const explosionReasons = new Map(
+        coverage.explosionWarnings.map((warning) => [warning.matcherSlug, warning.reason]),
+      );
       if (exploding.size > 0) {
         generated = generated.filter((matcher) => !exploding.has(matcher.slug));
         getRegistry().matchers = getRegistry().matchers.filter(
@@ -705,13 +728,16 @@ export async function runSetupWorkflow(
       }
       state.matcherAttempts.push({
         proposedSlugs: proposal.plugins.map((matcher) => matcher.slug),
+        proposedSpecs: proposal.specs,
         acceptedSlugs: proposal.plugins
           .map((matcher) => matcher.slug)
           .filter((slug) => !exploding.has(slug)),
         rejected: [...exploding].map((slug) => ({
           slug,
-          reason: "generated matcher exceeded the configured breadth limit",
+          reason:
+            explosionReasons.get(slug) ?? "generated matcher exceeded the configured breadth limit",
         })),
+        outcome: "rescanned",
         scanRunId: finalResult.runId,
       });
       state.matcherDigest = digest(generated.map((matcher) => matcher.declarativeSpec));
@@ -720,9 +746,84 @@ export async function runSetupWorkflow(
     }
 
     if (!coverage.passed) {
-      throw new Error(
-        `Setup stopped before AI processing because scan coverage is insufficient: ${coverage.reasons.join("; ")}`,
-      );
+      const noCandidates = coverage.candidateFileCount === 0;
+      const recentAttempts = state.matcherAttempts.slice(-maxAttempts);
+      const firstAttemptNumber = state.matcherAttempts.length - recentAttempts.length + 1;
+      const matcherOutcome = recentAttempts
+        .map((attempt, index) => {
+          const label = `attempt ${firstAttemptNumber + index}`;
+          if (attempt.outcome === "empty-proposal" || attempt.proposedSlugs.length === 0) {
+            return `${label} returned no matcher proposals`;
+          }
+          const accepted =
+            attempt.acceptedSlugs.length > 0
+              ? `accepted ${attempt.acceptedSlugs.join(", ")}`
+              : undefined;
+          const rejected =
+            attempt.rejected.length > 0
+              ? `rejected ${attempt.rejected.map(({ slug, reason }) => `${slug} (${reason})`).join(", ")}`
+              : undefined;
+          return `${label} ${[accepted, rejected].filter(Boolean).join("; ") || "did not improve coverage"}`;
+        })
+        .join("; ");
+      const stateFile = setupStatePath(options.projectId);
+      const generatedMatchersFile = path.join(workspaceDir, "generated-matchers.ts");
+      const setupLogFile = state.setupLogPath
+        ? path.resolve(workspaceDir, state.setupLogPath)
+        : undefined;
+      const setupInvocation =
+        installResult.packageManager === "npm"
+          ? `npm run deepsec -- setup --project-id ${shellQuote(options.projectId)}`
+          : `pnpm deepsec setup --project-id ${shellQuote(options.projectId)}`;
+      const resumeCommand = `cd ${shellQuote(workspaceDir)} && ${setupInvocation}`;
+      const code = noCandidates ? "NO_SCAN_CANDIDATES" : "SCAN_COVERAGE_INSUFFICIENT";
+      const error = new SetupProtocolError({
+        code,
+        message: noCandidates
+          ? `Setup paused before AI processing because the scan produced no candidates for the inventoried surfaces: ${coverage.reasons.join("; ")}. Matcher repair: ${matcherOutcome || "no attempts completed"}. This checkpoint is safe to resume.`
+          : `Setup paused before AI processing because scan coverage is insufficient: ${coverage.reasons.join("; ")}. Matcher repair: ${matcherOutcome || "no attempts completed"}. This checkpoint is safe to resume.`,
+        missingInputs: ["scan.coverage"],
+        actions: [
+          {
+            id: "inspect-scan-coverage",
+            description:
+              "Inspect the uncovered surfaces, exact matcher proposals, and rejection reasons.",
+            commands: [
+              `cat ${shellQuote(inventoryPath)}`,
+              `cat ${shellQuote(stateFile)}`,
+              `cat ${shellQuote(generatedMatchersFile)}`,
+            ],
+          },
+          {
+            id: "retry-matcher-repair",
+            description:
+              "Resume setup to retry up to two automated matcher proposals after reviewing or editing generated-matchers.ts.",
+            commands: [resumeCommand],
+          },
+        ],
+        details: {
+          coverage,
+          matcherAttempts: recentAttempts,
+          recovery: {
+            resumable: true,
+            resumeCommand,
+            files: {
+              surfaceInventory: inventoryPath,
+              setupState: stateFile,
+              generatedMatchers: generatedMatchersFile,
+              ...(setupLogFile ? { setupLog: setupLogFile } : {}),
+            },
+          },
+        },
+      });
+      state.lastError = {
+        phase: "coverage",
+        code,
+        message: error.message,
+        at: new Date().toISOString(),
+      };
+      writeSetupState(state);
+      throw error;
     }
     assertWithinDuration();
     if (options.through === "coverage") return workflowResult(state, "coverage", coverage);

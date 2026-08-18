@@ -2,8 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig, type FileRecord, setLoadedConfig } from "@deepsec/core";
+import type { DeclarativeMatcherSpec } from "@deepsec/scanner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runSetupWorkflow, type SetupWorkflowOptions } from "../setup/coordinator.js";
+import { writeGeneratedMatchers } from "../setup/generated-matchers.js";
+import {
+  formatSetupErrorHuman,
+  SetupProtocolError,
+  setupErrorExitCode,
+} from "../setup/protocol.js";
 
 const originalCwd = process.cwd();
 afterEach(() => process.chdir(originalCwd));
@@ -207,5 +214,148 @@ describe("one-shot setup coordinator", () => {
       type: "claude-agent-sdk",
       model: "claude-opus-4-8",
     });
+  });
+
+  it("pauses for matcher input instead of crashing when scans produce no candidates", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-empty-scan-"));
+    const workspace = path.join(root, ".deepsec");
+    const project = path.join(root, "app");
+    fs.mkdirSync(path.join(workspace, "data", "app"), { recursive: true });
+    fs.mkdirSync(path.join(project, "src"), { recursive: true });
+    fs.writeFileSync(path.join(project, "src", "route.ts"), "export const GET = () => 'ok';\n");
+    fs.writeFileSync(path.join(workspace, "package.json"), '{"private":true}\n');
+    fs.writeFileSync(
+      path.join(workspace, "deepsec.config.ts"),
+      `const defineConfig = <T>(config: T): T => config;\nexport default defineConfig({ projects: [{ id: "app", root: "../app" }] });\n`,
+    );
+    fs.writeFileSync(
+      path.join(workspace, "generated-matchers.ts"),
+      `export const generatedMatchersPlugin = { name: "generated", matchers: [] };\n`,
+    );
+
+    let manualMatcherEnabled = false;
+    const manualRecord = {
+      filePath: "src/route.ts",
+      projectId: "app",
+      candidates: [
+        {
+          vulnSlug: "manual-http-route",
+          lineNumbers: [1],
+          snippet: "GET",
+          matchedPattern: "exported route",
+        },
+      ],
+      lastScannedAt: "now",
+      lastScannedRunId: "scan-manual",
+      fileHash: "hash",
+      findings: [],
+      analysisHistory: [],
+      status: "pending",
+    } as FileRecord;
+    const scan = vi.fn(async () => ({
+      runId: manualMatcherEnabled ? "scan-manual" : "scan-empty",
+      candidateCount: manualMatcherEnabled ? 1 : 0,
+      detected: { tags: [], sentinels: [], detectedAt: "now", rootPath: project },
+      activeMatchers: manualMatcherEnabled ? ["manual-http-route"] : ["public-endpoint"],
+      skippedMatchers: [],
+      languageStats: [],
+    }));
+    const process = vi.fn();
+    const proposeMatchers = vi.fn(async () => ({ specs: [], plugins: [] }));
+    const options = {
+      workspaceDir: workspace,
+      projectId: "app",
+      projectRoot: project,
+      agent: "claude",
+      model: "test-model",
+      services: {
+        install: async () => {
+          fs.mkdirSync(path.join(workspace, "node_modules", "deepsec"), { recursive: true });
+          return { packageManager: "npm" as const, version: "test", installed: true };
+        },
+        connect: async () => ({ verification: { project: "linked" } }),
+        analyze: async () => ({
+          infoMarkdown:
+            "# app\n\n## What this codebase does\nApp.\n\n## Auth shape\nNone.\n\n## Threat model\nPublic input.\n\n## Project-specific patterns to flag\nRoutes.\n\n## Known false-positives\nNone.",
+          surfaces: [
+            {
+              id: "http-routes",
+              kind: "http" as const,
+              description: "HTTP routes",
+              fileGlobs: ["src/**/*.ts"],
+              representativeFiles: ["src/route.ts"],
+              exposure: "public" as const,
+            },
+          ],
+          inspectedPaths: ["src/route.ts"],
+        }),
+        scan,
+        process,
+        listFiles: () => ["src/route.ts"],
+        fingerprint: () => "source-v1",
+        loadRecords: () => (manualMatcherEnabled ? [manualRecord] : []),
+        proposeMatchers,
+      },
+      onLog: () => undefined,
+    };
+    let caught: unknown;
+    try {
+      await runSetupWorkflow(options);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SetupProtocolError);
+    expect(caught).toMatchObject({
+      code: "NO_SCAN_CANDIDATES",
+      kind: "needs_input",
+      missingInputs: ["scan.coverage"],
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "inspect-scan-coverage" }),
+        expect.objectContaining({ id: "retry-matcher-repair" }),
+      ]),
+      details: {
+        coverage: expect.objectContaining({ candidateFileCount: 0, passed: false }),
+        matcherAttempts: [
+          expect.objectContaining({ outcome: "empty-proposal" }),
+          expect.objectContaining({ outcome: "empty-proposal" }),
+        ],
+        recovery: expect.objectContaining({ resumable: true }),
+      },
+    });
+    const protocolError = caught as SetupProtocolError;
+    expect(protocolError.message).toContain("attempt 1 returned no matcher proposals");
+    expect(protocolError.message).toContain("This checkpoint is safe to resume.");
+    expect(formatSetupErrorHuman(protocolError)).toContain(
+      "npm run deepsec -- setup --project-id 'app'",
+    );
+    expect(setupErrorExitCode(protocolError)).toBe(2);
+    expect(proposeMatchers).toHaveBeenCalledTimes(2);
+    const state = JSON.parse(
+      fs.readFileSync(path.join(workspace, "data", "app", "setup", "setup-state.json"), "utf8"),
+    );
+    expect(state.lastError).toMatchObject({ phase: "coverage", code: "NO_SCAN_CANDIDATES" });
+    expect(state.matcherAttempts).toHaveLength(2);
+    expect(process).not.toHaveBeenCalled();
+
+    const manualSpec: DeclarativeMatcherSpec = {
+      version: 1,
+      slug: "manual-http-route",
+      description: "Project HTTP route exports",
+      noiseTier: "normal",
+      filePatterns: ["src/**/*.ts"],
+      patterns: [{ source: "export\\s+const\\s+GET", label: "exported route" }],
+      examples: ["export const GET"],
+      closesSurfaceIds: ["http-routes"],
+    };
+    writeGeneratedMatchers(workspace, [manualSpec]);
+    manualMatcherEnabled = true;
+
+    const resumed = await runSetupWorkflow({ ...options, through: "coverage" });
+
+    expect(resumed.coverage).toMatchObject({ passed: true, candidateFileCount: 1 });
+    expect(resumed.state.finalScanSummary).toBeUndefined();
+    expect(scan).toHaveBeenCalledTimes(2);
+    expect(proposeMatchers).toHaveBeenCalledTimes(2);
   });
 });

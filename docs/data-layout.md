@@ -68,7 +68,8 @@ Versioned coordinator state for `deepsec init` / `deepsec setup`. It records:
 - baseline/final scan IDs and summaries;
 - processing run ID;
 - non-secret project-link/model-route verification metadata; and
-- proposed, accepted, and rejected generated matcher slugs.
+- proposed matcher specs, accepted and rejected slugs, exact rejection
+  reasons, and whether an attempt returned no proposal.
 
 Writes use a temporary file plus rename. A phase marked `running` or `error`
 is safe to retry. A `complete` checkpoint is reused only when its input digest

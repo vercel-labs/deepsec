@@ -75,6 +75,8 @@ export interface CoveragePolicy {
   dominantLanguageMinimumFiles: number;
   lowLanguageMatchRate: number;
   matcherMaximumSourceRatio: number;
+  /** Do not apply the ratio-only explosion gate to repositories smaller than this. */
+  matcherSourceRatioMinimumFiles: number;
   matcherMaximumFiles: number;
   uncoveredExamplesLimit: number;
 }
@@ -90,6 +92,7 @@ export const DEFAULT_COVERAGE_POLICY: Readonly<CoveragePolicy> = Object.freeze({
   dominantLanguageMinimumFiles: 50,
   lowLanguageMatchRate: 0.01,
   matcherMaximumSourceRatio: 0.2,
+  matcherSourceRatioMinimumFiles: 5,
   matcherMaximumFiles: 500,
   uncoveredExamplesLimit: 5,
 } satisfies CoveragePolicy);
@@ -570,9 +573,10 @@ export function evaluateCoverage(input: EvaluateCoverageInput): CoverageReport {
       sourceFiles.has(file),
     ).length;
     const sourceRatio = ratio(matchedFiles, sourceFiles.size);
+    const ratioGateApplies = sourceFiles.size >= policy.matcherSourceRatioMinimumFiles;
     if (
       matchedFiles > policy.matcherMaximumFiles ||
-      sourceRatio > policy.matcherMaximumSourceRatio
+      (ratioGateApplies && sourceRatio > policy.matcherMaximumSourceRatio)
     ) {
       explosionWarnings.push({
         matcherSlug,

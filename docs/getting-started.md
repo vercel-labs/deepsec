@@ -43,6 +43,13 @@ Deepsec remembers how far it got. Finished steps are skipped and the run
 continues where it left off. This is also how you resume after hitting a
 cost limit, losing your connection, or pressing Ctrl-C.
 
+If setup cannot cover an inventoried surface, it stops before paid AI
+processing and prints the exact inventory, state, generated-matcher, and
+resume commands. The state records matcher proposals and rejection reasons.
+Re-running setup makes up to two fresh matcher-repair attempts, so a coverage
+pause is recoverable after editing `generated-matchers.ts` or the underlying
+repository pattern.
+
 ## Limiting time and cost
 
 You can bound a run and pick up the rest later:

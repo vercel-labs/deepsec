@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { dataDir } from "@deepsec/core";
+import type { DeclarativeMatcherSpec } from "@deepsec/scanner";
 import { atomicWriteFileSync } from "../atomic-file.js";
 
 export type SetupPhase =
@@ -59,8 +60,10 @@ export interface SetupState {
   coverageReport?: unknown;
   matcherAttempts: Array<{
     proposedSlugs: string[];
+    proposedSpecs?: DeclarativeMatcherSpec[];
     acceptedSlugs: string[];
     rejected: Array<{ slug: string; reason: string }>;
+    outcome?: "empty-proposal" | "rescanned";
     scanRunId?: string;
   }>;
   setupLogPath?: string;

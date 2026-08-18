@@ -566,10 +566,10 @@ function printFatal(err: unknown): never {
   }
   if (verbose && err instanceof Error && err.stack) {
     console.error(err.stack);
-  } else if (!verbose) {
+  } else if (!verbose && !(err instanceof SetupProtocolError)) {
     console.error("\n(set DEEPSEC_DEBUG=1 for a stack trace)");
   }
-  process.exit(1);
+  process.exit(setupErrorExitCode(err));
 }
 
 process.on("unhandledRejection", printFatal);
