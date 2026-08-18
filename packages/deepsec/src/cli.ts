@@ -23,7 +23,7 @@ import { statusCommand } from "./commands/status.js";
 import { triageCommand } from "./commands/triage.js";
 import { loadConfig } from "./load-config.js";
 import { installSandboxOutputCap } from "./output-cap.js";
-import { applyAiGatewayDefaults } from "./preflight.js";
+import { applyAiGatewayDefaults, revertAiGatewayDefaultsForLocalRoute } from "./preflight.js";
 import { modelRouteFromCli } from "./setup/options.js";
 import {
   formatSetupDocumentationHuman,
@@ -583,8 +583,11 @@ async function main() {
   // the per-SDK env vars before any command handler instantiates an agent.
   // Must run before loadConfig in case the user's deepsec.config.ts reads
   // these vars at module load.
-  await applyAiGatewayDefaults();
+  const gatewayDefaults = await applyAiGatewayDefaults();
   await loadConfig();
+  // A local-subscription route delegates model auth to the machine-wide
+  // claude/codex/pi login, so take the gateway vars back out.
+  revertAiGatewayDefaultsForLocalRoute(gatewayDefaults);
   // Plugins may register their own subcommands.
   for (const register of getRegistry().commands) {
     register(program);

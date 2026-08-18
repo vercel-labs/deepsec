@@ -24,6 +24,7 @@ import {
   applyConfiguredModelRoute,
   assertAgentCredential,
   assertSandboxCredential,
+  revertAiGatewayDefaultsForLocalRoute,
 } from "../preflight.js";
 
 describe("applyConfiguredModelRoute", () => {
@@ -355,5 +356,82 @@ describe("applyAiGatewayDefaults", () => {
     expect(process.env.AI_GATEWAY_API_KEY).toBe("gw-key");
     expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("gw-key");
     expect(process.env.OPENAI_API_KEY).toBe("gw-key");
+  });
+});
+
+describe("revertAiGatewayDefaultsForLocalRoute", () => {
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = {
+      AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY,
+      VERCEL_OIDC_TOKEN: process.env.VERCEL_OIDC_TOKEN,
+      ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+      OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    };
+    for (const k of Object.keys(saved)) delete process.env[k];
+  });
+  afterEach(() => {
+    setLoadedConfig({ projects: [] });
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  // Setup writes VERCEL_OIDC_TOKEN into the workspace .env.local, dotenv
+  // loads it on the next command, and without the revert every request
+  // 402/403s at the Gateway instead of using the machine-wide claude login.
+  it("removes the OIDC-derived gateway vars for a local route", async () => {
+    process.env.VERCEL_OIDC_TOKEN = "oidc-tok";
+    const injected = await applyAiGatewayDefaults();
+    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://ai-gateway.vercel.sh");
+
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    revertAiGatewayDefaultsForLocalRoute(injected);
+
+    expect(process.env.AI_GATEWAY_API_KEY).toBeUndefined();
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(process.env.OPENAI_API_KEY).toBeUndefined();
+    expect(process.env.OPENAI_BASE_URL).toBeUndefined();
+    // `sandbox` still needs the token itself.
+    expect(process.env.VERCEL_OIDC_TOKEN).toBe("oidc-tok");
+  });
+
+  it("keeps values the user set explicitly", async () => {
+    process.env.AI_GATEWAY_API_KEY = "gw-key";
+    process.env.ANTHROPIC_AUTH_TOKEN = "explicit-anthropic";
+    const injected = await applyAiGatewayDefaults();
+
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    revertAiGatewayDefaultsForLocalRoute(injected);
+
+    expect(process.env.AI_GATEWAY_API_KEY).toBe("gw-key");
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe("explicit-anthropic");
+    expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(process.env.OPENAI_BASE_URL).toBeUndefined();
+  });
+
+  it("leaves a gateway route untouched", async () => {
+    process.env.VERCEL_OIDC_TOKEN = "oidc-tok";
+    const injected = await applyAiGatewayDefaults();
+
+    setLoadedConfig({ projects: [], ai: { mode: "gateway", provider: "vercel" } });
+    revertAiGatewayDefaultsForLocalRoute(injected);
+
+    expect(process.env.AI_GATEWAY_API_KEY).toBe("oidc-tok");
+    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://ai-gateway.vercel.sh");
+  });
+
+  it("leaves a workspace with no configured route untouched", async () => {
+    process.env.VERCEL_OIDC_TOKEN = "oidc-tok";
+    const injected = await applyAiGatewayDefaults();
+
+    setLoadedConfig({ projects: [] });
+    revertAiGatewayDefaultsForLocalRoute(injected);
+
+    expect(process.env.ANTHROPIC_BASE_URL).toBe("https://ai-gateway.vercel.sh");
   });
 });

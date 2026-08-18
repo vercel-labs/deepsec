@@ -62,14 +62,17 @@ const OIDC_EXPIRATION_BUFFER_MS = 60 * 60 * 1000;
  * for direct-to-provider access doesn't get silently rerouted.
  *
  * Call this once at CLI startup (after dotenv loads .env.local), before
- * any module reads these vars.
+ * any module reads these vars. Returns the names it set, which is what
+ * `revertAiGatewayDefaultsForLocalRoute` undoes once the route is known.
  */
-export async function applyAiGatewayDefaults(): Promise<void> {
+export async function applyAiGatewayDefaults(): Promise<string[]> {
+  const injected: string[] = [];
   if (!process.env.AI_GATEWAY_API_KEY && process.env.VERCEL_OIDC_TOKEN) {
     try {
       process.env.AI_GATEWAY_API_KEY = await getVercelOidcToken({
         expirationBufferMs: OIDC_EXPIRATION_BUFFER_MS,
       });
+      injected.push("AI_GATEWAY_API_KEY");
     } catch {
       // Refresh failed (token unparseable, network, or the linked project
       // it would refresh against is gone). Fall through — assertAgentCredential
@@ -78,11 +81,40 @@ export async function applyAiGatewayDefaults(): Promise<void> {
     }
   }
   const key = process.env.AI_GATEWAY_API_KEY;
-  if (!key) return;
-  if (!process.env.ANTHROPIC_AUTH_TOKEN) process.env.ANTHROPIC_AUTH_TOKEN = key;
-  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
-  if (!process.env.ANTHROPIC_BASE_URL) process.env.ANTHROPIC_BASE_URL = GATEWAY_ANTHROPIC_BASE_URL;
-  if (!process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = GATEWAY_OPENAI_BASE_URL;
+  if (!key) return injected;
+  const fill = (name: string, value: string) => {
+    if (process.env[name]) return;
+    process.env[name] = value;
+    injected.push(name);
+  };
+  fill("ANTHROPIC_AUTH_TOKEN", key);
+  fill("OPENAI_API_KEY", key);
+  fill("ANTHROPIC_BASE_URL", GATEWAY_ANTHROPIC_BASE_URL);
+  fill("OPENAI_BASE_URL", GATEWAY_OPENAI_BASE_URL);
+  return injected;
+}
+
+/**
+ * Undo the gateway defaults when the loaded config selects the
+ * local-subscription route.
+ *
+ * The defaults have to be applied before `loadConfig`, so by the time the
+ * route is known the gateway vars are already in env — and the agent SDKs
+ * read `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` straight from there,
+ * routing past the machine-wide login the user selected. Setup writes
+ * `VERCEL_OIDC_TOKEN` into the workspace `.env.local`, so from the second
+ * command onward that happens on every run.
+ *
+ * Only what we injected is removed; values the user set survive.
+ */
+export function revertAiGatewayDefaultsForLocalRoute(
+  injected: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (injected.length === 0) return;
+  const route = getConfig()?.ai as ModelRoute | undefined;
+  if (route?.mode !== "local") return;
+  for (const name of injected) delete env[name];
 }
 
 /**
