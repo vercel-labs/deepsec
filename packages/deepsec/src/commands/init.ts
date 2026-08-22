@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureProject } from "@deepsec/core";
+import { ensureProject, mkdirSettled } from "@deepsec/core";
 import {
   type ModelProfile,
   parseModelProfile,
@@ -158,7 +158,7 @@ export async function initCommand(opts: InitOpts) {
   }
 
   // Workspace skeleton: empty config (with marker), README, AGENTS, env.
-  fs.mkdirSync(workspaceDir, { recursive: true });
+  mkdirSettled(workspaceDir);
   writeFile(
     workspaceDir,
     "package.json",

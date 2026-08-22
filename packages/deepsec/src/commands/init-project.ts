@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { dataDir, ensureProject } from "@deepsec/core";
+import { dataDir, ensureProject, mkdirSettled } from "@deepsec/core";
 import { BOLD, CYAN, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { requireExistingDir } from "../require-dir.js";
 import { validateProjectId } from "../resolve-project-id.js";
@@ -90,7 +90,7 @@ export function registerProject(opts: {
     process.chdir(workspaceDir);
     ensureProject(id, targetAbs);
     const projectDir = dataDir(id);
-    fs.mkdirSync(projectDir, { recursive: true });
+    mkdirSettled(projectDir);
     const infoMdPath = path.join(projectDir, "INFO.md");
     if (!fs.existsSync(infoMdPath) || opts.force) {
       fs.writeFileSync(infoMdPath, infoMdTemplate(id));
