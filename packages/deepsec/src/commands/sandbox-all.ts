@@ -97,7 +97,7 @@ export async function sandboxAllCommand(
   const explicitAiBaseUrl = extractFlag(passthrough, "--ai-base-url");
   const resolvedRoute =
     !explicitAiApiKeyEnv && !explicitAiBaseUrl
-      ? await applyConfiguredModelRoute(agentType)
+      ? await applyConfiguredModelRoute(agentType, process.env, { inSandbox: true })
       : undefined;
 
   // Same preflight as sandbox-process — fail fast before fanning out.

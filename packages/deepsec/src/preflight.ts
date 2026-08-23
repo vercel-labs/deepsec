@@ -39,6 +39,17 @@ const GATEWAY_OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 // and the gateway will 401 the moment the JWT lapses.
 const OIDC_EXPIRATION_BUFFER_MS = 60 * 60 * 1000;
 
+// Keep provenance for values synthesized during CLI startup. A later local
+// subscription selection needs to undo only this ambient Gateway expansion,
+// never values the user supplied or changed themselves.
+const injectedAiGatewayDefaults = new Map<string, string>();
+
+function injectAiGatewayDefault(name: string, value: string): void {
+  if (process.env[name]) return;
+  process.env[name] = value;
+  injectedAiGatewayDefaults.set(name, value);
+}
+
 /**
  * If the user set `AI_GATEWAY_API_KEY`, expand it into the four env vars
  * the agent SDKs actually read. Lets a user run with a single token
@@ -65,11 +76,15 @@ const OIDC_EXPIRATION_BUFFER_MS = 60 * 60 * 1000;
  * any module reads these vars.
  */
 export async function applyAiGatewayDefaults(): Promise<void> {
+  for (const [name, injectedValue] of injectedAiGatewayDefaults) {
+    if (process.env[name] !== injectedValue) injectedAiGatewayDefaults.delete(name);
+  }
   if (!process.env.AI_GATEWAY_API_KEY && process.env.VERCEL_OIDC_TOKEN) {
     try {
-      process.env.AI_GATEWAY_API_KEY = await getVercelOidcToken({
+      const key = await getVercelOidcToken({
         expirationBufferMs: OIDC_EXPIRATION_BUFFER_MS,
       });
+      injectAiGatewayDefault("AI_GATEWAY_API_KEY", key);
     } catch {
       // Refresh failed (token unparseable, network, or the linked project
       // it would refresh against is gone). Fall through — assertAgentCredential
@@ -79,10 +94,27 @@ export async function applyAiGatewayDefaults(): Promise<void> {
   }
   const key = process.env.AI_GATEWAY_API_KEY;
   if (!key) return;
-  if (!process.env.ANTHROPIC_AUTH_TOKEN) process.env.ANTHROPIC_AUTH_TOKEN = key;
-  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
-  if (!process.env.ANTHROPIC_BASE_URL) process.env.ANTHROPIC_BASE_URL = GATEWAY_ANTHROPIC_BASE_URL;
-  if (!process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = GATEWAY_OPENAI_BASE_URL;
+  injectAiGatewayDefault("ANTHROPIC_AUTH_TOKEN", key);
+  injectAiGatewayDefault("OPENAI_API_KEY", key);
+  injectAiGatewayDefault("ANTHROPIC_BASE_URL", GATEWAY_ANTHROPIC_BASE_URL);
+  injectAiGatewayDefault("OPENAI_BASE_URL", GATEWAY_OPENAI_BASE_URL);
+}
+
+/**
+ * Stop ambient OIDC from overriding an explicit local-subscription route.
+ * Sandbox commands are intentionally exempt: local machine credentials are
+ * unavailable in the worker, so the startup-expanded token must be brokered.
+ */
+export function reconcileAiGatewayDefaultsForRoute(
+  route: ModelRoute,
+  options: { env?: NodeJS.ProcessEnv; inSandbox?: boolean } = {},
+): void {
+  if (route.mode !== "local" || options.inSandbox) return;
+  const env = options.env ?? process.env;
+  for (const [name, injectedValue] of injectedAiGatewayDefaults) {
+    // A value changed since startup belongs to the user or selected route.
+    if (env[name] === injectedValue) delete env[name];
+  }
 }
 
 /**
@@ -103,6 +135,7 @@ export async function applySelectedModelRoute(
 export async function applyConfiguredModelRoute(
   agentType: string,
   env: NodeJS.ProcessEnv = process.env,
+  options: { inSandbox?: boolean } = {},
 ): Promise<ResolvedModelRoute | undefined> {
   const route = getConfig()?.ai as ModelRoute | undefined;
   if (!route) return undefined;
@@ -110,9 +143,13 @@ export async function applyConfiguredModelRoute(
   // Preserve the pre-onboarding behavior for cross-agent invocations by
   // falling back to that harness's normal credential discovery.
   if (modelRouteCompatibilityError(route, agentType)) return undefined;
-  // A local-subscription route is an explicit "do nothing": model auth comes
-  // from the machine-wide claude/codex/pi login, so leave env untouched.
-  if (route.mode === "local") return undefined;
+  // Local model auth comes from the machine-wide claude/codex/pi login. Undo
+  // ambient Gateway values synthesized from OIDC, except in sandboxes where
+  // the token still has to be brokered into the remote worker.
+  if (route.mode === "local") {
+    reconcileAiGatewayDefaultsForRoute(route, { env, inSandbox: options.inSandbox });
+    return undefined;
+  }
   // Older scaffold-only workspaces persisted Gateway as a default even when
   // the user intended to rely on a logged-in Codex/Claude/Pi subscription.
   // With no explicit Gateway credential, leave env untouched and let the
