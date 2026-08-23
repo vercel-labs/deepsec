@@ -4,6 +4,7 @@ import path from "node:path";
 import { defineConfig, type FileRecord, setLoadedConfig } from "@deepsec/core";
 import type { DeclarativeMatcherSpec } from "@deepsec/scanner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyAiGatewayDefaults } from "../preflight.js";
 import { runSetupWorkflow, type SetupWorkflowOptions } from "../setup/coordinator.js";
 import { writeGeneratedMatchers } from "../setup/generated-matchers.js";
 import {
@@ -16,6 +17,75 @@ const originalCwd = process.cwd();
 afterEach(() => process.chdir(originalCwd));
 
 describe("one-shot setup coordinator", () => {
+  it("honors a local route selected during setup despite ambient workspace OIDC", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-local-route-"));
+    const workspace = path.join(root, ".deepsec");
+    const project = path.join(root, "app");
+    fs.mkdirSync(path.join(workspace, "data", "app"), { recursive: true });
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(workspace, "package.json"), '{"private":true}\n');
+    fs.writeFileSync(
+      path.join(workspace, "deepsec.config.ts"),
+      `const defineConfig = <T>(config: T): T => config;\nexport default defineConfig({ projects: [{ id: "app", root: "../app" }] });\n`,
+    );
+    fs.writeFileSync(
+      path.join(workspace, "generated-matchers.ts"),
+      `export const generatedMatchersPlugin = { name: "generated", matchers: [] };\n`,
+    );
+
+    const names = [
+      "VERCEL_OIDC_TOKEN",
+      "AI_GATEWAY_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_BASE_URL",
+      "OPENAI_BASE_URL",
+    ];
+    const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+
+    try {
+      process.env.VERCEL_OIDC_TOKEN = "oidc-tok";
+      await applyAiGatewayDefaults();
+
+      await runSetupWorkflow({
+        workspaceDir: workspace,
+        projectId: "app",
+        projectRoot: project,
+        agent: "codex",
+        modelRoute: { mode: "local", provider: "local" },
+        through: "login",
+        services: {
+          install: async () => {
+            fs.mkdirSync(path.join(workspace, "node_modules", "deepsec"), { recursive: true });
+            return { packageManager: "npm", version: "test", installed: true };
+          },
+          connect: async () => {
+            expect(process.env.VERCEL_OIDC_TOKEN).toBe("oidc-tok");
+            expect(process.env.AI_GATEWAY_API_KEY).toBeUndefined();
+            expect(process.env.OPENAI_API_KEY).toBeUndefined();
+            expect(process.env.OPENAI_BASE_URL).toBeUndefined();
+            return {
+              verification: { route: { mode: "local", provider: "local" } },
+            };
+          },
+        },
+        onLog: () => undefined,
+      });
+
+      expect(fs.readFileSync(path.join(workspace, "deepsec.config.ts"), "utf8")).toContain(
+        'ai: {"mode":"local","provider":"local"}',
+      );
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      setLoadedConfig({ projects: [] });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("short-circuits completed install, login, analysis, scan, and process phases", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-one-shot-"));
     const workspace = path.join(root, ".deepsec");

@@ -29,6 +29,7 @@ import {
 } from "../auth/ensure-connected-workspace.js";
 import type { ModelRoute } from "../auth/model-route.js";
 import { loadConfig } from "../load-config.js";
+import { reconcileAiGatewayDefaultsForRoute } from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import {
   type CoverageReport,
@@ -446,6 +447,7 @@ export async function runSetupWorkflow(
         mode: "gateway",
         provider: "vercel",
       };
+    reconcileAiGatewayDefaultsForRoute(route);
     const agentConfig = buildAgentConfig({ model, thinkingLevel, modelRoute: route });
     reconcileWorkspaceConfig(workspaceDir, route, agentType, model, thinkingLevel);
 

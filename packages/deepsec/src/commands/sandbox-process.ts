@@ -149,7 +149,9 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
 
   if (!config.aiApiKeyEnv && !config.aiBaseUrl) {
-    const resolved = await applyConfiguredModelRoute(config.agentType ?? "codex");
+    const resolved = await applyConfiguredModelRoute(config.agentType ?? "codex", process.env, {
+      inSandbox: true,
+    });
     config.brokeredModelCredential = resolved?.broker;
     config.aiBaseUrl = resolved?.route.baseUrl;
   }
