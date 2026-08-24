@@ -10,8 +10,10 @@ deepsec talks to LLMs through interchangeable agent backends:
 | `codex` (default)           | `gpt-5.5`             | `process`, `revalidate`      |
 | `claude`                    | `claude-opus-4-8`     | `process`, `revalidate`      |
 | `pi`                        | `zai/glm-5.2`        | `process`, `revalidate` |
+| `cursor`                    | `auto`                | `process`, `revalidate`      |
 | `claude` (triage)           | `claude-sonnet-4-6`   | `triage` (Claude-only)       |
 
+<<<<<<< HEAD
 Interactive one-shot setup recommends five benchmark-backed combinations:
 GPT-5.6 Sol, Claude Opus 5, Kimi K3, Grok 4.5, and the current DeepSeek entry.
 Deepsec fetches the latest score, reasoning level, harness, and total run cost
@@ -47,6 +49,20 @@ workspace's OIDC credential. The model credential route is independent of the
 Vercel/Sandbox project link and is persisted as non-secret `ai` config. Direct
 OpenAI/Anthropic and custom Pi routes are documented in
 [vercel-setup](vercel-setup.md).
+=======
+The `codex`, `claude` and `pi` backends work with
+[Vercel AI Gateway](https://vercel.com/ai-gateway). One
+`AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN` covers all three. Pi also
+accepts provider/model identifiers directly through its model registry,
+which makes it useful for comparing gateway/provider behavior under the
+same deepsec workload.
+
+The `cursor` backend is different: it drives the **Cursor CLI**
+(`cursor-agent`) rather than a model endpoint, so it authenticates
+through Cursor (a `cursor-agent login` session or `CURSOR_API_KEY`) and
+does not use the gateway. See [the Cursor CLI backend](#the-cursor-cli-backend)
+below.
+>>>>>>> bb1b541 (feat(agents): add `cursor` CLI agent backend)
 
 There is also a `local` route (`--model-auth local`, or "Use local
 subscriptions" in the interactive prompt) for machines where the `claude` or
@@ -75,6 +91,12 @@ pnpm deepsec process --project-id my-app --agent pi
 
 # Pi with an AI SDK / AI Gateway style model id:
 pnpm deepsec process --project-id my-app --agent pi --model zai/glm-5.2
+
+# Cursor CLI backend (uses your cursor-agent login), default model (auto):
+pnpm deepsec process --project-id my-app --agent cursor
+
+# Cursor with an explicit model:
+pnpm deepsec process --project-id my-app --agent cursor --model sonnet-4.5
 
 # Triage uses Claude; pass a cheaper model if you want:
 pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
@@ -170,6 +192,38 @@ pnpm deepsec setup --project-id my-app \
 Later `process`, `revalidate`, and Sandbox commands resolve the persisted
 route. Per-command `--ai-provider`, `--ai-base-url`, `--ai-api-key-env`, and
 repeatable `--ai-header name=value` remain available as Pi runtime overrides.
+
+### The Cursor CLI backend
+
+`--agent cursor` drives the [Cursor CLI](https://docs.cursor.com/cli)
+(`cursor-agent`) headless. Unlike the other backends, which POST to a
+model endpoint over HTTP, Cursor runs its own agent loop — the CLI
+does the file reads, globs and shell calls, streams newline-delimited
+JSON events, and deepsec parses those into its progress stream and pulls
+the findings JSON out of the final message.
+
+```bash
+# Log in once (or export CURSOR_API_KEY), then:
+cursor-agent login
+pnpm deepsec process --project-id my-app --agent cursor
+```
+
+- **Auth** comes from the `cursor-agent` session (`~/.cursor`), a
+  `CURSOR_API_KEY`, or a `CURSOR_AUTH_TOKEN` session token in the env — the
+  last runs unattended in a fresh container with no interactive login.
+  deepsec injects nothing; the Vercel AI Gateway env (`AI_GATEWAY_API_KEY`
+  etc.) is not used and there is no preflight credential check for this
+  backend.
+- **Model** defaults to `auto` (Cursor picks). Pass any Cursor model id
+  with `--model` (e.g. `sonnet-4.5`, `gpt-5`); run `cursor-agent
+  --list-models` to see what your plan exposes.
+- **Binary** resolves to `cursor-agent` on `PATH`; override with
+  `CURSOR_AGENT_BIN`.
+- The CLI is spawned with `--force` (no interactive approvals) and
+  `--trust` (skip the workspace-trust prompt) so it runs unattended on a
+  fresh checkout; the investigation prompt instructs it to read only.
+  Cost is not reported by the CLI, so the per-batch readout shows tokens
+  but no `$` figure.
 
 ### `claude-sonnet-4-6` for `triage`
 

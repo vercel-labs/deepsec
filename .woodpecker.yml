@@ -1,0 +1,40 @@
+# Gate do deepsec rodando no Woodpecker.
+#
+# Este arquivo é a definição ÚNICA do CI deste repo: o servidor roda depois do push, e
+# `ccl ci deepsec` roda o MESMO arquivo aqui, no mesmo container, via `woodpecker-cli exec`.
+# Não há segunda definição para divergir.
+#
+# ⚠️ NÃO dispara deploy. O Gjallarhorn segue reagindo ao push por conta própria.
+#
+# Traduzido de .ccl/gate.yml em 2026-08-20.
+# Só `push`, de propósito. O `node_auth_token` é segredo de ORGANIZAÇÃO e a org tem repos
+# públicos (brokk, deepsec e outros 4): entregá-lo a pipeline disparado por PR de fork
+# deixaria qualquer um roubar um PAT com write:packages abrindo um PR que o imprime.
+#
+# Não se perde cobertura: PR de branch interna já foi validado quando a branch subiu — o
+# evento push pega. PR de fork fica sem CI, e precisa de revisão humana de qualquer jeito.
+when:
+  - event: push
+
+steps:
+  - name: validate
+    # Mesma versão que o repo declara em packageManager — divergência de pnpm foi a causa
+    # nº 1 de vermelho falso quando o gate saiu do Actions.
+    image: node:22-alpine
+    commands:
+      # O build do site chama `git` (data do arquivo na doc) e a imagem alpine não traz.
+      # Sem isto o build morre em `spawn git ENOENT` — no servidor também, que usa a mesma
+      # imagem; o gate antigo só passava porque rodava no host, onde git existe.
+      # `tar` GNU e não o do busybox: os testes de tarball usam opções longas que o
+      # busybox recusa com "unrecognized option", o que parece defeito do teste e é
+      # ausência de binário. `git` porque o build do site lê data do arquivo no histórico.
+      - apk add --no-cache git tar
+      - corepack enable
+      - corepack prepare pnpm@8.15.9 --activate
+      - pnpm install --frozen-lockfile
+      - pnpm -r build
+      - pnpm lint
+      - pnpm knip
+      - pnpm test:unit
+      - pnpm test:bundle
+      - pnpm typecheck:deepsec

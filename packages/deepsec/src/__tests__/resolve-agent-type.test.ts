@@ -20,6 +20,10 @@ describe("resolveAgentType", () => {
     expect(resolveAgentType("pi")).toBe("pi");
   });
 
+  it("accepts cursor as a built-in agent type", () => {
+    expect(resolveAgentType("cursor")).toBe("cursor");
+  });
+
   it("aliases claude from defaultAgent config", () => {
     setLoadedConfig(defineConfig({ projects: [], defaultAgent: "claude" }));
     expect(resolveAgentType(undefined)).toBe("claude-agent-sdk");
