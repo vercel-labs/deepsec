@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { existsSettled } from "@deepsec/core";
 import { createTerminalLineDecoder, packageInstallProgress } from "./output.js";
 
 export type SupportedPackageManager = "pnpm" | "npm";
@@ -42,17 +43,26 @@ export function selectPackageManager(
   throw new Error("Deepsec requires pnpm or npm, but neither command is available on PATH");
 }
 
-export function probeWorkspaceInstall(workspaceDir: string): {
+export function probeWorkspaceInstall(
+  workspaceDir: string,
+  // Set when the installer child just wrote this tree: a lagging mount can
+  // report the files it created as missing for another millisecond or two, so
+  // a miss is re-checked after settling instead of failing the install. Left
+  // off for the pre-install probe, where an absent node_modules is the normal
+  // case and waiting on it is pure cost.
+  options: { settle?: boolean } = {},
+): {
   ok: boolean;
   version?: string;
   reason?: string;
 } {
+  const exists = options.settle ? existsSettled : fs.existsSync;
   const packageFile = path.join(workspaceDir, "node_modules", "deepsec", "package.json");
-  if (!fs.existsSync(packageFile)) return { ok: false, reason: "node_modules/deepsec is missing" };
+  if (!exists(packageFile)) return { ok: false, reason: "node_modules/deepsec is missing" };
   try {
     const pkg = JSON.parse(fs.readFileSync(packageFile, "utf8"));
     for (const relative of ["dist/cli.mjs", "dist/config.mjs"]) {
-      if (!fs.existsSync(path.join(workspaceDir, "node_modules", "deepsec", relative))) {
+      if (!exists(path.join(workspaceDir, "node_modules", "deepsec", relative))) {
         return { ok: false, reason: `deepsec/${relative} is missing` };
       }
     }
@@ -125,7 +135,7 @@ export async function ensureWorkspaceInstall(params: {
       `${packageManager} install failed with exit ${result.status ?? "unknown"}; see the setup log for package-manager output`,
     );
   }
-  const after = probeWorkspaceInstall(workspaceDir);
+  const after = probeWorkspaceInstall(workspaceDir, { settle: true });
   if (!after.ok) throw new Error(`Install completed but workspace is unusable: ${after.reason}`);
   params.onProgress?.({ message: `Installed deepsec ${after.version}` });
   return { packageManager, version: after.version!, installed: true };

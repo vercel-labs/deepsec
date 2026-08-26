@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   dataDir,
+  existsSettled,
   type FileRecord,
   getRegistry,
   loadAllFileRecords,
@@ -407,8 +408,10 @@ export async function runSetupWorkflow(
     const installInput = installFingerprint(workspaceDir);
     let installResult: Awaited<ReturnType<typeof ensureWorkspaceInstall>>;
     if (
+      // The installer is a child process that just finished writing this
+      // tree, so a lagging mount can still report it missing.
       !isCheckpointCurrent(state, "install", installInput, () =>
-        fs.existsSync("node_modules/deepsec"),
+        existsSettled("node_modules/deepsec"),
       )
     ) {
       installResult = await runPhase(state, reporter, "install", installInput, () =>
