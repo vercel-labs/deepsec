@@ -86,27 +86,95 @@ jobs:
         run: |
           set -euo pipefail
 
-          base_sha=$(gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/heads/$BASE_BRANCH" \
-            --jq '.object.sha')
-          branch_sha=$(gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" \
-            --jq '.object.sha' 2>/dev/null || true)
+          repository_owner=${GITHUB_REPOSITORY%%/*}
+          repository_name=${GITHUB_REPOSITORY#*/}
+          ref_query='
+            query(
+              $owner: String!,
+              $name: String!,
+              $baseRef: String!,
+              $branchRef: String!
+            ) {
+              repository(owner: $owner, name: $name) {
+                id
+                base: ref(qualifiedName: $baseRef) {
+                  target {
+                    oid
+                  }
+                }
+                branch: ref(qualifiedName: $branchRef) {
+                  target {
+                    oid
+                  }
+                }
+              }
+            }
+          '
+          ref_response=$(gh api graphql \
+            -f query="$ref_query" \
+            -f owner="$repository_owner" \
+            -f name="$repository_name" \
+            -f baseRef="refs/heads/$BASE_BRANCH" \
+            -f branchRef="refs/heads/$BRANCH")
+          repository_id=$(jq -r '.data.repository.id' <<< "$ref_response")
+          base_sha=$(jq -r '.data.repository.base.target.oid' <<< "$ref_response")
+          branch_sha=$(jq -r '.data.repository.branch.target.oid // ""' <<< "$ref_response")
 
+          branch_created=false
           if [ -z "$branch_sha" ]; then
-            gh api \
-              --method POST \
-              "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="refs/heads/$BRANCH" \
-              -f sha="$base_sha" \
-              >/dev/null
-            branch_sha="$base_sha"
+            create_ref_mutation='
+              mutation($repositoryId: ID!, $name: String!, $oid: GitObjectID!) {
+                createRef(input: {
+                  repositoryId: $repositoryId,
+                  name: $name,
+                  oid: $oid
+                }) {
+                  ref {
+                    target {
+                      oid
+                    }
+                  }
+                }
+              }
+            '
+            branch_sha=$(gh api graphql \
+              -f query="$create_ref_mutation" \
+              -f repositoryId="$repository_id" \
+              -f name="refs/heads/$BRANCH" \
+              -f oid="$base_sha" \
+              --jq '.data.createRef.ref.target.oid')
+            branch_created=true
+
+            # Wait until the signing mutation can resolve the new branch.
+            for attempt in {1..10}; do
+              visible_sha=$(gh api graphql \
+                -f query="$ref_query" \
+                -f owner="$repository_owner" \
+                -f name="$repository_name" \
+                -f baseRef="refs/heads/$BASE_BRANCH" \
+                -f branchRef="refs/heads/$BRANCH" \
+                --jq '.data.repository.branch.target.oid // ""')
+              if [ "$visible_sha" = "$branch_sha" ]; then
+                break
+              fi
+              sleep "$attempt"
+            done
+            if [ "${visible_sha:-}" != "$branch_sha" ]; then
+              echo "::error::Timed out waiting for $BRANCH to become visible"
+              exit 1
+            fi
           fi
 
           content=$(base64 -w 0 packages/deepsec/package.json)
-          remote_content=$(gh api \
-            "repos/$GITHUB_REPOSITORY/contents/packages/deepsec/package.json?ref=$BRANCH" \
-            --jq '.content' | tr -d '\n')
+          if [ "$branch_created" = "true" ]; then
+            remote_content=""
+          else
+            # Resolve existing branch contents through its immutable commit SHA
+            # rather than its ref name, avoiding the same consistency window.
+            remote_content=$(gh api \
+              "repos/$GITHUB_REPOSITORY/contents/packages/deepsec/package.json?ref=$branch_sha" \
+              --jq '.content' | tr -d '\n')
+          fi
 
           if [ "$content" != "$remote_content" ]; then
             mutation='
@@ -160,6 +228,22 @@ jobs:
 
             if [ "$signature_valid" != "true" ] || [ "$signed_by_github" != "true" ]; then
               echo "::error::GitHub did not return a valid GitHub-signed commit"
+              exit 1
+            fi
+
+            # Wait for REST-backed PR and workflow APIs to observe the signed
+            # head before creating the PR or dispatching its checks.
+            for attempt in {1..10}; do
+              visible_sha=$(gh api \
+                "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" \
+                --jq '.object.sha' 2>/dev/null || true)
+              if [ "$visible_sha" = "$commit_sha" ]; then
+                break
+              fi
+              sleep "$attempt"
+            done
+            if [ "${visible_sha:-}" != "$commit_sha" ]; then
+              echo "::error::Timed out waiting for signed commit $commit_sha"
               exit 1
             fi
           else
