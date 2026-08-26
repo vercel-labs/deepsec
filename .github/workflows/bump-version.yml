@@ -76,7 +76,7 @@ jobs:
           );
           NODE
 
-      - name: Commit, push, and open pull request
+      - name: Create signed commit and pull request
         env:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           BRANCH: ${{ steps.version.outputs.branch }}
@@ -86,19 +86,85 @@ jobs:
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
-          git add packages/deepsec/package.json
-          git commit -m "Bump deepsec to $NEW_VERSION"
+          base_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/$BASE_BRANCH" \
+            --jq '.object.sha')
+          branch_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" \
+            --jq '.object.sha' 2>/dev/null || true)
 
-          remote_sha=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
-          if [ -n "$remote_sha" ]; then
-            git push \
-              --force-with-lease="refs/heads/$BRANCH:$remote_sha" \
-              origin "HEAD:refs/heads/$BRANCH"
+          if [ -z "$branch_sha" ]; then
+            gh api \
+              --method POST \
+              "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/heads/$BRANCH" \
+              -f sha="$base_sha" \
+              >/dev/null
+            branch_sha="$base_sha"
+          fi
+
+          content=$(base64 -w 0 packages/deepsec/package.json)
+          remote_content=$(gh api \
+            "repos/$GITHUB_REPOSITORY/contents/packages/deepsec/package.json?ref=$BRANCH" \
+            --jq '.content' | tr -d '\n')
+
+          if [ "$content" != "$remote_content" ]; then
+            mutation='
+              mutation($input: CreateCommitOnBranchInput!) {
+                createCommitOnBranch(input: $input) {
+                  commit {
+                    oid
+                    signature {
+                      isValid
+                      wasSignedByGitHub
+                    }
+                  }
+                }
+              }
+            '
+            response=$(jq -n \
+              --arg query "$mutation" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg branch "$BRANCH" \
+              --arg expectedHeadOid "$branch_sha" \
+              --arg message "Bump deepsec to $NEW_VERSION" \
+              --arg path "packages/deepsec/package.json" \
+              --arg contents "$content" \
+              '{
+                query: $query,
+                variables: {
+                  input: {
+                    branch: {
+                      repositoryNameWithOwner: $repository,
+                      branchName: $branch
+                    },
+                    expectedHeadOid: $expectedHeadOid,
+                    message: {
+                      headline: $message
+                    },
+                    fileChanges: {
+                      additions: [{
+                        path: $path,
+                        contents: $contents
+                      }]
+                    }
+                  }
+                }
+              }' | gh api graphql --input -)
+
+            commit_sha=$(jq -r '.data.createCommitOnBranch.commit.oid' <<< "$response")
+            signature_valid=$(jq -r \
+              '.data.createCommitOnBranch.commit.signature.isValid' <<< "$response")
+            signed_by_github=$(jq -r \
+              '.data.createCommitOnBranch.commit.signature.wasSignedByGitHub' <<< "$response")
+
+            if [ "$signature_valid" != "true" ] || [ "$signed_by_github" != "true" ]; then
+              echo "::error::GitHub did not return a valid GitHub-signed commit"
+              exit 1
+            fi
           else
-            git push origin "HEAD:refs/heads/$BRANCH"
+            commit_sha="$branch_sha"
+            echo "::notice::$BRANCH already contains deepsec@$NEW_VERSION"
           fi
 
           pr_url=$(gh pr list \
@@ -125,6 +191,7 @@ jobs:
             echo "### Version bump pull request"
             echo
             echo "- Version: \`$CURRENT_VERSION\` → \`$NEW_VERSION\`"
+            echo "- Signed commit: \`$commit_sha\`"
             echo "- Pull request: $pr_url"
             echo "- CI: dispatched for \`$BRANCH\`"
           } >> "$GITHUB_STEP_SUMMARY"
