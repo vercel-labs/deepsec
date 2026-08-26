@@ -17,7 +17,8 @@ import {
 } from "./vercel-link.js";
 
 export interface ConnectionVerificationCheckpoint {
-  project: { teamId: string; projectId: string };
+  /** Absent for local-subscription routes, which never link a project. */
+  project?: { teamId: string; projectId: string };
   route: ModelRoute;
   agentTypes: string[];
   modelVerifiedAt: string;
@@ -28,10 +29,11 @@ export interface ConnectionVerificationCheckpoint {
 }
 
 export interface LoginResult {
-  platformAuth: {
+  /** Absent for local-subscription routes, which never link a project. */
+  platformAuth?: {
     method: "existing-link" | "vercel-cli" | "access-token-triple";
   };
-  project: { teamId: string; projectId: string };
+  project?: { teamId: string; projectId: string };
   modelAuth: ModelRoute;
   agentTypes: string[];
   modelRouteVerified: boolean;
@@ -85,8 +87,8 @@ function canReuseModel(
 ): boolean {
   return Boolean(
     previous &&
-      previous.project.teamId === platform.project.teamId &&
-      previous.project.projectId === platform.project.projectId &&
+      previous.project?.teamId === platform.project.teamId &&
+      previous.project?.projectId === platform.project.projectId &&
       sameRoute(previous.route, route) &&
       JSON.stringify(previous.agentTypes) === JSON.stringify(agents) &&
       fresh(previous.modelVerifiedAt, now, ttl),
@@ -102,6 +104,29 @@ export async function ensureConnectedWorkspace(
   const deps = options.dependencies ?? {};
   const now = (deps.now ?? (() => new Date()))();
   const ttl = options.verificationTtlMs ?? 24 * 60 * 60 * 1000;
+
+  if (options.modelRoute.mode === "local") {
+    // Local subscriptions delegate model auth to the machine-wide
+    // claude/codex/pi logins, and nothing else in host-side setup needs the
+    // platform. Linking anyway would prompt for the Vercel login the user
+    // just declined and leave a VERCEL_OIDC_TOKEN in .env.local that every
+    // later run expands into ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN,
+    // routing past the login they chose. Sandbox commands do need the
+    // platform and assert their own credential when they run.
+    const verification: ConnectionVerificationCheckpoint = {
+      route: options.modelRoute,
+      agentTypes: [...options.agentTypes],
+      modelVerifiedAt: now.toISOString(),
+    };
+    return {
+      modelAuth: options.modelRoute,
+      agentTypes: [...options.agentTypes],
+      modelRouteVerified: false,
+      sandboxReady: false,
+      verification,
+    };
+  }
+
   const platform = await (deps.ensureLink ?? ensureVercelLink)({
     workspaceDir: options.workspaceDir,
     interactive: options.interactive,
@@ -130,28 +155,6 @@ export async function ensureConnectedWorkspace(
 
   // Link success is not enough: the credential must still be available now.
   assertSandboxCredential({ env });
-
-  if (options.modelRoute.mode === "local") {
-    // Local subscriptions delegate model auth to the machine-wide
-    // claude/codex/pi logins. There is no credential to resolve, apply to
-    // env, or verify — the agent SDK errors clearly at first call if the
-    // machine login is actually missing.
-    const verification: ConnectionVerificationCheckpoint = {
-      project: platform.project,
-      route: options.modelRoute,
-      agentTypes: [...options.agentTypes],
-      modelVerifiedAt: now.toISOString(),
-    };
-    return {
-      platformAuth: { method: platform.method },
-      project: platform.project,
-      modelAuth: options.modelRoute,
-      agentTypes: [...options.agentTypes],
-      modelRouteVerified: false,
-      sandboxReady: true,
-      verification,
-    };
-  }
 
   const resolvedRoutes: ResolvedModelRoute[] = [];
   for (const agentType of options.agentTypes) {

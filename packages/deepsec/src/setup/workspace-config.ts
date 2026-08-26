@@ -23,6 +23,45 @@ function upsertConfigLine(
   return source.replace(/defineConfig\(\{\s*/, (match) => `${match}${line}\n  `);
 }
 
+function upsertRouteLine(source: string, route: ModelRoute): string {
+  const line = `ai: ${JSON.stringify(route)}, ${ROUTE_MARKER}`;
+  if (source.includes(ROUTE_MARKER)) {
+    return source.replace(/^\s*ai:.*<deepsec:model-route>.*$/m, `  ${line}`);
+  }
+  return source.replace(/defineConfig\(\{\s*/, (match) => `${match}${line}\n  `);
+}
+
+/**
+ * Record the selected route in the generated config before any interruptible
+ * setup work runs. Setup only records its own checkpoint once login succeeds,
+ * and init only prompts for a route on a first run, so without this an
+ * interrupt in between loses the choice.
+ */
+export function persistWorkspaceConfigRoute(workspaceDir: string, route: ModelRoute): void {
+  const file = path.join(workspaceDir, "deepsec.config.ts");
+  fs.writeFileSync(file, upsertRouteLine(fs.readFileSync(file, "utf8"), route));
+}
+
+/** Route recorded by {@link persistWorkspaceConfigRoute} or a previous setup run. */
+export function readWorkspaceConfigRoute(workspaceDir: string): ModelRoute | undefined {
+  let source: string;
+  try {
+    source = fs.readFileSync(path.join(workspaceDir, "deepsec.config.ts"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const match = source.match(/^\s*ai:\s*(.*),\s*\/\/ <deepsec:model-route>/m);
+  if (!match) return undefined;
+  try {
+    const route = JSON.parse(match[1]) as ModelRoute;
+    if (typeof route?.mode !== "string" || typeof route.provider !== "string") return undefined;
+    return route;
+  } catch {
+    // A hand-edited route line is not authoritative; fall back to prompting.
+    return undefined;
+  }
+}
+
 /** Idempotently migrate older generated workspaces to the one-shot config hooks. */
 export function reconcileWorkspaceConfig(
   workspaceDir: string,
@@ -46,12 +85,7 @@ export function reconcileWorkspaceConfig(
     }
   }
 
-  const routeLine = `ai: ${JSON.stringify(route)}, ${ROUTE_MARKER}`;
-  if (source.includes(ROUTE_MARKER)) {
-    source = source.replace(/^\s*ai:.*<deepsec:model-route>.*$/m, `  ${routeLine}`);
-  } else {
-    source = source.replace(/defineConfig\(\{\s*/, (match) => `${match}${routeLine}\n  `);
-  }
+  source = upsertRouteLine(source, route);
 
   const agentLine = `defaultAgent: ${JSON.stringify(agentType)}, ${AGENT_MARKER}`;
   if (source.includes(AGENT_MARKER)) {

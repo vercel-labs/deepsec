@@ -75,9 +75,14 @@ describe("ensureConnectedWorkspace", () => {
     expect(result.sandboxReady).toBe(true);
   });
 
-  it("skips credential resolution and verification for a local-subscription route", async () => {
+  it("skips the platform link, credential resolution and verification for a local route", async () => {
     const resolveRoute = vi.fn(async () => resolved());
     const verifyModelRoute = vi.fn(async () => undefined);
+    const ensureLink = vi.fn(async () => ({
+      method: "access-token-triple" as const,
+      project: { teamId: "team", projectId: "project" },
+      link: { orgId: "team", projectId: "project" },
+    }));
     const localRoute = { mode: "local", provider: "local" } as const;
     const env = { VERCEL_TOKEN: "v", VERCEL_TEAM_ID: "team", VERCEL_PROJECT_ID: "project" };
     const result = await ensureConnectedWorkspace({
@@ -87,16 +92,14 @@ describe("ensureConnectedWorkspace", () => {
       agentTypes: ["claude-agent-sdk"],
       env,
       dependencies: {
-        ensureLink: async () => ({
-          method: "access-token-triple",
-          project: { teamId: "team", projectId: "project" },
-          link: { orgId: "team", projectId: "project" },
-        }),
+        ensureLink,
         resolveRoute,
         verifyModelRoute,
         now: () => new Date("2026-01-01T00:00:00Z"),
       },
     });
+    expect(ensureLink).not.toHaveBeenCalled();
+    expect(result.project).toBeUndefined();
     expect(resolveRoute).not.toHaveBeenCalled();
     expect(verifyModelRoute).not.toHaveBeenCalled();
     expect(result.modelAuth).toEqual(localRoute);

@@ -17,6 +17,7 @@ import { runSetupWorkflow, type SetupThrough } from "../setup/coordinator.js";
 import type { SupportedPackageManager } from "../setup/install.js";
 import { shouldUseHeadlessMode } from "../setup/interaction.js";
 import { acquireSetupLock } from "../setup/lock.js";
+import { persistedModelRoute, recordInitialModelRoute } from "../setup/persisted-route.js";
 import { buildSetupPlan } from "../setup/plan.js";
 import { deterministicVercelProjectName } from "../setup/project-name.js";
 import {
@@ -215,6 +216,7 @@ export async function initCommand(opts: InitOpts) {
       modelRoute = choice.route;
       agent ??= choice.defaultAgent;
     }
+    recordInitialModelRoute(workspaceDir, modelRoute);
     if (!model && !resuming && !headless && process.stdin.isTTY && process.stdout.isTTY) {
       const choice = await promptForModelSelection({
         route: modelRoute ?? { mode: "gateway", provider: "vercel" },
@@ -263,7 +265,14 @@ export async function initCommand(opts: InitOpts) {
     // Complete interactive project selection before Ink ever takes ownership
     // of the terminal. Besides producing a cleaner onboarding sequence, this
     // avoids transferring stdin between two independent prompt runtimes.
+    //
+    // A local-subscription route needs no platform link, so skip it rather
+    // than prompt for the Vercel login the user just declined. On resume the
+    // route comes from the login checkpoint, or from the generated config when
+    // setup was interrupted before login; the prompt above is first-run only.
+    const linkRoute = modelRoute ?? persistedModelRoute(workspaceDir, registered.id);
     if (
+      linkRoute?.mode !== "local" &&
       !headless &&
       process.stdin.isTTY &&
       process.stdout.isTTY &&
