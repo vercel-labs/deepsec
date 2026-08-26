@@ -1,0 +1,123 @@
+name: Bump deepsec version
+
+run-name: Bump deepsec version (${{ inputs.bump }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version component to increment
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: bump-deepsec-version
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-pull-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Bump version
+        id: version
+        env:
+          BUMP_TYPE: ${{ inputs.bump }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const packagePath = "packages/deepsec/package.json";
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+          const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(packageJson.version);
+          const bumpType = process.env.BUMP_TYPE;
+
+          if (!match) {
+            throw new Error(`Expected a stable semantic version, got ${packageJson.version}`);
+          }
+          if (!["patch", "minor", "major"].includes(bumpType)) {
+            throw new Error(`Unsupported bump type: ${bumpType}`);
+          }
+
+          let [, major, minor, patch] = match.map(Number);
+          if (bumpType === "major") {
+            major += 1;
+            minor = 0;
+            patch = 0;
+          } else if (bumpType === "minor") {
+            minor += 1;
+            patch = 0;
+          } else {
+            patch += 1;
+          }
+
+          const currentVersion = packageJson.version;
+          const newVersion = `${major}.${minor}.${patch}`;
+          packageJson.version = newVersion;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `current=${currentVersion}\nnew=${newVersion}\nbranch=release/deepsec-v${newVersion}\n`,
+          );
+          NODE
+
+      - name: Commit, push, and open pull request
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          CURRENT_VERSION: ${{ steps.version.outputs.current }}
+          NEW_VERSION: ${{ steps.version.outputs.new }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add packages/deepsec/package.json
+          git commit -m "Bump deepsec to $NEW_VERSION"
+
+          remote_sha=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+          if [ -n "$remote_sha" ]; then
+            git push \
+              --force-with-lease="refs/heads/$BRANCH:$remote_sha" \
+              origin "HEAD:refs/heads/$BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+
+          pr_url=$(gh pr list \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --state open \
+            --json url \
+            --jq '.[0].url // ""')
+
+          if [ -z "$pr_url" ]; then
+            pr_url=$(gh pr create \
+              --base "$BASE_BRANCH" \
+              --head "$BRANCH" \
+              --title "Bump deepsec to $NEW_VERSION" \
+              --body "Increases the deepsec package version from $CURRENT_VERSION to $NEW_VERSION. Merging this PR triggers the release workflow.")
+          fi
+
+          {
+            echo "### Version bump pull request"
+            echo
+            echo "- Version: \`$CURRENT_VERSION\` → \`$NEW_VERSION\`"
+            echo "- Pull request: $pr_url"
+          } >> "$GITHUB_STEP_SUMMARY"
