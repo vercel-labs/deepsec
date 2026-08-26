@@ -20,6 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -115,9 +116,15 @@ jobs:
               --body "Increases the deepsec package version from $CURRENT_VERSION to $NEW_VERSION. Merging this PR triggers the release workflow.")
           fi
 
+          # Events created by GITHUB_TOKEN normally do not start new workflow
+          # runs. workflow_dispatch is an explicit exception, so dispatch CI
+          # against the PR branch to attach required checks to its head commit.
+          gh workflow run ci.yml --ref "$BRANCH"
+
           {
             echo "### Version bump pull request"
             echo
             echo "- Version: \`$CURRENT_VERSION\` → \`$NEW_VERSION\`"
             echo "- Pull request: $pr_url"
+            echo "- CI: dispatched for \`$BRANCH\`"
           } >> "$GITHUB_STEP_SUMMARY"

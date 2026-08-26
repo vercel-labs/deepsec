@@ -4,12 +4,13 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
-# Cancel in-progress PR runs on new pushes; let main runs finish so the
-# release workflow's history stays uninterrupted.
+# Cancel in-progress PR and manually dispatched runs for the same branch; let
+# main runs finish so the release workflow's history stays uninterrupted.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
