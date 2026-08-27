@@ -53,6 +53,20 @@ The [getting started guide](https://github.com/vercel-labs/deepsec/blob/main/doc
 covers all of this in more detail, including using your own OpenAI or
 Anthropic API key and running from CI or a coding agent.
 
+### Alternative: manual setup
+
+For a manual setup that stops after creating the workspace:
+
+```bash
+npx deepsec init --scaffold-only
+```
+
+This creates the `.deepsec/` workspace with its configuration and project-context
+templates, and prints the common next steps. It does not install dependencies,
+connect to Vercel, analyze the repository, scan, or start an AI review. Use it
+when you want to inspect or customize the setup first, or use an existing
+Claude Code or Codex subscription for local runs.
+
 ## Docs
 
 After initialization, agents can read the exact documentation matching the
