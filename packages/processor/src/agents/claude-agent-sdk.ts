@@ -232,6 +232,7 @@ async function runToollessFollowUp(
 
 export async function runClaudeSetupTask(params: SetupTaskParams): Promise<string> {
   const model = (params.config.model as string) ?? "claude-opus-4-8";
+  const maxTurns = (params.config.maxTurns as number) ?? 40;
   const abortController = new AbortController();
   const abort = () => abortController.abort();
   if (params.signal) {
@@ -250,7 +251,7 @@ export async function runClaudeSetupTask(params: SetupTaskParams): Promise<strin
         cwd: params.projectRoot,
         allowedTools: ["Read", "Glob", "Grep"],
         permissionMode: "dontAsk",
-        maxTurns: (params.config.maxTurns as number) ?? 40,
+        maxTurns,
         model,
         thinking: { type: "adaptive" },
         effort: resolveMainRunEffort(params.config),
@@ -273,7 +274,12 @@ export async function runClaudeSetupTask(params: SetupTaskParams): Promise<strin
         }
       } else if (msg.type === "result") {
         if (msg.subtype === "success") resultText = String(msg.result ?? "");
-        else if (msg.is_error) throw new Error(String(msg.result ?? "Claude setup task failed"));
+        else if (msg.is_error) {
+          if (msg.subtype === "error_max_turns") {
+            throw new Error(`Claude exceeded max turns (${maxTurns})`);
+          }
+          throw new Error(String(msg.result ?? "Claude setup task failed"));
+        }
       }
     }
   } finally {
