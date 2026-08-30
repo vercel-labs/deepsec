@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findingSchema, revalidationSchema } from "../schemas.js";
+import { SEVERITY_ORDER } from "../severity.js";
 
 describe("severity levels", () => {
   const baseFinding = {
@@ -37,6 +38,17 @@ describe("severity levels", () => {
 
   it("rejects empty severity", () => {
     expect(() => findingSchema.parse({ ...baseFinding, severity: "" })).toThrow();
+  });
+
+  it("uses one canonical ordering including LOW", () => {
+    expect(SEVERITY_ORDER).toEqual({
+      CRITICAL: 0,
+      HIGH: 1,
+      MEDIUM: 2,
+      HIGH_BUG: 3,
+      BUG: 4,
+      LOW: 5,
+    });
   });
 });
 

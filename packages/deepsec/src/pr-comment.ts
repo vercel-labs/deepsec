@@ -1,18 +1,4 @@
-import { type FileRecord, loadAllFileRecords, type Severity } from "@deepsec/core";
-
-/**
- * Severity ordering used to sort findings within the PR comment. Mirrors
- * the order in `packages/processor/src/index.ts:SEVERITY_ORDER` — keep them
- * in sync if you add a tier.
- */
-const SEVERITY_ORDER: Record<Severity, number> = {
-  CRITICAL: 0,
-  HIGH: 1,
-  MEDIUM: 2,
-  HIGH_BUG: 3,
-  BUG: 4,
-  LOW: 5,
-};
+import { type FileRecord, loadAllFileRecords, SEVERITY_ORDER, type Severity } from "@deepsec/core";
 
 const SEVERITY_BADGE: Record<Severity, string> = {
   CRITICAL: "🔴 CRITICAL",
