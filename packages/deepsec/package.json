@@ -1,6 +1,6 @@
 {
   "name": "deepsec",
-  "version": "2.3.8",
+  "version": "2.3.9",
   "description": "AI-powered vulnerability scanner for any codebase",
   "license": "Apache-2.0",
   "repository": {
@@ -33,10 +33,10 @@
     "prepublishOnly": "pnpm -w validate && node -e \"const fs=require('node:fs');for(const f of ['dist/cli.mjs','dist/config.mjs','dist/config.d.ts','dist/sandbox/request-proxy.mjs','dist/docs/getting-started.md','dist/samples/webapp/deepsec.config.ts','SKILL.md','README.md','LICENSE','NOTICE']){if(!fs.existsSync(f)){console.error('Missing: '+f);process.exit(1)}}console.log('Pre-publish checks passed.')\""
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.219",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.260",
     "@earendil-works/pi-coding-agent": "0.81.1",
-    "@openai/codex": "^0.145.0",
-    "@openai/codex-sdk": "^0.145.0",
+    "@openai/codex": "^0.153.2",
+    "@openai/codex-sdk": "^0.153.2",
     "@vercel/oidc": "^3.4.0",
     "@vercel/sandbox": "^1.9.0",
     "ink": "^7.1.1",
