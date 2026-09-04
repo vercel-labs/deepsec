@@ -69,7 +69,7 @@ describe("DeepSecBench model picker", () => {
   it("infers provider-prefixed OpenAI and Anthropic slugs before generic Pi slugs", () => {
     expect(inferModelHarness("openai/gpt-5.6-sol")).toBe("codex");
     expect(inferModelHarness("anthropic/claude-opus-5")).toBe("claude");
-    expect(inferModelHarness("xai/grok-4.5")).toBe("pi");
+    expect(inferModelHarness("xai/grok-4.5")).toBe("grok");
   });
   it("uses the highest-scoring combo for each recommendation and normalizes price", () => {
     const choices = buildRecommendedModelChoices(results);

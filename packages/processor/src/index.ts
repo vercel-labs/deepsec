@@ -22,6 +22,7 @@ import {
 import { noiseScore, readTechJson } from "@deepsec/scanner";
 import { ClaudeAgentSdkPlugin } from "./agents/claude-agent-sdk.js";
 import { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
+import { GrokBuildAgentPlugin } from "./agents/grok-build.js";
 import { PiAgentPlugin } from "./agents/pi-sdk.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { QuotaExhaustedError, type QuotaSource } from "./agents/shared.js";
@@ -45,6 +46,7 @@ import {
 
 export { ClaudeAgentSdkPlugin } from "./agents/claude-agent-sdk.js";
 export { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
+export { GrokBuildAgentPlugin } from "./agents/grok-build.js";
 export { PiAgentPlugin } from "./agents/pi-sdk.js";
 export { AgentRegistry } from "./agents/registry.js";
 export {
@@ -90,6 +92,7 @@ export function createDefaultAgentRegistry(): AgentRegistry {
   registry.register(new ClaudeAgentSdkPlugin());
   registry.register(new CodexAgentSdkPlugin());
   registry.register(new PiAgentPlugin());
+  registry.register(new GrokBuildAgentPlugin());
   // Plugins can contribute additional backends via `agents: []` in their
   // DeepsecPlugin export. The shape is validated by AgentRegistry at use.
   for (const a of getRegistry().agents as AgentPlugin[]) {

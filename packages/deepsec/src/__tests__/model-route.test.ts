@@ -2,6 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 import { applyResolvedModelRoute, resolveModelRoute } from "../auth/model-route.js";
 
 describe("resolveModelRoute", () => {
+  it("resolves Grok Build to an XAI route independent of the stored gateway config", async () => {
+    const resolved = await resolveModelRoute(
+      { mode: "gateway", provider: "vercel" },
+      { agentType: "grok", env: { XAI_API_KEY: "xai-secret" } },
+    );
+    expect(resolved.route.provider).toBe("xai");
+    expect(resolved.environment.XAI_API_KEY).toBe("xai-secret");
+    expect(resolved.broker.host).toBe("api.x.ai");
+  });
+
+  it("allows Grok Build without XAI_API_KEY (OAuth / grok login)", async () => {
+    const resolved = await resolveModelRoute(
+      { mode: "gateway", provider: "vercel" },
+      { agentType: "grok", env: {} },
+    );
+    expect(resolved.route.provider).toBe("xai");
+    expect(resolved.credential).toBe("");
+    expect(resolved.environment.XAI_API_KEY).toBeUndefined();
+  });
+
   it("refuses to resolve a local-subscription route to a brokered credential", async () => {
     await expect(
       resolveModelRoute({ mode: "local", provider: "local" }, { agentType: "codex", env: {} }),

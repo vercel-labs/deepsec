@@ -48,6 +48,10 @@ const DEFAULTS: Record<string, { env: string; baseUrl: string }> = {
     env: "OPENAI_API_KEY",
     baseUrl: "https://api.openai.com/v1",
   },
+  xai: {
+    env: "XAI_API_KEY",
+    baseUrl: "https://api.x.ai/v1",
+  },
 };
 
 function checkedUrl(value: string, label: string): URL {
@@ -62,10 +66,15 @@ function checkedUrl(value: string, label: string): URL {
   return url;
 }
 
+export function isGrokAgent(agentType: string): boolean {
+  return agentType === "grok" || agentType === "grok-build";
+}
+
 export function modelRouteCompatibilityError(
   route: ModelRoute,
   agentType: string,
 ): string | undefined {
+  if (isGrokAgent(agentType)) return undefined;
   if (route.mode === "custom" && agentType !== "pi") {
     return `Custom model routes require --agent pi (received ${agentType})`;
   }
@@ -76,6 +85,30 @@ export function modelRouteCompatibilityError(
     return "Direct OpenAI credentials are not compatible with --agent claude";
   }
   return undefined;
+}
+
+function resolveGrokModelRoute(env: NodeJS.ProcessEnv): ResolvedModelRoute {
+  const credentialEnv = "XAI_API_KEY";
+  const credential = env[credentialEnv] ?? "";
+  return {
+    route: {
+      mode: "direct",
+      provider: "xai",
+      apiKeyEnv: credentialEnv,
+      baseUrl: "https://api.x.ai/v1",
+    },
+    credentialEnv,
+    credential,
+    environment: credential ? { XAI_API_KEY: credential } : {},
+    broker: {
+      host: "api.x.ai",
+      placeholderEnv: credentialEnv,
+      header: {
+        name: "authorization",
+        value: credential ? `Bearer ${credential}` : "",
+      },
+    },
+  };
 }
 
 function assertCompatible(route: ModelRoute, agentType: string): void {
@@ -96,6 +129,9 @@ export async function resolveModelRoute(
   options: ResolveModelRouteOptions,
 ): Promise<ResolvedModelRoute> {
   const env = options.env ?? process.env;
+  if (isGrokAgent(options.agentType)) {
+    return resolveGrokModelRoute(env);
+  }
   assertCompatible(route, options.agentType);
 
   if (route.mode === "local") {
@@ -251,6 +287,8 @@ export async function verifyModelRouteWithFetch(
   route: ResolvedModelRoute,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
+  if (route.route.provider === "xai" && !route.credential) return;
+
   const endpoint = modelsEndpoint(route);
   const headers: Record<string, string> = {
     [route.broker.header.name]: route.broker.header.value,

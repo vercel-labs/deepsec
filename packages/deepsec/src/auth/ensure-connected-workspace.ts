@@ -1,9 +1,10 @@
 import { join } from "node:path";
 import { getVercelOidcToken } from "@vercel/oidc";
 import { updateEnvFile } from "../env-file.js";
-import { assertSandboxCredential } from "../preflight.js";
+import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
 import {
   applyResolvedModelRoute,
+  isGrokAgent,
   type ModelRoute,
   type ModelRouteVerifier,
   type ResolvedModelRoute,
@@ -158,6 +159,9 @@ export async function ensureConnectedWorkspace(
 
   const resolvedRoutes: ResolvedModelRoute[] = [];
   for (const agentType of options.agentTypes) {
+    if (isGrokAgent(agentType)) {
+      assertAgentCredential(agentType);
+    }
     const resolved = await (deps.resolveRoute ?? resolveModelRoute)(options.modelRoute, {
       agentType,
       env,
@@ -178,6 +182,7 @@ export async function ensureConnectedWorkspace(
   );
   if (!reuseModel) {
     for (const resolved of resolvedRoutes) {
+      if (resolved.route.provider === "xai" && !resolved.credential) continue;
       await (deps.verifyModelRoute ?? verifyModelRouteWithFetch)(resolved);
     }
   }

@@ -6,7 +6,7 @@ import type { ModelRoute } from "./model-route.js";
 export const DEEPSEC_BENCHMARK_URL =
   "https://vercel.com/ai-gateway/leaderboards/deepsecbench/results.json";
 
-export type ModelHarness = "codex" | "claude" | "pi";
+export type ModelHarness = "codex" | "claude" | "pi" | "grok";
 
 export interface BenchmarkResult {
   rank: number;
@@ -108,7 +108,10 @@ function isBenchmarkResult(value: unknown): value is BenchmarkResult {
     typeof result.modelId === "string" &&
     typeof result.score === "number" &&
     typeof result.cost === "number" &&
-    (result.harness === "codex" || result.harness === "claude" || result.harness === "pi")
+    (result.harness === "codex" ||
+      result.harness === "claude" ||
+      result.harness === "pi" ||
+      result.harness === "grok")
   );
 }
 
@@ -136,7 +139,11 @@ function strongest(results: BenchmarkResult[], modelId: string): BenchmarkResult
 }
 
 function configuredModel(result: BenchmarkResult): string {
-  return result.harness === "pi" ? result.modelId : result.model;
+  if (result.harness === "pi") return result.modelId;
+  if (result.harness === "grok") {
+    return result.modelId.startsWith("xai/") ? result.modelId.slice("xai/".length) : result.model;
+  }
+  return result.model;
 }
 
 function thinkingLevel(reasoning: string): string | undefined {
@@ -161,14 +168,21 @@ export function buildRecommendedModelChoices(results: BenchmarkResult[]): Recomm
 
 function canonicalHarness(value: string | undefined): ModelHarness | undefined {
   if (value === "claude-agent-sdk" || value === "claude") return "claude";
+  if (value === "grok-build" || value === "grok") return "grok";
   if (value === "codex" || value === "pi") return value;
   return undefined;
 }
 
 function compatibleHarness(route: ModelRoute, requested?: string): ModelHarness | undefined {
-  if (route.mode === "direct") return route.provider === "anthropic" ? "claude" : "codex";
+  const requestedHarness = canonicalHarness(requested);
+  if (requestedHarness === "grok") return "grok";
+  if (route.mode === "direct") {
+    if (route.provider === "anthropic") return "claude";
+    if (route.provider === "xai" || route.provider === "grok") return "grok";
+    return "codex";
+  }
   if (route.mode === "custom") return "pi";
-  return canonicalHarness(requested);
+  return requestedHarness;
 }
 
 export function parseModelProfile(value: string | undefined): ModelProfile | undefined {
@@ -229,12 +243,14 @@ export async function resolveModelProfile(options: {
 export function inferModelHarness(slug: string): ModelHarness {
   if (/^(?:openai\/)?gpt-/i.test(slug)) return "codex";
   if (/^(?:anthropic\/)?claude-/i.test(slug)) return "claude";
+  if (/^(?:xai\/)?grok-/i.test(slug)) return "grok";
   if (slug.includes("/")) return "pi";
   return "pi";
 }
 
 function modelForHarness(slug: string, harness: ModelHarness): string {
   if (harness === "codex" && slug.startsWith("openai/")) return slug.slice("openai/".length);
+  if (harness === "grok" && slug.startsWith("xai/")) return slug.slice("xai/".length);
   if (harness === "claude" && slug.startsWith("anthropic/")) {
     return slug.slice("anthropic/".length);
   }
@@ -244,6 +260,7 @@ function modelForHarness(slug: string, harness: ModelHarness): string {
 function displayHarness(harness: ModelHarness): string {
   if (harness === "claude") return "Claude";
   if (harness === "codex") return "Codex";
+  if (harness === "grok") return "Grok Build";
   return "Pi";
 }
 
@@ -261,9 +278,23 @@ export async function promptForModelSelection(options: {
   const benchmark = await fetchBenchmarkResults(options.fetchImpl);
   const requiredHarness = compatibleHarness(options.route, options.agent);
   const recommendations = buildRecommendedModelChoices(benchmark.results);
-  const choices = recommendations.filter(
-    (choice) => !requiredHarness || choice.agent === requiredHarness,
-  );
+  const choices = recommendations
+    .map((choice) => {
+      if (
+        requiredHarness === "grok" &&
+        choice.agent !== "grok" &&
+        /^(?:xai\/)?grok-/i.test(choice.modelId)
+      ) {
+        return {
+          ...choice,
+          agent: "grok" as const,
+          harness: "grok" as const,
+          configuredModel: modelForHarness(choice.modelId, "grok"),
+        };
+      }
+      return choice;
+    })
+    .filter((choice) => !requiredHarness || choice.agent === requiredHarness);
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
     if (choices.length < recommendations.length) {
@@ -300,10 +331,12 @@ export async function promptForModelSelection(options: {
     let agent = requiredHarness ?? inferModelHarness(slug);
     if (!requiredHarness) {
       const harnessAnswer = (
-        await prompt.question(`Agent harness (codex, claude, pi) [${agent}]: `)
+        await prompt.question(`Agent harness (codex, claude, pi, grok) [${agent}]: `)
       ).trim();
       const selectedHarness = canonicalHarness(harnessAnswer || agent);
-      if (!selectedHarness) throw new Error("Agent harness must be codex, claude, or pi");
+      if (!selectedHarness) {
+        throw new Error("Agent harness must be codex, claude, pi, or grok");
+      }
       agent = selectedHarness;
     }
     const level = (await prompt.question("Thinking level [medium]: ")).trim() || "medium";

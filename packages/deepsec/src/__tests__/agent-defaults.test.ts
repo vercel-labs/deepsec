@@ -9,6 +9,8 @@ describe("defaultModelForAgent", () => {
     expect(defaultModelForAgent("codex")).toBe("gpt-5.5");
     expect(defaultModelForAgent("pi")).toBe("zai/glm-5.2");
     expect(defaultModelForAgent("claude-agent-sdk")).toBe("claude-opus-4-8");
+    expect(defaultModelForAgent("grok")).toBe("grok-4.6");
+    expect(defaultModelForAgent("grok-build")).toBe("grok-4.6");
   });
 
   it("uses the model persisted for the configured harness", () => {

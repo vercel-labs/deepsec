@@ -227,11 +227,26 @@ function hasLocalPiAgent(): boolean {
   return existsSync(join(piHome, "auth.json"));
 }
 
+function hasLocalGrokAgent(): boolean {
+  if (process.env.XAI_API_KEY) return true;
+  const homes = [process.env.GROK_HOME, join(homedir(), ".grok")].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
+  for (const home of homes) {
+    if (existsSync(join(home, "auth.json"))) return true;
+  }
+  return false;
+}
+
+function isGrok(agentType: string | undefined): boolean {
+  return agentType === "grok" || agentType === "grok-build";
+}
+
 // Built-in backends we know how to credential-check. Agents registered
 // via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
 // their own credential resolution, so we skip the check for anything
 // other than these.
-const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi"]);
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi", "grok"]);
 
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
@@ -307,6 +322,19 @@ export function assertAgentCredential(
       `Missing AI credentials for --agent pi.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
+        `  Setup: ${SETUP_DOC_URL}`,
+    );
+  }
+
+  if (isGrok(agentType)) {
+    if (process.env.XAI_API_KEY) return;
+    if (!options.inSandbox && hasLocalGrokAgent()) return;
+    throw new Error(
+      `Missing AI credentials for --agent grok.\n` +
+        `\n` +
+        `  Option A:  export XAI_API_KEY=xai-…   (from https://console.x.ai)\n` +
+        `  Option B:  run \`grok login\` once on this machine\n` +
+        `  Ensure the \`grok\` CLI is on PATH (or set GROK_EXECUTABLE).\n` +
         `  Setup: ${SETUP_DOC_URL}`,
     );
   }
