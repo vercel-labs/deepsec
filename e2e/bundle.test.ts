@@ -186,7 +186,9 @@ export default defineConfig({
       expect(stdout).toContain("webapp-debug-flag");
       expect(stdout).toContain("webapp-route-no-rate-limit");
     } finally {
-      fs.rmSync(link, { force: true });
+      try {
+        fs.unlinkSync(link);
+      } catch {}
       fs.rmSync(path.join(sampleDir, "data"), { recursive: true, force: true });
     }
   });
