@@ -77,7 +77,7 @@ importers:
         version: 19.2.8
       tar:
         specifier: ^7.5.20
-        version: 7.5.20
+        version: 7.5.21
     devDependencies:
       '@deepsec/core':
         specifier: workspace:*
@@ -12639,8 +12639,8 @@ packages:
       - react-native-b4a
     dev: false
 
-  /tar@7.5.20:
-    resolution: {integrity: sha512-9FcyK4PA6+WbzlTM9WhQm6vB5W7cP7dUiPsv1g7YDwEQnQ1CGpK3MGlKk/ITVWMk05kHZuBhmVhiv8LZoy/PFQ==}
+  /tar@7.5.21:
+    resolution: {integrity: sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==}
     engines: {node: '>=18'}
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
