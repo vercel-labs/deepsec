@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     name: "e2e",
+    globalSetup: ["./global-setup.ts"],
     include: ["**/*.test.ts"],
     testTimeout: 30_000,
     // The live-sandbox test spawns the bundled CLI for ~5+ minutes
