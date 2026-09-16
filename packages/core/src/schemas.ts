@@ -282,6 +282,10 @@ export const runMetaSchema = z.object({
     fixed: z.number().optional(),
     uncertain: z.number().optional(),
     duplicates: z.number().optional(),
+    findingsRequested: z.number().optional(),
+    findingsUnresolved: z.number().optional(),
+    batchesTotal: z.number().optional(),
+    batchesCompleted: z.number().optional(),
   }),
 });
 

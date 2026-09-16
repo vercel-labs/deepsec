@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { defineConfig, type FileRecord, setLoadedConfig } from "@deepsec/core";
+import { defineConfig, type FileRecord, readRunMeta, setLoadedConfig } from "@deepsec/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { QuotaExhaustedError } from "../agents/shared.js";
 import { process as processProject, revalidate } from "../index.js";
@@ -1754,5 +1754,93 @@ describe("revalidate() reconciliation, repair, and adaptive splitting", () => {
     const after = fx.readRecord("app.ts");
     expect(after.findings[0].revalidation?.verdict).toBe("accepted-risk");
     expect(after.findings[0].revalidation?.reasoning).toBe("team decision");
+  });
+});
+
+describe("run record fidelity for truncated revalidations", () => {
+  let prevDataRoot: string | undefined;
+
+  beforeEach(() => {
+    prevDataRoot = process.env.DEEPSEC_DATA_ROOT;
+  });
+
+  afterEach(() => {
+    if (prevDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+    else process.env.DEEPSEC_DATA_ROOT = prevDataRoot;
+    setLoadedConfig(defineConfig({ projects: [] }));
+  });
+
+  it("does not record a quota-truncated revalidation as a completed run", async () => {
+    const fx = setupProject({ files: ["one/a.ts", "two/b.ts"] });
+    for (const f of ["one/a.ts", "two/b.ts"]) {
+      const r = pendingRecord(fx.projectId, f);
+      r.status = "analyzed";
+      r.findings = [
+        {
+          severity: "HIGH",
+          vulnSlug: "auth-bypass",
+          title: `bug in ${f}`,
+          description: "x",
+          lineNumbers: [1],
+          recommendation: "x",
+          confidence: "high",
+        },
+      ];
+      r.analysisHistory = [
+        {
+          runId: "earlier",
+          investigatedAt: new Date().toISOString(),
+          durationMs: 1,
+          agentType: "stub",
+          model: "stub",
+          modelConfig: {},
+          findingCount: 1,
+          phase: "process",
+        },
+      ];
+      fx.writeRecord(r);
+    }
+
+    let calls = 0;
+    const stub = new StubAgent({
+      async *revalidateImpl() {
+        calls++;
+        throw new QuotaExhaustedError("openai-quota", "insufficient_quota");
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    // batchSize 1 over two files gives two batches, so the abort has a
+    // batch left to abandon.
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 1,
+    });
+
+    // In memory the truncation is fully known.
+    expect(calls).toBe(1);
+    expect(result.quotaExhausted?.source).toBe("openai-quota");
+    expect(result.revalidated).toBe(0);
+    // Only the batch that ran is counted, so the returned denominator
+    // cannot reveal the abandoned batch either.
+    expect(result.requested).toBe(1);
+
+    // The run record is what outlives the terminal, and it must not
+    // present a truncated run as a finished one.
+    const meta = readRunMeta(fx.projectId, result.runId);
+    expect(meta.phase).not.toBe("done");
+    // Coverage, not verdicts: one batch of two was attempted, and the
+    // finding it claimed went back unresolved.
+    expect(meta.stats.batchesTotal).toBe(2);
+    expect(meta.stats.batchesCompleted).toBe(1);
+    expect(meta.stats.findingsRequested).toBe(1);
+    expect(meta.stats.findingsUnresolved).toBe(1);
   });
 });
