@@ -175,6 +175,41 @@ export const TECH_HIGHLIGHTS: TechHighlight[] = [
       "`redirect_to params[:return_to]` is an open redirect; check for an allowlist",
     ],
   },
+  {
+    tag: "grpc-ruby",
+    title: "Ruby gRPC",
+    languages: ["ruby"],
+    bullets: [
+      "`class X < Some::Service` and `GRPC::GenericService` define public RPC methods; each method needs explicit auth + authorization",
+      "`GRPC::ServerInterceptor` is the per-RPC gate — confirm it wraps every method and streaming mode",
+      "`call.metadata` carries attacker-controlled headers/tokens; verify JWT/API keys before using request fields",
+      "`request` message fields are untrusted even when protobuf-typed — check SQL, subprocess, filesystem, and HTTP sinks",
+      "`add_http2_port`, `server.handle`, and `run_till_terminated` mark the exposed server boundary",
+      "`async-grpc` runs work in fibers; avoid shared mutable auth/session state across concurrent RPCs",
+    ],
+  },
+  {
+    tag: "falcon-ruby",
+    title: "Ruby Falcon",
+    languages: ["ruby"],
+    bullets: [
+      "Falcon exposes Rack/async-http apps; `config.ru` is the deployment boundary but auth still belongs in the app path",
+      "`Async::HTTP`, `Async::Container`, and `Async::Service` bootstrap long-lived services — verify what is externally reachable",
+      "Per-route or per-RPC auth must run inside the app, not only in a front proxy or service manager",
+      "Fiber concurrency makes globals/class vars risky for tenant, user, or request-scoped state",
+    ],
+  },
+  {
+    tag: "async-websocket",
+    title: "Ruby async-websocket",
+    languages: ["ruby"],
+    bullets: [
+      "`Async::WebSocket::Adapters::Rack.open` upgrades to a long-lived public connection; authenticate during the handshake",
+      "`connection.read` / `message.buffer` are attacker-controlled per-message inputs — validate every message shape",
+      "Authorization must be checked for each privileged message/action, not just once at connection open",
+      "WebSocket loops need rate limits and close/error handling to avoid unbounded work or leaked exceptions",
+    ],
+  },
 
   // --- Go frameworks ---
   {

@@ -57,6 +57,31 @@ function listDir(rootPath: string, rel: string): string[] {
  */
 type Detector = (rootPath: string, cache: Map<string, string | null>) => string[];
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function gemfileHas(content: string | null, gemName: string): boolean {
+  if (!content) return false;
+  const gem = escapeRegExp(gemName);
+  const gemLine = new RegExp(`^\\s*gem\\s+["']${gem}["'](?:\\s|,|\\)|$)`);
+
+  for (const rawLine of content.split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const line = rawLine.replace(/#.*$/, "");
+    if (gemLine.test(line)) return true;
+  }
+
+  return false;
+}
+
+function lockfileHas(content: string | null, gemName: string): boolean {
+  if (!content) return false;
+  const gem = escapeRegExp(gemName);
+  return new RegExp(`^ {4}${gem} \\(\\d`, "m").test(content);
+}
+
 const detectors: Detector[] = [
   // --- Node / TS / JS ecosystems ---
   (root, cache) => {
@@ -187,6 +212,18 @@ const detectors: Detector[] = [
     if (/\bgrape\b/.test(haystack)) tags.push("grape");
     if (/\bhanami\b/.test(haystack)) tags.push("hanami");
     if (/\broda\b/.test(haystack)) tags.push("roda");
+    if (gemfileHas(gemfile, "async-grpc") || lockfileHas(lock, "async-grpc")) {
+      tags.push("async-grpc", "grpc-ruby", "grpc");
+    }
+    if (gemfileHas(gemfile, "grpc") || lockfileHas(lock, "grpc")) {
+      tags.push("grpc-ruby", "grpc");
+    }
+    if (gemfileHas(gemfile, "falcon") || lockfileHas(lock, "falcon")) {
+      tags.push("falcon-ruby");
+    }
+    if (gemfileHas(gemfile, "async-websocket") || lockfileHas(lock, "async-websocket")) {
+      tags.push("async-websocket");
+    }
     return tags;
   },
 
@@ -401,6 +438,7 @@ export function detectTech(rootPath: string): DetectedTech {
     "Pipfile",
     "Gemfile",
     "Gemfile.lock",
+    "config.ru",
     "config/routes.rb",
     "bin/rails",
     "go.mod",
