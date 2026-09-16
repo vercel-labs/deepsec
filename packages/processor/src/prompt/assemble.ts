@@ -1,3 +1,5 @@
+import type { PromptAppend } from "@deepsec/core";
+import { minimatch } from "minimatch";
 import { CORE_PROMPT } from "./core.js";
 import { highlightForTag, type TechHighlight } from "./highlights.js";
 import { noteForSlug } from "./slug-notes.js";
@@ -44,15 +46,21 @@ export interface AssembleParams {
    */
   batchLanguages?: string[];
   /**
+   * File paths of the current batch, relative to the project root. Used to
+   * scope a path-scoped `promptAppend`.
+   */
+  batchFilePaths?: string[];
+  /**
    * Optional project-specific INFO.md content (already loaded by caller).
    * Appended verbatim if present.
    */
   projectInfo?: string;
   /**
    * Optional `config.json:promptAppend` content from the project. Appended
-   * verbatim if present.
+   * verbatim if it is a string, or filtered against `batchFilePaths` if it
+   * declares paths.
    */
-  promptAppend?: string;
+  promptAppend?: PromptAppend;
 }
 
 /** Render a highlight as the section it occupies in the final prompt. */
@@ -119,6 +127,51 @@ function renderFrameworkSection(
   };
 }
 
+/**
+ * Whether a rule's globs select any file in the batch. Omitting `paths` is the
+ * documented unscoped form. Declaring it as anything but an array is a typo,
+ * and narrowing to nothing is safer there than broadcasting to every batch.
+ */
+function appliesToBatch(patterns: unknown, files: string[]): boolean {
+  if (patterns === undefined) return true;
+  if (!Array.isArray(patterns)) return false;
+  // Same options the scanner compiles declarative matcher globs with, so a
+  // leading `!` or `#` stays a literal character rather than glob syntax.
+  return files.some((file) =>
+    patterns.some(
+      (pat) =>
+        typeof pat === "string" &&
+        minimatch(file, pat, { dot: true, nocase: false, nonegate: true, nocomment: true }),
+    ),
+  );
+}
+
+/**
+ * Resolve the prompt addendum for one batch. `config.json` is hand-authored,
+ * so malformed entries are skipped rather than thrown on: one typo should not
+ * fail a whole paid run.
+ */
+export function resolvePromptAppend(
+  promptAppend: PromptAppend | undefined,
+  batchFilePaths: string[] | undefined,
+): { text: string; rulesApplied: number } {
+  if (typeof promptAppend === "string") {
+    return { text: promptAppend.trim(), rulesApplied: 0 };
+  }
+  if (!Array.isArray(promptAppend)) return { text: "", rulesApplied: 0 };
+
+  const files = batchFilePaths ?? [];
+  const texts: string[] = [];
+
+  for (const rule of promptAppend) {
+    if (typeof rule?.text !== "string") continue;
+    const text = rule.text.trim();
+    if (text.length > 0 && appliesToBatch(rule.paths, files)) texts.push(text);
+  }
+
+  return { text: texts.join("\n\n"), rulesApplied: texts.length };
+}
+
 function renderSlugSection(batchSlugs: string[]): string {
   const unique = Array.from(new Set(batchSlugs));
   const lines = unique
@@ -144,6 +197,8 @@ export interface AssembleResult {
     includedTags: string[];
     droppedToFallback: boolean;
     slugsWithNotes: number;
+    /** Matched path-scoped entries. Always 0 for the string form. */
+    promptAppendRulesApplied: number;
   };
 }
 
@@ -158,15 +213,17 @@ export interface AssembleResult {
  *   ## Slug-specific reviewer notes
  *     - `slug`: one sentence
  *   [project INFO.md, verbatim]
- *   [config.json:promptAppend, verbatim]
+ *   [config.json:promptAppend, verbatim or path-scoped]
  *
  * Highlights are scoped to the techs that apply (from detectedTags); slug
- * notes are scoped to slugs that appear in the current batch. Both
- * sections are dropped (or shrunk to a fallback line) when their content
+ * notes are scoped to slugs that appear in the current batch. A
+ * path-scoped promptAppend is filtered against the batch's file paths.
+ * Sections are dropped (or shrunk to a fallback line) when their content
  * is empty or exceeds the size budget.
  */
 export function assemblePrompt(params: AssembleParams): AssembleResult {
-  const { detectedTags, batchSlugs, batchLanguages, projectInfo, promptAppend } = params;
+  const { detectedTags, batchSlugs, batchLanguages, batchFilePaths, projectInfo, promptAppend } =
+    params;
 
   const sections: string[] = [CORE_PROMPT];
 
@@ -183,8 +240,9 @@ export function assemblePrompt(params: AssembleParams): AssembleResult {
   if (projectInfo && projectInfo.trim().length > 0) {
     sections.push(`---\n\n${projectInfo.trim()}`);
   }
-  if (promptAppend && promptAppend.trim().length > 0) {
-    sections.push(`---\n\n${promptAppend.trim()}`);
+  const appended = resolvePromptAppend(promptAppend, batchFilePaths);
+  if (appended.text.length > 0) {
+    sections.push(`---\n\n${appended.text}`);
   }
 
   const prompt = sections.join("\n\n");
@@ -201,6 +259,7 @@ export function assemblePrompt(params: AssembleParams): AssembleResult {
       slugsWithNotes: slugSection
         ? slugSection.split("\n").filter((l) => l.startsWith("- ")).length
         : 0,
+      promptAppendRulesApplied: appended.rulesApplied,
     },
   };
 }

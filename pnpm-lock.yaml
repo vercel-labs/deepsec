@@ -127,6 +127,9 @@ importers:
       jsonrepair:
         specifier: ^3.14.0
         version: 3.14.0
+      minimatch:
+        specifier: ^10.0.0
+        version: 10.2.5
 
   packages/scanner:
     dependencies:

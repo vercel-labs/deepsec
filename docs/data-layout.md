@@ -49,7 +49,7 @@ Optional. Read by `scan` and the AI agents.
 | Field | Type | Purpose |
 |---|---|---|
 | `priorityPaths` | `string[]` | Path prefixes processed first. |
-| `promptAppend` | `string` | Free-form text appended to the system prompt for this project. |
+| `promptAppend` | `string \| PromptAppendRule[]` | Free-form text appended to the system prompt. An array scopes each entry to the paths it declares — see [configuration](configuration.md#promptappend). |
 | `ignorePaths` | `string[]` | Glob patterns to skip during scan. |
 
 ## INFO.md

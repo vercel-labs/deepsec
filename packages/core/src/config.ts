@@ -8,6 +8,19 @@ import type {
   PeopleProvider,
 } from "./plugin.js";
 
+/**
+ * One entry of a path-scoped prompt addendum. An entry with no `paths`
+ * always applies. Globs match the file path relative to the project root,
+ * the same base the scanner uses for a matcher's `filePatterns`.
+ */
+export interface PromptAppendRule {
+  paths?: string[];
+  text: string;
+}
+
+/** Free-form prompt addendum, applied to every batch or scoped by path. */
+export type PromptAppend = string | PromptAppendRule[];
+
 /** A project the user wants to scan. */
 export interface ProjectDeclaration {
   id: string;
@@ -18,7 +31,7 @@ export interface ProjectDeclaration {
   /** Markdown injected into the AI prompt as repo context (replaces `data/<id>/INFO.md`). */
   infoMarkdown?: string;
   /** Free-form text appended to the AI prompt for this project. */
-  promptAppend?: string;
+  promptAppend?: PromptAppend;
   /** Path prefixes that should be processed before others. */
   priorityPaths?: string[];
 }

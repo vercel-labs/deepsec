@@ -38,6 +38,8 @@ export type {
   Person,
   ProjectConfig,
   ProjectDeclaration,
+  PromptAppend,
+  PromptAppendRule,
   RefusalReport,
   Revalidation,
   RevalidationVerdict,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { FileRecord, Severity } from "@deepsec/core";
+import type { FileRecord, PromptAppend, Severity } from "@deepsec/core";
 import {
   acquireProcessLock,
   completeRun,
@@ -9,6 +9,7 @@ import {
   dataDir,
   defaultConcurrency,
   ensureFindingIds,
+  findProject,
   getRegistry,
   isPidAlive,
   loadAllFileRecords,
@@ -33,7 +34,7 @@ import type {
 } from "./agents/types.js";
 import { batchCandidates } from "./batch.js";
 import { enrichFileRecord } from "./enrich.js";
-import { assemblePrompt } from "./prompt/assemble.js";
+import { assemblePrompt, resolvePromptAppend } from "./prompt/assemble.js";
 import { languagesForBatch } from "./prompt/file-language.js";
 import {
   buildAliasMap,
@@ -230,13 +231,15 @@ export async function process(params: {
   const projectConfigJsonPath = path.join(dataDir(projectId), "config.json");
   let projectConfig: {
     priorityPaths?: string[];
-    promptAppend?: string;
+    promptAppend?: PromptAppend;
   } = {};
   try {
     projectConfig = JSON.parse(fs.readFileSync(projectConfigJsonPath, "utf-8"));
   } catch {
     // No config.json — that's fine
   }
+  // `config.json` wins over the declaration when both carry the field.
+  const promptAppend = projectConfig.promptAppend ?? findProject(projectId)?.promptAppend;
 
   // Tech detection result drives per-batch threat highlights. Read once
   // from `data/<id>/tech.json` (written by `scan()`); empty list when the
@@ -254,12 +257,10 @@ export async function process(params: {
    *     batch-slug notes, so the prompt adapts to what we detected.
    */
   const buildBatchPrompt = (batch: FileRecord[]): string => {
+    const batchFilePaths = batch.map((r) => r.filePath);
     if (customPromptTemplate !== undefined) {
-      let p = customPromptTemplate;
-      if (projectConfig.promptAppend) {
-        p += "\n" + projectConfig.promptAppend;
-      }
-      return p;
+      const { text } = resolvePromptAppend(promptAppend, batchFilePaths);
+      return text ? `${customPromptTemplate}\n${text}` : customPromptTemplate;
     }
     const batchSlugs = Array.from(
       new Set(batch.flatMap((r) => r.candidates.map((c) => c.vulnSlug))),
@@ -269,13 +270,14 @@ export async function process(params: {
     // files in a polyglot Next.js + Django repo gets the Django pack
     // but not the Next.js pack, even though both are project-level
     // detected tags.
-    const batchLanguages = languagesForBatch(batch.map((r) => r.filePath));
+    const batchLanguages = languagesForBatch(batchFilePaths);
     const { prompt } = assemblePrompt({
       detectedTags,
       batchSlugs,
       batchLanguages,
+      batchFilePaths,
       projectInfo,
-      promptAppend: projectConfig.promptAppend,
+      promptAppend,
     });
     return prompt;
   };

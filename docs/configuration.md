@@ -77,8 +77,65 @@ instead of hand-editing it.
 | `root` | `string` | yes | Absolute or relative path to the codebase. |
 | `githubUrl` | `string` | no | `https://github.com/owner/repo/blob/branch` — used in exports for clickable links. Auto-detected from `git remote` when omitted. |
 | `infoMarkdown` | `string` | no | Repo context injected into AI prompts. Overrides `data/<id>/INFO.md` if both are present. |
-| `promptAppend` | `string` | no | Free-form text appended to the system prompt for this project. |
+| `promptAppend` | `string \| PromptAppendRule[]` | no | Free-form text appended to the system prompt. A string applies to every batch. An array scopes each entry to the paths it declares. See [promptAppend](#promptappend). |
 | `priorityPaths` | `string[]` | no | Path prefixes to process first. |
+
+## promptAppend
+
+A plain string is appended to the prompt for every batch:
+
+```ts
+promptAppend: "Treat anything under `legacy/` as untrusted input."
+```
+
+Use the array form when a checklist belongs to one part of the codebase.
+Each entry is included only for batches containing a file that matches one
+of its `paths`, so guidance written for one surface stays off unrelated
+files:
+
+```ts
+promptAppend: [
+  { paths: ["apps/web/**"], text: "Confirm nothing renders stored HTML without escaping." },
+  { paths: ["packages/db/**"], text: "Confirm every query is parameterized." },
+  { paths: ["infra/**"], text: "Confirm no bucket or security group is world-readable." },
+]
+```
+
+An entry with no `paths` is unscoped and applies to every batch, so standing
+guidance and path-scoped guidance can live in one list:
+
+```ts
+promptAppend: [
+  { text: "Flag any logger that swallows errors." },
+  { paths: ["packages/db/**"], text: "Confirm every query is parameterized." },
+]
+```
+
+Matched entries are joined in declaration order. Scoping is per batch, not
+per file: a batch mixing `apps/web/` and `packages/db/` files carries both
+entries. Lower `--batch-size` to narrow it further.
+
+### Globs
+
+Patterns match the file path relative to the project root, using the same
+options the scanner compiles declarative matcher globs with.
+
+| Pattern | Matches |
+|---|---|
+| `src/**` | everything under `src/` |
+| `**/*.ts` | every `.ts` file at any depth |
+| `*.ts` | only `.ts` at the project root, because `*` never crosses a `/` |
+| `SRC/**` | nothing, patterns are case-sensitive |
+| `src\api\**` | nothing, `\` escapes and `/` is the only separator |
+
+A leading `!` or `#` is a literal character here, not negation or a comment.
+
+An entry applies when **any** of its patterns matches, so one pattern cannot
+subtract another. To narrow an entry, list the paths you want. To drop files
+from the review entirely, use the project's `ignorePaths`.
+
+An entry that declares `paths` but gives an unusable value, such as a string
+instead of an array, is skipped rather than applied everywhere.
 
 ## INFO.md
 
@@ -135,7 +192,10 @@ Some legacy fields still live in `data/<id>/config.json`:
 ```json
 {
   "priorityPaths": ["app/api/", "lib/"],
-  "promptAppend": "Pay extra attention to the booking flow.",
+  "promptAppend": [
+    { "text": "Pay extra attention to the booking flow." },
+    { "paths": ["app/api/payments/**"], "text": "Check for amount tampering." }
+  ],
   "ignorePaths": ["**/legacy/**"]
 }
 ```

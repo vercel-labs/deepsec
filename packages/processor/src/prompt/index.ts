@@ -1,5 +1,5 @@
 export type { AssembleParams, AssembleResult } from "./assemble.js";
-export { assemblePrompt } from "./assemble.js";
+export { assemblePrompt, resolvePromptAppend } from "./assemble.js";
 export { CORE_PROMPT } from "./core.js";
 export type { TechHighlight } from "./highlights.js";
 export { highlightForTag, TECH_HIGHLIGHTS } from "./highlights.js";
