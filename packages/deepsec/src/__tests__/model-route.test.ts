@@ -8,6 +8,18 @@ describe("resolveModelRoute", () => {
     ).rejects.toThrow(/machine-wide agent logins/);
   });
 
+  it("refuses to fabricate a brokered route for Grok Build credentials", async () => {
+    await expect(
+      resolveModelRoute(
+        { mode: "gateway", provider: "vercel" },
+        { agentType: "grok", env: { XAI_API_KEY: "xai-secret" } },
+      ),
+    ).rejects.toThrow(/has no brokered model route/);
+    await expect(
+      resolveModelRoute({ mode: "gateway", provider: "vercel" }, { agentType: "grok", env: {} }),
+    ).rejects.toThrow(/has no brokered model route/);
+  });
+
   it("still rejects an explicitly selected route that is incompatible with the harness", async () => {
     await expect(
       resolveModelRoute(

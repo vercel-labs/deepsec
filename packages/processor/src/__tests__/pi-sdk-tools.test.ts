@@ -130,11 +130,7 @@ describe("Pi model resolution", () => {
     expect(called).toBe(false);
   });
 
-  it("prefers the direct provider over the gateway catalog for explicit --ai-provider overrides", async () => {
-    // Since pi 0.81 the gateway catalog ships populated, so
-    // `vercel-ai-gateway/xai/grok-4.5` exists out of the box. An explicit
-    // custom provider override must still route to the direct provider,
-    // not get shadowed by the gateway entry.
+  it("prefers the direct provider for catalog Grok models with an explicit override", async () => {
     process.env.AI_GATEWAY_API_KEY = "vck_test";
     process.env.OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
     let called = false;
@@ -144,12 +140,21 @@ describe("Pi model resolution", () => {
     };
 
     const registry = await freshRegistry();
-    const model = await resolvePiModelWithDynamicGateway(registry, "xai/grok-4.5", {
-      aiProvider: "xai",
-      aiApiKeyEnv: "XAI_API_KEY",
-    });
+    const requested = registry
+      .getAll()
+      .find((candidate) => candidate.provider === "xai" && candidate.id.startsWith("grok-"));
+    expect(requested).toBeDefined();
+
+    const model = await resolvePiModelWithDynamicGateway(
+      registry,
+      `${requested!.provider}/${requested!.id}`,
+      {
+        aiProvider: "xai",
+        aiApiKeyEnv: "XAI_API_KEY",
+      },
+    );
     expect(model.provider).toBe("xai");
-    expect(model.id).toBe("grok-4.5");
+    expect(model.id).toBe(requested!.id);
     expect(called).toBe(false);
   });
 

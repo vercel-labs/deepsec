@@ -325,27 +325,19 @@ function getGatewayCredential(): string | undefined {
 }
 
 async function configureRuntimeAuth(runtime: ModelRuntime, cfg: PiAgentConfig): Promise<void> {
-  // allowNetwork: false on every call. setRuntimeApiKey's refresh
-  // otherwise inherits the runtime's network default and performs a full
-  // remote model-catalog sweep (one fetch per builtin provider against
-  // catalog.earendil.works, no timeout) — observed hanging batch startup
-  // for many minutes. Deepsec only needs the static builtin catalogs and
-  // the user's models.json.
-  const offline = { allowNetwork: false } as const;
-
   const gatewayKey = getGatewayCredential();
-  if (gatewayKey) await runtime.setRuntimeApiKey(GATEWAY_PROVIDER, gatewayKey, offline);
+  if (gatewayKey) await runtime.setRuntimeApiKey(GATEWAY_PROVIDER, gatewayKey);
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
-  if (anthropicKey) await runtime.setRuntimeApiKey("anthropic", anthropicKey, offline);
+  if (anthropicKey) await runtime.setRuntimeApiKey("anthropic", anthropicKey);
 
   const openaiKey = process.env.OPENAI_API_KEY;
-  if (openaiKey) await runtime.setRuntimeApiKey("openai", openaiKey, offline);
+  if (openaiKey) await runtime.setRuntimeApiKey("openai", openaiKey);
 
   const customProvider = cfg.aiProvider ?? modelProviderFromName(cfg.model);
   if (customProvider && cfg.aiApiKeyEnv) {
     const key = process.env[cfg.aiApiKeyEnv];
-    if (key) await runtime.setRuntimeApiKey(customProvider, key, offline);
+    if (key) await runtime.setRuntimeApiKey(customProvider, key);
   }
 }
 
@@ -535,6 +527,7 @@ async function createPiSession(projectRoot: string, cfg: PiAgentConfig): Promise
   const runtime = await ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
+    refreshOnCreate: false,
   });
   await configureRuntimeAuth(runtime, cfg);
 

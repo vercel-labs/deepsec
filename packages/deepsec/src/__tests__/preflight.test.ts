@@ -59,6 +59,28 @@ describe("applyConfiguredModelRoute", () => {
     expect(env).toEqual({});
   });
 
+  it("leaves Grok Build credentials to the Grok CLI", async () => {
+    setLoadedConfig({ projects: [], ai: { mode: "gateway", provider: "vercel" } });
+    const env = { XAI_API_KEY: "xai-secret" };
+    await expect(applyConfiguredModelRoute("grok", env)).resolves.toBeUndefined();
+    expect(env).toEqual({ XAI_API_KEY: "xai-secret" });
+  });
+
+  it("does not rehydrate a persisted xai route for Grok Build", async () => {
+    setLoadedConfig({
+      projects: [],
+      ai: {
+        mode: "direct",
+        provider: "xai",
+        apiKeyEnv: "XAI_API_KEY",
+        baseUrl: "https://api.x.ai/v1",
+      },
+    });
+    const grokEnv = { XAI_API_KEY: "xai-secret" };
+    await expect(applyConfiguredModelRoute("grok", grokEnv)).resolves.toBeUndefined();
+    expect(grokEnv).toEqual({ XAI_API_KEY: "xai-secret" });
+  });
+
   it("ignores a persisted route that is incompatible with the requested harness", async () => {
     setLoadedConfig({
       projects: [],

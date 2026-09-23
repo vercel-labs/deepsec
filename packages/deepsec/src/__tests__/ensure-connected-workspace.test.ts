@@ -112,4 +112,31 @@ describe("ensureConnectedWorkspace", () => {
       VERCEL_PROJECT_ID: "project",
     });
   });
+
+  it("does not persist a fabricated xai route for Grok Build", async () => {
+    const resolveRoute = vi.fn(async () => resolved());
+    const ensureLink = vi.fn(async () => ({
+      method: "access-token-triple" as const,
+      project: { teamId: "team", projectId: "project" },
+      link: { orgId: "team", projectId: "project" },
+    }));
+    const gateway = { mode: "gateway", provider: "vercel" } as const;
+    const result = await ensureConnectedWorkspace({
+      workspaceDir: "/workspace",
+      interactive: false,
+      modelRoute: gateway,
+      agentTypes: ["grok"],
+      env: { XAI_API_KEY: "xai-secret" },
+      dependencies: {
+        ensureLink,
+        resolveRoute,
+        now: () => new Date("2026-01-01T00:00:00Z"),
+      },
+    });
+    expect(ensureLink).not.toHaveBeenCalled();
+    expect(resolveRoute).not.toHaveBeenCalled();
+    expect(result.verification.route).toEqual(gateway);
+    expect(result.modelAuth).toEqual(gateway);
+    expect(result.sandboxReady).toBe(false);
+  });
 });
