@@ -733,7 +733,7 @@ function extractArrayCandidateForRepair(jsonPayload: string): string {
   return lastClose >= 0 ? candidate.slice(0, lastClose + 1) : candidate;
 }
 
-function parseAgentJsonArray(params: {
+export function parseAgentJsonArray(params: {
   resultText: string;
   parseFailurePrefix: string;
   nonArrayMessage: (parsed: unknown) => string;
