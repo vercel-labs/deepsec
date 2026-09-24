@@ -97,6 +97,18 @@ that single signal.
   `render_template_string`, raw SQL via `db.engine.execute(f"...")`,
   `send_from_directory` traversal, hardcoded `secret_key`.
 
+### Litestar (`litestar`)
+- **Sentinel detection:** `litestar` in deps.
+- **Matchers:** `py-litestar-route` (gated).
+- **Prompt highlights:** authentication/authorization split — the `Auth`
+  middleware populates `connection.user`, while `guards=[...]` is what blocks a
+  handler; guards are cumulative across app / `Router` / `Controller` / handler
+  and never override each other, and a handler registered directly on
+  `Litestar(route_handlers=[...])` never inherits its `Router`'s guards; the
+  security config's `exclude=[...]` is an *unanchored* regex over the full path;
+  `exclude_from_auth` opt-outs; `Router(path=..., route_handlers=[...])`
+  claims.
+
 ### Other Python detected
 `starlette`, `aiohttp`, `tornado`, `sanic`, `bottle`, `falcon`,
 `celery`, `airflow`. Detection runs; dedicated matchers are roadmap.

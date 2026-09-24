@@ -152,6 +152,7 @@ import { pyDjangoViewMatcher } from "./py-django-view.js";
 import { pyFalconResourceMatcher } from "./py-falcon-resource.js";
 import { pyFastapiRouteMatcher } from "./py-fastapi-route.js";
 import { pyFlaskRouteMatcher } from "./py-flask-route.js";
+import { pyLitestarRouteMatcher } from "./py-litestar-route.js";
 import { pyNosqlInjectionMatcher } from "./py-nosql-injection.js";
 import { pySanicRouteMatcher } from "./py-sanic-route.js";
 import { pySqlRawMatcher } from "./py-sql-raw.js";
@@ -393,6 +394,7 @@ export function createDefaultRegistry(): MatcherRegistry {
   registry.register(pyDjangoViewMatcher);
   registry.register(pyFastapiRouteMatcher);
   registry.register(pyFlaskRouteMatcher);
+  registry.register(pyLitestarRouteMatcher);
   registry.register(pyStarletteRouteMatcher);
   registry.register(pyAiohttpRouteMatcher);
   registry.register(pyTornadoHandlerMatcher);
