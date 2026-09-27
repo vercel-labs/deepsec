@@ -43,6 +43,13 @@ Deepsec remembers how far it got. Finished steps are skipped and the run
 continues where it left off. This is also how you resume after hitting a
 cost limit, losing your connection, or pressing Ctrl-C.
 
+The completion summary describes the workspace's saved results across processing
+attempts: currently analyzed files, retained findings, and recorded investigation
+costs. Revalidation costs are excluded. Retrying unfinished work or rechecking an
+older checkpoint keeps earlier results in these totals. The process run ID
+identifies the latest successful setup processing attempt, which can be empty
+when all files were already analyzed.
+
 If setup cannot cover an inventoried surface, it stops before paid AI
 processing and prints the exact inventory, state, generated-matcher, and
 resume commands. The state records matcher proposals and rejection reasons.

@@ -10,10 +10,36 @@ import { digest } from "../setup/state.js";
 const originalCwd = process.cwd();
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   process.chdir(originalCwd);
   setLoadedConfig({ projects: [] });
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+function completeRecord(record: FileRecord, runId: string) {
+  record.status = "analyzed";
+  record.findings.push({
+    severity: "HIGH",
+    vulnSlug: "public-endpoint",
+    title: `Finding in ${record.filePath}`,
+    description: "Fixture finding",
+    lineNumbers: [1],
+    recommendation: "Validate input",
+    confidence: "high",
+    producedByRunId: runId,
+  });
+  record.analysisHistory.push({
+    runId,
+    investigatedAt: "2026-09-27T00:00:00Z",
+    durationMs: 10,
+    agentType: "codex",
+    model: "test-model",
+    modelConfig: {},
+    findingCount: 1,
+    phase: "process",
+    costUsd: 1.25,
+  });
+}
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-process-checkpoint-"));
@@ -45,6 +71,7 @@ function fixture() {
     analysisHistory: [],
     status: "pending",
   } as FileRecord;
+  const records = [record];
   const analyze = vi.fn(async () => ({
     infoMarkdown:
       "# app\n\n## What this codebase does\nApp.\n\n## Auth shape\nNone.\n\n## Threat model\nPublic input.\n\n## Project-specific patterns to flag\nRoutes.\n\n## Known false-positives\nNone.",
@@ -62,18 +89,24 @@ function fixture() {
   }));
   const scan = vi.fn(async () => ({
     runId: "scan-1",
-    candidateCount: 1,
+    candidateCount: records.length,
     detected: { tags: [], sentinels: [], detectedAt: "now", rootPath: project },
     activeMatchers: ["public-endpoint"],
     skippedMatchers: [],
     languageStats: [],
   }));
-  const processCandidates = vi.fn(async () => ({
-    runId: "process-ok",
-    analysisCount: 1,
-    findingCount: 0,
-    errorBatchCount: 0,
-  }));
+  let attempt = 0;
+  const processCandidates = vi.fn(async () => {
+    const runId = `process-${++attempt}`;
+    const pending = records.filter((item) => item.status === "pending" || item.status === "error");
+    for (const item of pending) completeRecord(item, runId);
+    return {
+      runId,
+      analysisCount: pending.length,
+      findingCount: pending.length,
+      errorBatchCount: 0,
+    };
+  });
   const events: Array<{ type: string; phase?: string }> = [];
   const options = {
     workspaceDir: workspace,
@@ -92,9 +125,9 @@ function fixture() {
       analyze,
       scan,
       process: processCandidates,
-      listFiles: () => ["src/route.ts"],
+      listFiles: () => records.map((item) => item.filePath),
       fingerprint: () => "source-v1",
-      loadRecords: () => [record],
+      loadRecords: () => records,
     },
     onLog: () => undefined,
     reporter: {
@@ -108,13 +141,13 @@ function fixture() {
   };
   const stateFile = path.join(workspace, "data", "app", "setup", "setup-state.json");
   const readState = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  return { options, processCandidates, analyze, scan, events, readState, stateFile };
+  return { options, processCandidates, analyze, scan, events, readState, stateFile, records };
 }
 
 describe("process checkpoint publication", () => {
   it("reruns legacy process checkpoints while retaining completed earlier phases", async () => {
     const f = fixture();
-    await runSetupWorkflow(f.options);
+    const first = await runSetupWorkflow(f.options);
     const legacy = f.readState();
     legacy.phases.process.inputDigest = digest({
       sourceFingerprint: "source-v1",
@@ -125,13 +158,98 @@ describe("process checkpoint publication", () => {
     });
     fs.writeFileSync(f.stateFile, JSON.stringify(legacy));
 
-    await runSetupWorkflow(f.options);
+    const resumed = await runSetupWorkflow(f.options);
 
     expect(f.processCandidates).toHaveBeenCalledTimes(2);
     expect(f.analyze).toHaveBeenCalledTimes(1);
     expect(f.scan).toHaveBeenCalledTimes(1);
     expect(f.readState().phases.process.inputDigest).not.toBe(legacy.phases.process.inputDigest);
+    expect(resumed.processRunId).not.toBe(first.processRunId);
+    expect(resumed.process).toEqual({
+      analysisCount: 1,
+      findingCount: 1,
+      errorBatchCount: 0,
+      findingsBySeverity: { HIGH: 1 },
+      costUsd: 1.25,
+    });
+    expect(f.records[0].findings[0].producedByRunId).toBe(first.processRunId);
+    expect((await runSetupWorkflow(f.options)).process).toEqual(resumed.process);
+    expect(f.processCandidates).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains completed batches in the summary after retrying failed records", async () => {
+    const f = fixture();
+    f.records.push({ ...structuredClone(f.records[0]), filePath: "src/second.ts" });
+    fs.writeFileSync(
+      path.join(f.options.projectRoot, "src", "second.ts"),
+      "export const value = 1;\n",
+    );
+    f.processCandidates.mockImplementationOnce(async () => {
+      completeRecord(f.records[0], "partial-run");
+      f.records[1].status = "error";
+      return { runId: "partial-run", analysisCount: 1, findingCount: 1, errorBatchCount: 1 };
+    });
+
+    await expect(runSetupWorkflow(f.options)).rejects.toThrow("1 failed batch");
+    const resumed = await runSetupWorkflow(f.options);
+
+    expect(resumed.processRunId).not.toBe("partial-run");
+    expect(f.records.map((record) => record.analysisHistory.length)).toEqual([1, 1]);
+    expect(resumed.process).toEqual({
+      analysisCount: 2,
+      findingCount: 2,
+      errorBatchCount: 0,
+      findingsBySeverity: { HIGH: 2 },
+      costUsd: 2.5,
+    });
+    expect((await runSetupWorkflow(f.options)).process).toEqual(resumed.process);
+    expect(f.processCandidates).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts retained findings and process costs without counting revalidation as investigation", async () => {
+    const f = fixture();
     await runSetupWorkflow(f.options);
+    const record = f.records[0];
+    const entry = record.analysisHistory[0];
+    record.analysisHistory.push(
+      { ...entry, runId: "older-process", phase: undefined, costUsd: 0.75 },
+      { ...entry, runId: "revalidation", phase: "revalidate", costUsd: 99 },
+    );
+    record.findings.push({
+      ...record.findings[0],
+      title: "Legacy finding",
+      producedByRunId: undefined,
+    });
+
+    expect((await runSetupWorkflow(f.options)).process).toEqual({
+      analysisCount: 1,
+      findingCount: 2,
+      errorBatchCount: 0,
+      findingsBySeverity: { HIGH: 2 },
+      costUsd: 2,
+    });
+  });
+
+  it("publishes the successful checkpoint and replacement run ID together", async () => {
+    const f = fixture();
+    const first = await runSetupWorkflow(f.options);
+    const stale = f.readState();
+    stale.phases.process.inputDigest = "stale";
+    fs.writeFileSync(f.stateFile, JSON.stringify(stale));
+    const emit = f.options.reporter.emit;
+    let publishedRunId: string | undefined;
+    f.options.reporter.emit = (event) => {
+      emit(event);
+      if (event.type === "phase-complete" && event.phase === "process") {
+        publishedRunId = f.readState().processRunId;
+      }
+    };
+
+    const resumed = await runSetupWorkflow(f.options);
+
+    expect(resumed.processRunId).not.toBe(first.processRunId);
+    expect(publishedRunId).toBe(resumed.processRunId);
+    expect((await runSetupWorkflow(f.options)).processRunId).toBe(resumed.processRunId);
     expect(f.processCandidates).toHaveBeenCalledTimes(2);
   });
 
@@ -183,7 +301,7 @@ describe("process checkpoint publication", () => {
     );
 
     const resumed = await runSetupWorkflow(f.options);
-    expect(resumed.processRunId).toBe("process-ok");
+    expect(resumed.processRunId).toBe("process-1");
     expect(f.processCandidates).toHaveBeenCalledTimes(2);
     expect(f.analyze).toHaveBeenCalledTimes(1);
     expect(f.scan).toHaveBeenCalledTimes(1);
