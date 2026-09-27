@@ -836,6 +836,7 @@ export async function runSetupWorkflow(
       agentType,
       model,
       thinkingLevel,
+      completionContract: 2,
     });
     let processResult: Awaited<ReturnType<typeof processCandidates>>;
     if (!isCheckpointCurrent(state, "process", processInput) || !state.processRunId) {
@@ -850,6 +851,7 @@ export async function runSetupWorkflow(
           onProgress: (progress) => reportProcessProgress(reporter, progress),
         });
         if (durationController.signal.aborted) throw durationLimitError();
+        workflowSignal.throwIfAborted();
         if (result.costLimitReached) {
           throw new SetupProtocolError({
             code: "COST_LIMIT_REACHED",
@@ -857,6 +859,12 @@ export async function runSetupWorkflow(
             message: `AI investigation reached the $${result.costLimitReached.limitUsd.toFixed(2)} cost limit and stopped at a resumable checkpoint.`,
             details: result.costLimitReached,
           });
+        }
+        // Validate before runPhase publishes a successful durable checkpoint.
+        if (result.errorBatchCount > 0) {
+          throw new Error(
+            `AI processing completed with ${result.errorBatchCount} failed batch(es)`,
+          );
         }
         return result;
       });
@@ -876,11 +884,6 @@ export async function runSetupWorkflow(
       });
     }
 
-    if (processResult.errorBatchCount > 0) {
-      throw new Error(
-        `AI processing completed with ${processResult.errorBatchCount} failed batch(es)`,
-      );
-    }
     const completedRecords = services.loadRecords(options.projectId);
     const completedHistory = completedRecords.flatMap((record) =>
       record.analysisHistory.filter((entry) => entry.runId === processResult.runId),
