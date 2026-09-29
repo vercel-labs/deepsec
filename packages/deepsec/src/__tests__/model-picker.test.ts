@@ -70,6 +70,7 @@ describe("DeepSecBench model picker", () => {
     expect(inferModelHarness("openai/gpt-5.6-sol")).toBe("codex");
     expect(inferModelHarness("anthropic/claude-opus-5")).toBe("claude");
     expect(inferModelHarness("xai/grok-4.5")).toBe("pi");
+    expect(inferModelHarness("grok-4.6")).toBe("grok");
   });
   it("uses the highest-scoring combo for each recommendation and normalizes price", () => {
     const choices = buildRecommendedModelChoices(results);
@@ -154,5 +155,35 @@ describe("DeepSecBench model picker", () => {
         fetchImpl,
       }),
     ).resolves.toMatchObject({ agent: "claude", model: "claude-opus-5" });
+  });
+
+  it("remaps the bundled Grok Pi entry when --agent grok is required", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ results }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      resolveModelProfile({
+        profile: "best",
+        route: { mode: "gateway", provider: "vercel" },
+        agent: "grok",
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ agent: "grok", model: "grok-4.5" });
+  });
+
+  it("remaps the offline fallback Grok Pi entry for headless --agent grok", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("offline");
+    }) as unknown as typeof fetch;
+
+    await expect(
+      resolveModelProfile({
+        profile: "best",
+        route: { mode: "gateway", provider: "vercel" },
+        agent: "grok",
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ agent: "grok", model: "grok-4.5", live: false });
   });
 });
