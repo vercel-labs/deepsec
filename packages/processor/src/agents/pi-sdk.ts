@@ -543,6 +543,17 @@ async function createPiSession(projectRoot: string, cfg: PiAgentConfig): Promise
   const modelRegistry = new ModelRegistry(runtime);
   configureProviderOverrides(modelRegistry, cfg);
 
+  if (process.env.DEEPSEEK_API_KEY) {
+    const dsKey = process.env.DEEPSEEK_API_KEY;
+    const dsBaseUrl = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1";
+    authStorage.setRuntimeApiKey("deepseek", dsKey);
+    modelRegistry.registerProvider("deepseek", {
+      baseUrl: dsBaseUrl,
+      apiKey: dsKey,
+      api: "openai-completions",
+    });
+  }
+
   const modelName = cfg.model ?? DEFAULT_MODEL;
   const model = await resolvePiModelWithDynamicGateway(modelRegistry, modelName, cfg);
   const settingsManager = SettingsManager.inMemory({
