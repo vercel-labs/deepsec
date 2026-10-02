@@ -297,6 +297,20 @@ describe("pipeline e2e", () => {
         .filter((e) => typeof e === "string" && e.endsWith(".md"));
       expect(mdFiles.length).toBeGreaterThan(0);
 
+      // export --format sarif — SARIF 2.1.0 for GitHub Code Scanning.
+      const sarifPath = path.join(workspaceDir, "findings.sarif");
+      const exportSarif = runBundle(
+        ["export", "--format", "sarif", "--out", sarifPath],
+        workspaceDir,
+      );
+      expect(exportSarif.status, `export-sarif stderr: ${exportSarif.stderr}`).toBe(0);
+      const sarif = JSON.parse(fs.readFileSync(sarifPath, "utf-8"));
+      expect(sarif.version).toBe("2.1.0");
+      expect(sarif.runs[0].tool.driver.name).toBe("deepsec");
+      expect(sarif.runs[0].results.length).toBeGreaterThan(0);
+      expect(sarif.runs[0].results[0].ruleId).toBeDefined();
+      expect(sarif.runs[0].results[0].level).toMatch(/^(error|warning|note)$/);
+
       // status — prints run history. Should mention both runs.
       const status = runBundle(["status"], workspaceDir);
       expect(status.status, `status stderr: ${status.stderr}`).toBe(0);
