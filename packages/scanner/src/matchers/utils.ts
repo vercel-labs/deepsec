@@ -1,5 +1,21 @@
 import type { CandidateMatch } from "@deepsec/core";
 
+const PROLOGUE_RE = /^(?:\s|\/\/[^\n]*\n?|\/\*[\s\S]*?\*\/)*/;
+
+/**
+ * True if `content` opens with the given module-level directive, allowing a
+ * leading shebang and any line/block comments above it.
+ */
+export function hasFileDirective(content: string, directive: string): boolean {
+  let body = content;
+  if (body.startsWith("#!")) {
+    const eol = body.indexOf("\n");
+    body = eol === -1 ? "" : body.slice(eol + 1);
+  }
+  body = body.replace(PROLOGUE_RE, "");
+  return body.startsWith(`"${directive}"`) || body.startsWith(`'${directive}'`);
+}
+
 /**
  * Helper to build a regex-based matcher.
  * For each pattern, scans every line and collects matches with surrounding context.

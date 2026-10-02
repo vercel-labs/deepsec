@@ -3,6 +3,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { authBypassMatcher } from "../matchers/auth-bypass.js";
 import { insecureCryptoMatcher } from "../matchers/insecure-crypto.js";
+import { serverActionMatcher } from "../matchers/js-nextjs-server-action.js";
+import { serverActionNoAuthMatcher } from "../matchers/js-nextjs-server-action-no-auth.js";
+import { allServerActionsMatcher } from "../matchers/js-nextjs-server-actions.js";
 import { missingAuthMatcher } from "../matchers/missing-auth.js";
 import { openRedirectMatcher } from "../matchers/open-redirect.js";
 import { pathTraversalMatcher } from "../matchers/path-traversal.js";
@@ -10,6 +13,7 @@ import { rceMatcher } from "../matchers/rce.js";
 import { secretsExposureMatcher } from "../matchers/secrets-exposure.js";
 import { sqlInjectionMatcher } from "../matchers/sql-injection.js";
 import { ssrfMatcher } from "../matchers/ssrf.js";
+import { hasFileDirective } from "../matchers/utils.js";
 import { xssMatcher } from "../matchers/xss.js";
 
 const FIXTURES_ROOT = path.resolve(import.meta.dirname, "../../../../fixtures/vulnerable-app/src");
@@ -119,5 +123,92 @@ describe("open-redirect matcher", () => {
     const content = readFixture("utils/redirect.ts");
     const matches = openRedirectMatcher.match(content, "src/utils/redirect.ts");
     expect(matches.length).toBeGreaterThan(0);
+  });
+});
+
+describe("hasFileDirective", () => {
+  it("matches a bare directive at the start of the file", () => {
+    expect(hasFileDirective(`"use server";\nexport async function f() {}`, "use server")).toBe(
+      true,
+    );
+  });
+
+  it("matches after a block-comment banner", () => {
+    expect(hasFileDirective(`/* Copyright 2024 */\n"use server";`, "use server")).toBe(true);
+  });
+
+  it("matches after a JSDoc banner", () => {
+    expect(hasFileDirective(`/**\n * @license MIT\n */\n"use server";`, "use server")).toBe(true);
+  });
+
+  it("matches after a line-comment header", () => {
+    expect(hasFileDirective(`// internal\n"use server";`, "use server")).toBe(true);
+  });
+
+  it("matches after a shebang", () => {
+    expect(hasFileDirective(`#!/usr/bin/env node\n"use server";`, "use server")).toBe(true);
+  });
+
+  it("matches single-quoted directives", () => {
+    expect(hasFileDirective(`/* x */\n'use server';`, "use server")).toBe(true);
+  });
+
+  it("does not match when the directive only appears inside a comment", () => {
+    expect(
+      hasFileDirective(`// "use server" is set elsewhere\nexport function f() {}`, "use server"),
+    ).toBe(false);
+  });
+
+  it("does not match when there is no directive at all", () => {
+    expect(hasFileDirective(`export function f() {}`, "use server")).toBe(false);
+  });
+
+  it("respects the requested directive name", () => {
+    expect(hasFileDirective(`/* x */\n"use client";`, "use client")).toBe(true);
+    expect(hasFileDirective(`/* x */\n"use client";`, "use server")).toBe(false);
+  });
+});
+
+describe("server-action matcher", () => {
+  it("detects exports after a leading copyright banner", () => {
+    const content = `/* Copyright 2024 Acme Corp. Apache 2.0 license. */
+"use server";
+
+export async function deleteAccount(userId: string) {
+  return userId;
+}`;
+    const matches = serverActionMatcher.match(content, "src/app/actions.ts");
+    expect(matches.length).toBe(1);
+    expect(matches[0].vulnSlug).toBe("server-action");
+    expect(matches[0].matchedPattern).toContain("file-level");
+  });
+});
+
+describe("server-action-no-auth matcher", () => {
+  it("flags banner-prefixed files with no auth call", () => {
+    const content = `// internal helpers, see SECURITY.md
+"use server";
+
+export async function transferFunds(amount: number) {
+  return amount;
+}`;
+    const matches = serverActionNoAuthMatcher.match(content, "src/app/actions.ts");
+    expect(matches.length).toBe(1);
+    expect(matches[0].matchedPattern).toContain("WITHOUT any auth call");
+  });
+});
+
+describe("all-server-actions matcher", () => {
+  it("flags every export in a file with a banner-prefixed file-level directive", () => {
+    const content = `/**
+ * @license MIT
+ */
+"use server";
+
+export async function a() {}
+export async function b() {}
+export const c = async () => {};`;
+    const matches = allServerActionsMatcher.match(content, "src/app/actions.ts");
+    expect(matches.length).toBe(3);
   });
 });
