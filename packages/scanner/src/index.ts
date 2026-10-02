@@ -644,6 +644,22 @@ export async function scanFiles(params: {
   // Reuse cached tech detection when available so repeated diff-scoped
   // scans don't re-walk the whole repo on every PR push. detectTech is
   // cheap but not free.
+  //
+  // KNOWN LIMITATION (no version invalidation): the only acceptance test is
+  // "does tech.json exist?". Nothing records which detector run produced it,
+  // so a project whose cache was written before a tag (or a whole detector)
+  // was added keeps the stale tag set here and every tech-gated matcher that
+  // depends on the new tag is silently skipped — `process --diff` in
+  // particular never re-detects, so the gap persists until something calls
+  // scan() (which always re-detects and rewrites the cache) or the operator
+  // deletes `data/<projectId>/tech.json` by hand. Consequences beyond
+  // matcher gating: new tags never reach the processor's prompt highlights,
+  // and renamed/removed tags are never evicted.
+  //
+  // Deliberately not fixed here: real invalidation is a cross-cutting change
+  // (cache schema + a detector version every matcher author must bump), so it
+  // belongs in its own change rather than the matcher PR that surfaced it.
+  // Workaround in the meantime: run `deepsec scan` once, or delete the cache.
   const absRoot = path.resolve(params.root);
   let detected = readTechJson(params.projectId);
   if (!detected) {
