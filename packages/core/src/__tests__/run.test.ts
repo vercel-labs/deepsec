@@ -202,6 +202,47 @@ describe("ensureProject", () => {
     }
   });
 
+  // Regression: on a Docker/virtiofs bind mount of a macOS host, recursive
+  // mkdir creates `data/`, then cannot see it when it looks up the child, and
+  // reports `ENOENT: mkdir 'data/<projectId>'`. ensureProject must survive it.
+  it("creates the project data dir on a filesystem with a lagging lookup", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-lagging-fs-"));
+    const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;
+    process.env.DEEPSEC_DATA_ROOT = path.join(tmp, "data");
+    const root = path.join(tmp, "project");
+    fs.mkdirSync(root);
+
+    let mkdirCalls = 0;
+    const realMkdir = fs.mkdirSync;
+    const mkdirSpy = vi.spyOn(fs, "mkdirSync").mockImplementation(((
+      target: string,
+      options: never,
+    ) => {
+      mkdirCalls += 1;
+      if (mkdirCalls === 1) {
+        const error: NodeJS.ErrnoException = new Error(
+          `ENOENT: no such file or directory, mkdir '${target}'`,
+        );
+        error.code = "ENOENT";
+        throw error;
+      }
+      return realMkdir(target, options);
+    }) as typeof fs.mkdirSync);
+
+    try {
+      const project = ensureProject("test-project", root);
+      expect(project.projectId).toBe("test-project");
+      expect(mkdirCalls).toBeGreaterThan(1);
+      mkdirSpy.mockRestore();
+      expect(fs.existsSync(path.join(process.env.DEEPSEC_DATA_ROOT, "test-project"))).toBe(true);
+    } finally {
+      mkdirSpy.mockRestore();
+      if (oldDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+      else process.env.DEEPSEC_DATA_ROOT = oldDataRoot;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("does not print git errors for non-git roots", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-ensure-project-"));
     const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;

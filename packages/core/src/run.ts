@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ensureFindingIds } from "./finding-id.js";
+import { mkdirSettled } from "./fs-settle.js";
 import {
   dataDir,
   fileRecordPath,
@@ -85,7 +86,7 @@ export function ensureProject(projectId: string, rootPath: string): ProjectConfi
     createdAt: new Date().toISOString(),
     githubUrl: detectGithubUrl(path.resolve(rootPath)),
   };
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  mkdirSettled(path.dirname(configPath));
   writeProjectConfig(configPath, config);
   return config;
 }
