@@ -21,6 +21,7 @@ const EXT_TO_LANGUAGE: Record<string, string> = {
   ".mjs": "javascript",
   ".py": "python",
   ".rb": "ruby",
+  ".ru": "ruby",
   ".php": "php",
   ".go": "go",
   ".rs": "rust",

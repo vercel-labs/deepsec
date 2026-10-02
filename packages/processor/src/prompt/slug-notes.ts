@@ -64,6 +64,8 @@ const SLUG_NOTES: Record<string, string> = {
     "Confirm the endpoint truly has no auth (not just a permissive guard) and that it returns sensitive data.",
   "service-entry-point":
     "Coarse flag — verify there's an actual auth gap, not just an internal-only handler reachable via service mesh.",
+  "proto-rpc-surface":
+    "Wire-format boundary — treat RPC request fields as untrusted and trace sensitive fields to auth, validation, and sink use.",
   "object-injection":
     "User-controlled keys into `obj[x] = v` without an allowlist enable prototype-pollution / overwriting safe defaults.",
   "spread-operator-injection":
@@ -184,6 +186,12 @@ const SLUG_NOTES: Record<string, string> = {
     "Weak entry-point candidate — confirm a `before` callback or middleware enforces auth on this Action class.",
   "rb-roda-route":
     "Weak entry-point candidate — auth must wrap the tree node, not just the leaf; confirm scope.",
+  "rb-grpc-service":
+    "Ruby gRPC entry-point candidate — confirm an interceptor or method-level check authenticates `call.metadata` and authorizes each RPC.",
+  "rb-async-websocket-handler":
+    "Async WebSocket entry-point candidate — authenticate the handshake and validate/authorize every `connection.read` message.",
+  "rb-falcon-rack-app":
+    "Falcon/Rack bootstrap candidate — confirm exposed async services route requests through app-level auth, not only deployment config.",
 
   "go-gorilla-route":
     "Weak entry-point candidate — confirm `router.Use(auth)` covers this subrouter; `PathPrefix(...).Handler(other)` doesn't inherit.",
