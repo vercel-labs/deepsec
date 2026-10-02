@@ -33,6 +33,10 @@ function spawnShutdownChild(opts: {
   `;
   const child = spawn(TSX, ["-e", script], {
     env: { ...process.env, DEEPSEC_DATA_ROOT: opts.dataRoot },
+    // detached: true puts the child in its own process group so that
+    // process.kill(0, "SIGKILL") inside the child only kills the child's
+    // group and does not propagate SIGKILL back to the test runner.
+    detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
   const ready = new Promise<void>((resolve, reject) => {
@@ -85,10 +89,12 @@ function writeRunningMeta(opts: { dataRoot: string; projectId: string; runId: st
 }
 
 describe("shutdown handler exit path", () => {
-  it("exits the process on SIGINT when no other handler is installed", async () => {
+  it("kills the process on SIGINT", async () => {
     // The regression this guards: attaching a SIGINT listener
     // suppresses Node's default termination. If the listener doesn't
-    // call process.exit, the process hangs after Ctrl+C.
+    // call process.exit (or kill), the process hangs after Ctrl+C.
+    // The handler now uses process.kill(0, "SIGKILL") to guarantee
+    // termination even when other listeners are registered.
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-shutdown-"));
     const projectId = "test-proj";
     const runId = "20260101000000-aaaaaaaaaaaaaaaa";
@@ -97,8 +103,9 @@ describe("shutdown handler exit path", () => {
     const { child, ready } = await spawnShutdownChild({ dataRoot, projectId, runId });
     await ready;
     child.kill("SIGINT");
-    const { code } = await waitForExit(child, 5000);
-    expect(code).toBe(130);
+    const { signal } = await waitForExit(child, 5000);
+    // process.kill(0, "SIGKILL") terminates via SIGKILL, not a numeric exit code.
+    expect(signal).toBe("SIGKILL");
 
     // And the run should have been flipped to error by the handler.
     const meta = JSON.parse(
@@ -107,7 +114,7 @@ describe("shutdown handler exit path", () => {
     expect(meta.phase).toBe("error");
   });
 
-  it("exits the process on SIGTERM when no other handler is installed", async () => {
+  it("kills the process on SIGTERM", async () => {
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-shutdown-"));
     const projectId = "test-proj";
     const runId = "20260101000000-bbbbbbbbbbbbbbbb";
@@ -116,16 +123,16 @@ describe("shutdown handler exit path", () => {
     const { child, ready } = await spawnShutdownChild({ dataRoot, projectId, runId });
     await ready;
     child.kill("SIGTERM");
-    const { code } = await waitForExit(child, 5000);
-    expect(code).toBe(143);
+    const { signal } = await waitForExit(child, 5000);
+    expect(signal).toBe("SIGKILL");
   });
 
-  it("defers exit when another SIGINT listener is installed", async () => {
-    // When another handler is registered (the sandbox shutdown handler
-    // in the real CLI), our handler must NOT exit — that handler needs
-    // async cleanup time and will exit itself. We simulate the
-    // co-listener with a dummy that exits with a sentinel code so the
-    // test can tell whose exit path fired.
+  it("still flushes runs and kills the process even when another SIGINT listener is installed", async () => {
+    // Previously the handler deferred to co-listeners (e.g. the sandbox
+    // shutdown handler). This caused hangs when a co-listener (such as
+    // an agent SDK) was registered but never called process.exit().
+    // Now the handler always kills the process group via SIGKILL after
+    // flushing run metadata, regardless of other listeners.
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-shutdown-"));
     const projectId = "test-proj";
     const runId = "20260101000000-cccccccccccccccc";
@@ -134,18 +141,15 @@ describe("shutdown handler exit path", () => {
     const script = `
       import { registerActiveRun } from ${JSON.stringify(REGISTER_HOOK)};
       registerActiveRun(${JSON.stringify(projectId)}, ${JSON.stringify(runId)});
-      // Install a co-listener that takes ownership of exit, like the
-      // sandbox shutdown handler does in production.
-      process.on("SIGINT", () => {
-        // Give the core handler a chance to run first, then exit
-        // with a sentinel code that proves WE owned the exit path.
-        setTimeout(() => process.exit(42), 50);
-      });
+      // Simulate a co-listener (e.g. agent SDK) that is registered but
+      // never calls process.exit().
+      process.on("SIGINT", () => { /* intentionally hangs */ });
       process.stdout.write("READY\\n");
       setInterval(() => {}, 1000);
     `;
     const child = spawn(TSX, ["-e", script], {
       env: { ...process.env, DEEPSEC_DATA_ROOT: dataRoot },
+      detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
     await new Promise<void>((resolve, reject) => {
@@ -157,11 +161,11 @@ describe("shutdown handler exit path", () => {
       child.on("error", reject);
     });
     child.kill("SIGINT");
-    const { code } = await waitForExit(child, 5000);
-    // Sentinel proves the OTHER listener exited the process, not ours.
-    expect(code).toBe(42);
+    const { signal } = await waitForExit(child, 5000);
+    // SIGKILL guarantees termination even though the co-listener hangs.
+    expect(signal).toBe("SIGKILL");
 
-    // And the run was still flipped to error by the core handler.
+    // Run was still flipped to error before the kill.
     const meta = JSON.parse(
       fs.readFileSync(path.join(dataRoot, projectId, "runs", `${runId}.json`), "utf-8"),
     );

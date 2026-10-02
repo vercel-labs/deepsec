@@ -223,17 +223,13 @@ function installShutdownHandlers(): void {
   shutdownHandlersInstalled = true;
   const handler = (signal: NodeJS.Signals) => {
     flushActiveRuns();
-    // Attaching a listener for SIGINT/SIGTERM suppresses Node's
-    // default termination, so we have to provide an exit path
-    // ourselves or the process hangs after Ctrl+C. When another
-    // listener is also registered (e.g. the sandbox shutdown handler
-    // in `deepsec/sandbox/shutdown.ts`), defer to it — that handler
-    // needs async cleanup time and calls process.exit() itself once
-    // its sandboxes have stopped (or its 10s timeout fires).
-    //
-    // listenerCount counts the currently-executing handler too, so
-    // "1" means we're the only listener.
-    if (process.listenerCount(signal) <= 1) {
+    // Attaching a listener for SIGINT/SIGTERM suppresses Node's default termination, so we
+    // have to provide an exit path ourselves or the process hangs after Ctrl+C. Kill the
+    // process group so co-listeners that never call process.exit() (e.g. some agent SDKs)
+    // cannot leave the CLI hanging.
+    try {
+      process.kill(0, "SIGKILL");
+    } catch {
       // Conventional signal exit codes: 128 + signal number
       // (SIGINT=2 → 130, SIGTERM=15 → 143).
       process.exit(signal === "SIGINT" ? 130 : 143);
@@ -243,8 +239,8 @@ function installShutdownHandlers(): void {
   process.on("SIGTERM", handler);
   // beforeExit covers the case where a thrown error bubbles out of
   // `process()` / `revalidate()` without `unregisterActiveRun` being
-  // called — without this, the run would be stranded at `phase:
-  // "running"` even though the node process is on its way out.
+  // called — without this, the run would be stranded at `phase: "running"`
+  // even though the node process is on its way out.
   process.on("beforeExit", flushActiveRuns);
 }
 
