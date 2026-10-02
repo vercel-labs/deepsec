@@ -446,6 +446,17 @@ export async function scan(params: {
   languageStats: LanguageStats[];
 }> {
   const registry = buildMergedRegistry();
+
+  if (params.matcherSlugs) {
+    const unknown = registry.unknownSlugs(params.matcherSlugs);
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown matcher slug${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}.\n` +
+          `  Available matchers: ${registry.slugs().sort().join(", ")}`,
+      );
+    }
+  }
+
   const allSelected = params.matcherSlugs
     ? registry.getBySlugs(params.matcherSlugs)
     : registry.getAll();
@@ -631,6 +642,17 @@ export async function scanFiles(params: {
   skippedMatchers: string[];
 }> {
   const registry = buildMergedRegistry();
+
+  if (params.matcherSlugs) {
+    const unknown = registry.unknownSlugs(params.matcherSlugs);
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown matcher slug${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}.\n` +
+          `  Available matchers: ${registry.slugs().sort().join(", ")}`,
+      );
+    }
+  }
+
   const allSelected = params.matcherSlugs
     ? registry.getBySlugs(params.matcherSlugs)
     : registry.getAll();
