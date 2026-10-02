@@ -5,7 +5,7 @@ dotenvConfig(); // also load .env as fallback
 
 import { getRegistry } from "@deepsec/core";
 import { setAttributionVersion } from "@deepsec/processor";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { collectRepeatable } from "./agent-config.js";
 import { enrichCommand } from "./commands/enrich.js";
 import { exportCommand } from "./commands/export.js";
@@ -36,6 +36,8 @@ import {
 import { getDeepsecVersion } from "./version.js";
 
 installSandboxOutputCap();
+
+const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "HIGH_BUG", "BUG", "LOW"] as const;
 
 const program = new Command();
 
@@ -396,9 +398,11 @@ program
     "--thinking-level <level>",
     "Reasoning/thinking effort for the main agent run: minimal, low, medium, high, or xhigh (default: xhigh)",
   )
-  .option(
-    "--min-severity <sev>",
-    "Only revalidate findings at this severity or above (CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG)",
+  .addOption(
+    new Option(
+      "--min-severity <sev>",
+      "Only revalidate findings at this severity or above",
+    ).choices(SEVERITIES),
   )
   .option("--force", "Re-check already-validated findings")
   .option("--limit <n>", "Max files to revalidate", parseInt)
@@ -419,9 +423,11 @@ program
     "Project identifier (default: the only project in deepsec.config.ts; required if there are multiple)",
   )
   .option("--filter <prefix>", "Only enrich files matching path prefix")
-  .option(
-    "--min-severity <sev>",
-    "Only enrich files with a finding at this severity or above (CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG, LOW)",
+  .addOption(
+    new Option(
+      "--min-severity <sev>",
+      "Only enrich files with a finding at this severity or above",
+    ).choices(SEVERITIES),
   )
   .option("--force", "Re-enrich already-enriched files")
   .option("--concurrency <n>", "Parallel ownership oracle requests (default: cores - 1)", parseInt)
@@ -434,7 +440,9 @@ program
     "--project-id <id>",
     "Project identifier (default: the only project in deepsec.config.ts; required if there are multiple)",
   )
-  .option("--severity <sev>", "Severity to triage (default: MEDIUM)", "MEDIUM")
+  .addOption(
+    new Option("--severity <sev>", "Severity to triage").choices(SEVERITIES).default("MEDIUM"),
+  )
   .option("--model <model>", "Model to use (default: claude-sonnet-4-6 — cheaper)")
   .option("--force", "Re-triage already-triaged findings")
   .option("--limit <n>", "Max findings to triage", parseInt)
@@ -455,13 +463,15 @@ program
   .description("Export findings as JSON or as a directory of per-finding markdown files")
   .option("--format <kind>", "Output format: json (default) or md-dir", "json")
   .option("--project-id <csv>", "Comma-separated project IDs (omit for all)")
-  .option(
-    "--min-severity <sev>",
-    "Only export findings at this severity or above (CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG, LOW)",
+  .addOption(
+    new Option("--min-severity <sev>", "Only export findings at this severity or above").choices(
+      SEVERITIES,
+    ),
   )
-  .option(
-    "--only-severity <sev>",
-    "Only export findings at this exact severity (CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG, LOW)",
+  .addOption(
+    new Option("--only-severity <sev>", "Only export findings at this exact severity").choices(
+      SEVERITIES,
+    ),
   )
   .option("--discovered-today", "Only findings whose most recent analysis was today (local time)")
   .option(
@@ -498,7 +508,11 @@ program
   .command("metrics")
   .description("Report findings metrics across all projects (or one project)")
   .option("--project-id <id>", "Project identifier (omit for all projects)")
-  .option("--min-severity <sev>", "Minimum severity to include (default: LOW)")
+  .addOption(
+    new Option("--min-severity <sev>", "Minimum severity to include (default: LOW)").choices(
+      SEVERITIES,
+    ),
+  )
   .action(metricsCommand);
 
 const sandboxCmd = program

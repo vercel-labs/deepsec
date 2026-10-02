@@ -276,6 +276,27 @@ export default defineConfig({
     expect(result.stderr).toContain("Duration must look like 500ms, 30s, 10m, or 2h");
   });
 
+  it("rejects an unknown severity on every flag that takes one", () => {
+    // Each of these compares severities differently, so an unvalidated value
+    // fails differently too — silently widening one filter, emptying another.
+    const flags = [
+      ["revalidate", "--min-severity"],
+      ["enrich", "--min-severity"],
+      ["triage", "--severity"],
+      ["export", "--min-severity"],
+      ["export", "--only-severity"],
+      ["metrics", "--min-severity"],
+    ];
+
+    for (const [command, flag] of flags) {
+      const result = runBundle([command, flag, "CRTICAL"]);
+      expect(result.status, `${command} ${flag}`).toBe(1);
+      expect(result.stderr, `${command} ${flag}`).toContain(
+        "Allowed choices are CRITICAL, HIGH, MEDIUM, HIGH_BUG, BUG, LOW.",
+      );
+    }
+  });
+
   it("init --scaffold-only writes a workspace seeded with the first project", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-init-"));
     const workspace = path.join(tmp, "audits");
