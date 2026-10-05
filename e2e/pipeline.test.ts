@@ -287,6 +287,24 @@ describe("pipeline e2e", () => {
       expect(exportTp.status).toBe(0);
       expect(JSON.parse(fs.readFileSync(exportTpPath, "utf-8")).length).toBe(exported.length);
 
+      // export --format sarif writes a single SARIF 2.1.0 log.
+      const sarifPath = path.join(workspaceDir, "exported.sarif");
+      const exportSarif = runBundle(
+        ["export", "--format", "sarif", "--out", sarifPath],
+        workspaceDir,
+      );
+      expect(exportSarif.status, `export-sarif stderr: ${exportSarif.stderr}`).toBe(0);
+      const sarif = JSON.parse(fs.readFileSync(sarifPath, "utf-8"));
+      expect(sarif.version).toBe("2.1.0");
+      expect(sarif.runs[0].tool.driver.name).toBe("deepsec");
+      expect(sarif.runs[0].results).toHaveLength(exported.length);
+      const [sarifFirst] = sarif.runs[0].results;
+      const { findingId, filePath, severity, vulnSlug } = exported[0].metadata;
+      expect(sarifFirst.partialFingerprints["deepsecFindingId/v1"]).toBe(findingId);
+      expect(sarifFirst.ruleId).toBe(`${vulnSlug}/${severity.toLowerCase()}`);
+      const sarifUri: string = sarifFirst.locations[0].physicalLocation.artifactLocation.uri;
+      expect(sarifUri.endsWith(filePath), sarifUri).toBe(true);
+
       // export --format md-dir — directory of one .md per finding.
       const mdDir = path.join(workspaceDir, "exported");
       const exportMd = runBundle(["export", "--format", "md-dir", "--out", mdDir], workspaceDir);

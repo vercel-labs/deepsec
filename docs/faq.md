@@ -147,6 +147,33 @@ pnpm deepsec process --project-id main --filter $CHANGED_PATH_PREFIX
 The `data/` directory is your state — persist it between CI runs (cache
 it as a build artifact) or just re-scan from scratch each time.
 
+To show findings as GitHub code scanning alerts, export SARIF for one
+project and upload it with the `upload-sarif` action. The job needs the
+`security-events: write` permission.
+
+```yaml
+- run: pnpm deepsec export --project-id main --format sarif --out findings.sarif
+  working-directory: .deepsec
+- uses: github/codeql-action/upload-sarif@v4
+  with:
+    sarif_file: .deepsec/findings.sarif
+```
+
+GitHub resolves SARIF file paths from the repository root. When the
+project root recorded by `scan` is a subdirectory of a git repository,
+such as `apps/web` in a monorepo, deepsec prefixes each path with that
+subdirectory. If the project root isn't a git checkout on the machine
+running the export, paths stay relative to the project root.
+
+Export after `deepsec process` finishes. Each upload replaces the previous
+analysis, and GitHub closes alerts for findings missing from the new file.
+If a file record can't be read, for example because `process` is still
+writing it, the SARIF export fails without writing a file.
+
+SARIF output leaves out ownership data, such as owner emails and GitHub
+usernames, because anyone who can read the repository's code scanning
+alerts can see it.
+
 ## Is it incremental?
 
 Yes:
