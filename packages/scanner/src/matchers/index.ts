@@ -111,6 +111,13 @@ import { jwtHandlingMatcher } from "./jwt-handling.js";
 import { k8sSecretReferenceMatcher } from "./k8s-secret-reference.js";
 import { k8sSecretsInitContainerMatcher } from "./k8s-secrets-init-container.js";
 import { lambdaAwsHandlerMatcher } from "./lambda-aws-handler.js";
+import { laravelBladeXssMatcher } from "./laravel-blade-xss.js";
+import { laravelConfigExposureMatcher } from "./laravel-config-exposure.js";
+import { laravelLivewireFilamentMatcher } from "./laravel-livewire-filament.js";
+import { laravelMassAssignmentMatcher } from "./laravel-mass-assignment.js";
+import { laravelMissingAuthorizationMatcher } from "./laravel-missing-authorization.js";
+import { laravelSqlRawMatcher } from "./laravel-sql-raw.js";
+import { laravelUnsafeSinksMatcher } from "./laravel-unsafe-sinks.js";
 import { luaCryptoWeaknessMatcher } from "./lua-crypto-weakness.js";
 import { luaNgxExecMatcher } from "./lua-ngx-exec.js";
 import { luaRegexBypassMatcher } from "./lua-regex-bypass.js";
@@ -389,6 +396,13 @@ export function createDefaultRegistry(): MatcherRegistry {
   registry.register(phpWordpressRestMatcher);
   registry.register(phpDrupalControllerMatcher);
   registry.register(phpMagentoControllerMatcher);
+  registry.register(laravelBladeXssMatcher);
+  registry.register(laravelConfigExposureMatcher);
+  registry.register(laravelLivewireFilamentMatcher);
+  registry.register(laravelMassAssignmentMatcher);
+  registry.register(laravelMissingAuthorizationMatcher);
+  registry.register(laravelSqlRawMatcher);
+  registry.register(laravelUnsafeSinksMatcher);
   // Python
   registry.register(pyDjangoViewMatcher);
   registry.register(pyFastapiRouteMatcher);
