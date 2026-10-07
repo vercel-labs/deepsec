@@ -458,6 +458,123 @@ describe("processor with stub agent", () => {
     expect(after.lockedByRunId).toBe(liveRunId);
   });
 
+  it.each([
+    ["--reinvestigate", { reinvestigate: true }],
+    ["a file list", { filePaths: ["live.ts", "dead.ts", "mine.ts", "done.ts"] }],
+  ])("process() with %s does NOT take a file a still-running other run holds", async (_mode, forceParams) => {
+    // Both modes select files whatever their status, so they can re-claim
+    // analyzed files. Only the other run's non-reclaimable lock must survive.
+    const fx = setupProject({ files: ["live.ts", "dead.ts", "mine.ts", "done.ts"] });
+    const liveRunId = "20260101000000-liveforceaaaaaaa";
+    const deadRunId = "20260101000000-deadforceaaaaaaa";
+    const ownRunId = "20260101000000-ownforceaaaaaaaa";
+
+    fs.mkdirSync(path.join(fx.dataRoot, fx.projectId, "runs"), { recursive: true });
+    const lock = (filePath: string, runId: string, pid: number) => {
+      const rec = pendingRecord(fx.projectId, filePath);
+      rec.status = "processing";
+      rec.lockedByRunId = runId;
+      rec.lockedAt = new Date().toISOString();
+      fx.writeRecord(rec);
+      fs.writeFileSync(
+        path.join(fx.dataRoot, fx.projectId, "runs", `${runId}.json`),
+        JSON.stringify({
+          runId,
+          projectId: fx.projectId,
+          rootPath: fx.targetRoot,
+          createdAt: new Date().toISOString(),
+          type: "process",
+          phase: "running",
+          pid,
+          hostname: os.hostname(),
+          stats: {},
+        }),
+      );
+    };
+    lock("live.ts", liveRunId, process.pid);
+    const liveBefore = fx.readRecord("live.ts");
+    lock("dead.ts", deadRunId, 0x7fffffff);
+    lock("mine.ts", ownRunId, process.pid);
+    const done = pendingRecord(fx.projectId, "done.ts");
+    done.status = "analyzed";
+    fx.writeRecord(done);
+
+    const stub = new StubAgent();
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      runId: ownRunId,
+      ...forceParams,
+    });
+
+    const investigated = stub.calls.investigateCalls.flatMap((c) => c.batch.map((r) => r.filePath));
+    expect(investigated.sort()).toEqual(["dead.ts", "done.ts", "mine.ts"]);
+    expect(fx.readRecord("live.ts")).toEqual(liveBefore);
+  });
+
+  it.each([
+    [
+      "takes a processing file locked from another host",
+      "processing",
+      "other-host",
+      "remote.ts",
+      true,
+    ],
+    ["leaves an analyzed file locked on this host", "analyzed", os.hostname(), "kept.ts", false],
+  ] as const)("process() with --reinvestigate %s", async (_name, status, hostname, filePath, taken) => {
+    // A lock from another host can't be PID-probed, so it is taken as
+    // before (sandbox re-runs). A live same-host lock holds whatever the status.
+    const fx = setupProject({ files: [filePath] });
+    const liveRunId = "20260101000000-liveremoteaaaaaa";
+    fs.mkdirSync(path.join(fx.dataRoot, fx.projectId, "runs"), { recursive: true });
+    const rec = pendingRecord(fx.projectId, filePath);
+    rec.status = status;
+    rec.lockedByRunId = liveRunId;
+    rec.lockedAt = new Date().toISOString();
+    fx.writeRecord(rec);
+    fs.writeFileSync(
+      path.join(fx.dataRoot, fx.projectId, "runs", `${liveRunId}.json`),
+      JSON.stringify({
+        runId: liveRunId,
+        projectId: fx.projectId,
+        rootPath: fx.targetRoot,
+        createdAt: new Date().toISOString(),
+        type: "process",
+        phase: "running",
+        pid: process.pid,
+        hostname,
+        stats: {},
+      }),
+    );
+    const before = fx.readRecord(filePath);
+
+    const stub = new StubAgent();
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+    await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      reinvestigate: true,
+    });
+
+    const investigated = stub.calls.investigateCalls.flatMap((c) => c.batch.map((r) => r.filePath));
+    expect(investigated).toEqual(taken ? [filePath] : []);
+    if (!taken) expect(fx.readRecord(filePath)).toEqual(before);
+  });
+
   it("process() captures refusals from the agent into AnalysisEntry", async () => {
     const fx = setupProject({ files: ["app.ts"] });
     fx.writeRecord(pendingRecord(fx.projectId, "app.ts"));

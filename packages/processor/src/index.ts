@@ -391,6 +391,17 @@ export async function process(params: {
       return ageMs >= STALE_LOCK_MS;
     };
 
+    // True when a lock held by another run can be checked (it started on
+    // this host) and isn't reclaimable. Force mode leaves those files alone.
+    const isLiveLocalLock = (r: FileRecord): boolean => {
+      if (isReclaimableLock(r)) return false;
+      try {
+        return readRunMeta(projectId, r.lockedByRunId!).hostname === localHostname;
+      } catch {
+        return false;
+      }
+    };
+
     // Load file records and pick which to process
     const allRecords = loadAllFileRecords(projectId);
     let toProcess: FileRecord[];
@@ -546,7 +557,11 @@ export async function process(params: {
           (current.status === "processing" &&
             current.lockedByRunId !== runId &&
             isReclaimableLock(current));
-        if (!isOurs && !isFreelyClaimable && !inForceMode) {
+        // Force mode re-claims analyzed files and files locked by a run on
+        // another host, whose PID we can't probe. It leaves a file alone
+        // only while a run on this host holds a live lock on it, whatever
+        // the record's status.
+        if (!isOurs && !isFreelyClaimable && (!inForceMode || isLiveLocalLock(current))) {
           continue;
         }
 
@@ -555,12 +570,10 @@ export async function process(params: {
         current.lockedAt = lockedAt;
         writeFileRecord(current);
 
-        // Mutate the in-memory snapshot we'll process from so downstream code
-        // sees the same lock state.
-        record.status = current.status;
-        record.lockedByRunId = current.lockedByRunId;
-        record.lockedAt = current.lockedAt;
-        claimed.push(record);
+        // Process from the record we just claimed, not the startup snapshot:
+        // another run may have finished this file since the snapshot was
+        // loaded, and its findings and history live only in `current`.
+        claimed.push(current);
       }
     } finally {
       releaseProcessLock();
