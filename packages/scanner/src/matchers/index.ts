@@ -108,6 +108,7 @@ import { jvmSpringControllerMatcher } from "./jvm-spring-controller.js";
 import { jvmSqlRawMatcher } from "./jvm-sql-raw.js";
 // --- Auth / sessions / env matchers ---
 import { jwtHandlingMatcher } from "./jwt-handling.js";
+import { k8sPrivilegedWorkloadMatcher } from "./k8s-privileged-workload.js";
 import { k8sSecretReferenceMatcher } from "./k8s-secret-reference.js";
 import { k8sSecretsInitContainerMatcher } from "./k8s-secrets-init-container.js";
 import { lambdaAwsHandlerMatcher } from "./lambda-aws-handler.js";
@@ -317,6 +318,7 @@ export function createDefaultRegistry(): MatcherRegistry {
   registry.register(secretsPlaintextExposureMatcher);
   registry.register(k8sSecretReferenceMatcher);
   registry.register(k8sSecretsInitContainerMatcher);
+  registry.register(k8sPrivilegedWorkloadMatcher);
 
   // ConnectRPC / proto / Unix-socket
   registry.register(protoRpcSurfaceMatcher);
