@@ -612,6 +612,40 @@ describe("processor with stub agent", () => {
     expect(sumCost).toBeCloseTo(4.0, 6);
   });
 
+  it("process() stops claiming new batches after the cost boundary", async () => {
+    const fx = setupProject({ files: ["a.ts", "b.ts", "c.ts"] });
+    for (const file of ["a.ts", "b.ts", "c.ts"]) {
+      fx.writeRecord(pendingRecord(fx.projectId, file));
+    }
+    const stub = new StubAgent({
+      async *investigateImpl(params) {
+        return {
+          results: params.batch.map((record) => ({ filePath: record.filePath, findings: [] })),
+          meta: { durationMs: 1, costUsd: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 1,
+      maxCostUsd: 1.5,
+    });
+
+    expect(result.costLimitReached).toEqual({ limitUsd: 1.5, actualUsd: 2 });
+    expect(result.totalCostUsd).toBe(2);
+    expect(stub.calls.investigateCalls).toHaveLength(2);
+    expect(fx.readRecord("c.ts").status).toBe("pending");
+  });
+
   it("revalidate() pushes a per-file analysisHistory entry tagged phase='revalidate' with divided cost", async () => {
     const fx = setupProject({ files: ["x.ts", "y.ts"] });
     for (const f of ["x.ts", "y.ts"]) {
@@ -788,17 +822,15 @@ describe("processor with stub agent", () => {
     expect(result.quotaExhausted?.source).toBe("claude-subscription");
     expect(result.quotaExhausted?.rawMessage).toMatch(/usage limit/);
 
-    // Failed batch's file is marked error (catch block); the unattempted
-    // files keep their claimed `processing` lock — the next run reclaims
-    // them via the dead-owner branch of `isReclaimableLock` once this
-    // run's RunMeta phase flips to "done".
+    // Failed batch's file is marked error; unattempted claims are released
+    // immediately so the next run can resume without stale-lock recovery.
     const aStatus = fx.readRecord("one/a.ts").status;
     const bStatus = fx.readRecord("two/b.ts").status;
     const cStatus = fx.readRecord("three/c.ts").status;
     expect(aStatus).toBe("error");
     // Order across the 3 batches is deterministic in concurrency=1 mode.
     // batches[0] failed, batches[1] and batches[2] never ran.
-    expect([bStatus, cStatus].every((s) => s === "processing")).toBe(true);
+    expect([bStatus, cStatus].every((s) => s === "pending")).toBe(true);
   });
 
   it("process() forwards a non-aborted AbortSignal to the agent and aborts it on quota", async () => {

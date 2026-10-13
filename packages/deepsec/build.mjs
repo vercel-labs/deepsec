@@ -19,12 +19,30 @@ const external = [
   "jiti",
 ];
 
+// Ink's devtools module imports this optional development-only package. The
+// standalone CLI never connects React DevTools, so bundle a harmless shim
+// instead of making every deepsec installation carry the debugger.
+const optionalReactDevtoolsPlugin = {
+  name: "optional-react-devtools",
+  setup(build) {
+    build.onResolve({ filter: /^react-devtools-core$/ }, () => ({
+      path: "react-devtools-core",
+      namespace: "optional-react-devtools",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "optional-react-devtools" }, () => ({
+      contents: "export default { initialize() {}, connectToDevTools() {} };",
+      loader: "js",
+    }));
+  },
+};
+
 const common = {
   bundle: true,
   platform: "node",
   format: "esm",
   target: "node22",
   external,
+  plugins: [optionalReactDevtoolsPlugin],
   sourcemap: false,
   legalComments: "none",
   logLevel: "info",

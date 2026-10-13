@@ -22,7 +22,13 @@
     }
   },
   "ignoreIssues": {
-    "packages/website/source.config.ts": ["exports"]
+    "packages/website/source.config.ts": ["exports"],
+    "packages/deepsec/src/auth/*.ts": ["exports", "types"],
+    "packages/deepsec/src/setup/*.ts": ["exports", "types"],
+    "packages/deepsec/src/commands/init.ts": ["types"],
+    "packages/deepsec/src/commands/setup.ts": ["types"],
+    "packages/deepsec/src/preflight.ts": ["exports"],
+    "packages/deepsec/src/sandbox/setup.ts": ["types"]
   },
   "ignore": ["fixtures/vulnerable-app/**", "samples/**", ".deepsec/**"],
   "ignoreDependencies": [

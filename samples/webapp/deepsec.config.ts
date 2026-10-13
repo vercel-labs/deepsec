@@ -13,6 +13,7 @@ const webappPlugin: DeepsecPlugin = {
 };
 
 export default defineConfig({
+  ai: { mode: "gateway", provider: "vercel" },
   projects: [
     {
       id: "webapp",

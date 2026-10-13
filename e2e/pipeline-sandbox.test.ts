@@ -136,10 +136,7 @@ function injectStubPlugin(configPath: string): void {
       'import { defineConfig } from "deepsec/config";\n',
       'import { defineConfig } from "deepsec/config";\nimport stubPlugin from "./stub-plugin.mjs";\n',
     )
-    .replace(
-      /export default defineConfig\(\{\s*\n\s*projects:/,
-      "export default defineConfig({\n  plugins: [stubPlugin],\n  projects:",
-    );
+    .replace(/plugins:\s*\[/, "plugins: [stubPlugin, ");
   if (patched === original) {
     throw new Error(`failed to patch ${configPath} — template format changed?`);
   }
@@ -266,20 +263,17 @@ describe.skipIf(!SHOULD_RUN)("pipeline e2e — live sandbox", () => {
 
         // 1. init
         const init = runBundle(
-          ["init", workspaceDir, FIXTURES, "--id", "fixture"],
+          ["init", workspaceDir, FIXTURES, "--id", "fixture", "--scaffold-only"],
           tmp,
           60_000,
           tmp,
         );
         expect(init.status).toBe(0);
 
-        // 2. Substitute the scaffolded `"deepsec": "^x.y.z"` (which
-        // points at npm) with a `file:` reference to a tarball of the
-        // local source. Otherwise: every version bump in HEAD breaks
-        // this test until npm catches up — `pnpm install` inside the
-        // sandbox can't resolve a version that hasn't been published
-        // yet. With `file:./deepsec-x.y.z.tgz`, the sandbox uses
-        // exactly the code in this branch, every run.
+        // 2. Replace the checkout's absolute `file:` reference with a local
+        // tarball. The workspace itself is uploaded into Sandbox, where the
+        // host checkout path does not exist; a relative tarball keeps the
+        // worker on exactly this branch without depending on npm publication.
         const tarballPath = packLocalDeepsec(workspaceDir);
         const tarballName = path.basename(tarballPath);
         const pkgPath = path.join(workspaceDir, "package.json");

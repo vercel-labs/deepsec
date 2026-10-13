@@ -2,6 +2,7 @@ import { query, type SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
 import type { RefusalReport } from "@deepsec/core";
 import {
   AgentPolicyRefusalError,
+  attributionHeaders,
   backoff,
   buildInvestigateJsonRepairPrompt,
   buildInvestigatePrompt,
@@ -9,6 +10,7 @@ import {
   buildRevalidatePrompt,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  isGatewayBaseUrl,
   isTransientError,
   jsonRepairFailureError,
   MAX_ATTEMPTS,
@@ -33,6 +35,7 @@ import type {
   RevalidateParams,
   RevalidateRawResponse,
   RevalidateVerdict,
+  SetupTaskParams,
 } from "./types.js";
 
 /**
@@ -116,8 +119,10 @@ function buildSandbox(): SandboxSettings | undefined {
  * Allowlist + the credential routing the SDK was about to read off
  * `process.env` itself. Anything else (CI tokens, cloud creds, custom
  * vars) is dropped.
+ *
+ * Exported for tests.
  */
-function buildClaudeEnv(): Record<string, string> {
+export function buildClaudeEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v !== "string") continue;
@@ -139,6 +144,27 @@ function buildClaudeEnv(): Record<string, string> {
   ]) {
     const v = process.env[k];
     if (typeof v === "string") env[k] = v;
+  }
+  // Gateway-bound runs carry the App Attribution headers via the CLI's
+  // ANTHROPIC_CUSTOM_HEADERS (newline-separated `Name: Value` pairs).
+  // The value is constructed here rather than allowlisted from
+  // process.env wholesale, so repo-content prompt injection can't
+  // smuggle arbitrary headers through the environment — but a header
+  // the user explicitly set in their own ANTHROPIC_CUSTOM_HEADERS wins
+  // over ours.
+  if (isGatewayBaseUrl(env.ANTHROPIC_BASE_URL)) {
+    const userValue = process.env.ANTHROPIC_CUSTOM_HEADERS ?? "";
+    const userNames = new Set(
+      userValue
+        .split("\n")
+        .map((line) => line.slice(0, line.indexOf(":")).trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const ours = Object.entries(attributionHeaders())
+      .filter(([name]) => !userNames.has(name))
+      .map(([name, value]) => `${name}: ${value}`);
+    const combined = [userValue, ...ours].filter(Boolean).join("\n");
+    if (combined) env.ANTHROPIC_CUSTOM_HEADERS = combined;
   }
   return env;
 }
@@ -203,6 +229,60 @@ async function runToollessFollowUp(
   }
 
   return raw;
+}
+
+export async function runClaudeSetupTask(params: SetupTaskParams): Promise<string> {
+  const model = (params.config.model as string) ?? "claude-opus-4-8";
+  const abortController = new AbortController();
+  const abort = () => abortController.abort();
+  if (params.signal) {
+    if (params.signal.aborted) abort();
+    else params.signal.addEventListener("abort", abort, { once: true });
+  }
+  let resultText = "";
+  try {
+    params.onProgress?.({
+      type: "started",
+      message: `Understanding repository with Claude (${model})`,
+    });
+    for await (const message of query({
+      prompt: params.prompt,
+      options: {
+        cwd: params.projectRoot,
+        allowedTools: ["Read", "Glob", "Grep"],
+        permissionMode: "dontAsk",
+        maxTurns: (params.config.maxTurns as number) ?? 40,
+        model,
+        thinking: { type: "adaptive" },
+        effort: resolveMainRunEffort(params.config),
+        ...(CLAUDE_CODE_EXECUTABLE ? { pathToClaudeCodeExecutable: CLAUDE_CODE_EXECUTABLE } : {}),
+        env: buildClaudeEnv(),
+        sandbox: buildSandbox(),
+        abortController,
+      },
+    })) {
+      const msg = message as Record<string, any>;
+      if (msg.type === "assistant") {
+        const toolUses = msg.message?.content?.filter((b: any) => b.type === "tool_use") ?? [];
+        for (const tool of toolUses) {
+          const input = tool.input ?? {};
+          const target = input.file_path || input.pattern || "";
+          params.onProgress?.({
+            type: "tool_use",
+            message: `${tool.name}${target ? `: ${String(target).split("/").slice(-3).join("/")}` : ""}`,
+          });
+        }
+      } else if (msg.type === "result") {
+        if (msg.subtype === "success") resultText = String(msg.result ?? "");
+        else if (msg.is_error) throw new Error(String(msg.result ?? "Claude setup task failed"));
+      }
+    }
+  } finally {
+    params.signal?.removeEventListener("abort", abort);
+  }
+  if (!resultText.trim()) throw new Error("Claude produced no setup result");
+  params.onProgress?.({ type: "complete", message: "Repository setup analysis complete" });
+  return resultText.trim();
 }
 
 export class ClaudeAgentSdkPlugin implements AgentPlugin {

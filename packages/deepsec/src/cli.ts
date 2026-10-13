@@ -4,6 +4,7 @@ dotenvConfig({ path: ".env.local" });
 dotenvConfig(); // also load .env as fallback
 
 import { getRegistry } from "@deepsec/core";
+import { setAttributionVersion } from "@deepsec/processor";
 import { Command } from "commander";
 import { collectRepeatable } from "./agent-config.js";
 import { enrichCommand } from "./commands/enrich.js";
@@ -17,16 +18,55 @@ import { revalidateCommand } from "./commands/revalidate.js";
 import { sandboxAllCommand } from "./commands/sandbox-all.js";
 import { sandboxCommand } from "./commands/sandbox-process.js";
 import { scanCommand } from "./commands/scan.js";
+import { setupCommand } from "./commands/setup.js";
 import { statusCommand } from "./commands/status.js";
 import { triageCommand } from "./commands/triage.js";
 import { loadConfig } from "./load-config.js";
 import { installSandboxOutputCap } from "./output-cap.js";
 import { applyAiGatewayDefaults } from "./preflight.js";
+import { modelRouteFromCli } from "./setup/options.js";
+import {
+  formatSetupDocumentationHuman,
+  formatSetupErrorHuman,
+  outputModeFromArgv,
+  SetupProtocolError,
+  setupErrorExitCode,
+  setupErrorPayload,
+} from "./setup/protocol.js";
 import { getDeepsecVersion } from "./version.js";
 
 installSandboxOutputCap();
 
 const program = new Command();
+
+function parsePackageManager(value: string): "pnpm" | "npm" {
+  if (value !== "pnpm" && value !== "npm") {
+    throw new Error("--package-manager must be pnpm or npm");
+  }
+  return value;
+}
+
+function parseSetupThrough(
+  value: string,
+): "install" | "login" | "threat-model" | "coverage" | "process" {
+  if (["install", "login", "threat-model", "coverage", "process"].includes(value)) {
+    return value as "install" | "login" | "threat-model" | "coverage" | "process";
+  }
+  throw new Error("--through must be install, login, threat-model, coverage, or process");
+}
+
+function parsePositiveNumber(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Value must be a positive number");
+  return parsed;
+}
+
+function parseDuration(value: string): number {
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/.exec(value);
+  if (!match) throw new Error("Duration must look like 500ms, 30s, 10m, or 2h");
+  const multipliers = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const;
+  return Number(match[1]) * multipliers[match[2] as keyof typeof multipliers];
+}
 
 program
   .name("deepsec")
@@ -37,10 +77,7 @@ program
     `
 Quickstart:
   cd <your-repo>                 first, in the codebase you want to scan
-  npx deepsec init               scaffold .deepsec/ + register this repo
-  cd .deepsec && pnpm install
-  pnpm deepsec scan    --project-id <id>
-  pnpm deepsec process --project-id <id>
+  npx deepsec init               install, connect, model, scan, process
 
   See \`deepsec init --help\` and the docs at:
     https://github.com/vercel/deepsec`,
@@ -48,9 +85,42 @@ Quickstart:
 
 program
   .command("init [workspace] [target-root]")
-  .description("Scaffold .deepsec/ in your repo and register the first project")
+  .description("Create and fully set up a resumable .deepsec workspace")
   .option("--id <project-id>", "Override the project id (default: basename of <target-root>)")
   .option("--force", "Allow writing into a non-empty workspace directory")
+  .option("--plan", "Inspect the setup plan without writing files or running setup")
+  .option("--scaffold-only", "Only create files; do not install, connect, scan, or process")
+  .option("--skip-install", "Require dependencies to exist instead of running pnpm/npm install")
+  .option("--package-manager <name>", "Installer to use: pnpm or npm", parsePackageManager)
+  .option("--agent <type>", "AI agent: codex, claude, or pi")
+  .option("--model <model>", "Model for repository analysis and processing")
+  .option("--model-profile <profile>", "Benchmark profile: best, value, or budget")
+  .option("--thinking-level <level>", "Reasoning effort: minimal, low, medium, high, or xhigh")
+  .option("--model-auth <mode>", "Credential route: gateway, direct, custom, or local")
+  .option("--ai-provider <provider>", "Provider for direct/custom credentials")
+  .option("--ai-api-key-env <name>", "Environment variable containing a direct/custom API key")
+  .option("--ai-base-url <url>", "Direct/custom provider base URL")
+  .option("--ai-credential-header <name[:scheme]>", "Custom auth header; scheme is bearer or raw")
+  .option("--headless", "Never prompt or open an interactive login (automatic without a TTY)")
+  .option("--non-interactive", "Legacy alias for --headless")
+  .option("--yes", "Accept deterministic headless defaults and dedicated-project creation")
+  .option("--vercel-team-id <id>", "Vercel team id (non-interactive override)")
+  .option("--vercel-project-id <id>", "Vercel project id (non-interactive override)")
+  .option("--vercel-project-name <name>", "Deterministic dedicated project name override")
+  .option("--concurrency <n>", "AI processing batches to run in parallel", parseInt)
+  .option(
+    "--through <phase>",
+    "Stop after install, login, threat-model, coverage, or process",
+    parseSetupThrough,
+  )
+  .option(
+    "--max-cost-usd <n>",
+    "Stop AI processing at a resumable cost boundary",
+    parsePositiveNumber,
+  )
+  .option("--max-duration <duration>", "Stop setup at a resumable duration boundary", parseDuration)
+  .option("--no-tui", "Use stable line-oriented output instead of the interactive dashboard")
+  .option("--output <mode>", "Output mode: human, json, or jsonl", "human")
   .addHelpText(
     "after",
     `
@@ -58,25 +128,108 @@ Defaults:
   workspace     .deepsec
   target-root   .              (the codebase you ran init from)
   project id    derived from the target's directory basename
+  model route   Vercel AI Gateway via the exact linked workspace
+
+The normal flow also keeps Sandbox credentials in scope, writes INFO.md plus a
+surface inventory, checks scan coverage, safely generates narrow matchers when
+needed, and starts processing. Re-run the command to resume from checkpoints.
 
 Examples:
   $ npx deepsec init                          # most common — from your repo root
+  $ npx deepsec init --plan --output json     # read-only agent/CI plan
+  $ npx deepsec init --yes --model-profile value --output jsonl
+  $ npx deepsec init --scaffold-only          # files only; manual legacy flow
+  $ npx deepsec init --package-manager npm    # use npm in the isolated workspace
+  $ MY_KEY=... npx deepsec init --agent codex --model-auth direct --ai-provider openai --ai-api-key-env MY_KEY
+  $ npx deepsec init --model-auth local       # machine-wide claude/codex logins; no API key
   $ npx deepsec init audits ../my-app         # custom workspace + target
   $ npx deepsec init .deepsec . --id my-app   # override the auto-derived id`,
   )
   .action(
-    (
-      workspace: string | undefined,
-      targetRoot: string | undefined,
-      opts: { id?: string; force?: boolean },
-    ) =>
+    (workspace: string | undefined, targetRoot: string | undefined, opts: Record<string, any>) =>
       initCommand({
         workspace,
         targetRoot,
         id: opts.id,
         force: opts.force,
+        plan: opts.plan,
+        scaffoldOnly: opts.scaffoldOnly,
+        skipInstall: opts.skipInstall,
+        packageManager: opts.packageManager,
+        agent: opts.agent,
+        model: opts.model,
+        modelProfile: opts.modelProfile,
+        thinkingLevel: opts.thinkingLevel,
+        modelRoute:
+          opts.modelAuth || opts.aiProvider || opts.aiApiKeyEnv || opts.aiBaseUrl
+            ? modelRouteFromCli(opts)
+            : undefined,
+        headless: opts.headless,
+        nonInteractive: opts.nonInteractive,
+        yes: opts.yes,
+        teamId: opts.vercelTeamId,
+        vercelProjectId: opts.vercelProjectId,
+        vercelProjectName: opts.vercelProjectName,
+        concurrency: opts.concurrency,
+        through: opts.through,
+        maxCostUsd: opts.maxCostUsd,
+        maxDurationMs: opts.maxDuration,
+        noTui: opts.tui === false,
+        output: opts.output,
       }),
   );
+
+program
+  .command("setup")
+  .description("Resume or reconcile the one-shot setup workflow")
+  .option("--project-id <id>", "Project identifier (auto-resolved for a single project)")
+  .option("--root <path>", "Override the configured project root")
+  .option("--status", "Show resumable phase status without running setup")
+  .option("--skip-install", "Require dependencies to exist instead of running pnpm/npm install")
+  .option("--package-manager <name>", "Installer to use: pnpm or npm", parsePackageManager)
+  .option("--agent <type>", "AI agent: codex, claude, or pi")
+  .option("--model <model>", "Model for repository analysis and processing")
+  .option("--model-profile <profile>", "Benchmark profile: best, value, or budget")
+  .option("--thinking-level <level>", "Reasoning effort: minimal, low, medium, high, or xhigh")
+  .option("--model-auth <mode>", "Credential route: gateway, direct, custom, or local")
+  .option("--ai-provider <provider>", "Provider for direct/custom credentials")
+  .option("--ai-api-key-env <name>", "Environment variable containing a direct/custom API key")
+  .option("--ai-base-url <url>", "Direct/custom provider base URL")
+  .option("--ai-credential-header <name[:scheme]>", "Custom auth header; scheme is bearer or raw")
+  .option("--headless", "Never prompt or open an interactive login (automatic without a TTY)")
+  .option("--non-interactive", "Legacy alias for --headless")
+  .option("--yes", "Accept deterministic headless defaults and dedicated-project creation")
+  .option("--vercel-team-id <id>", "Vercel team id (non-interactive override)")
+  .option("--vercel-project-id <id>", "Vercel project id (non-interactive override)")
+  .option("--vercel-project-name <name>", "Deterministic dedicated project name override")
+  .option("--concurrency <n>", "AI processing batches to run in parallel", parseInt)
+  .option(
+    "--through <phase>",
+    "Stop after install, login, threat-model, coverage, or process",
+    parseSetupThrough,
+  )
+  .option(
+    "--max-cost-usd <n>",
+    "Stop AI processing at a resumable cost boundary",
+    parsePositiveNumber,
+  )
+  .option("--max-duration <duration>", "Stop setup at a resumable duration boundary", parseDuration)
+  .option("--no-tui", "Use stable line-oriented output instead of the interactive dashboard")
+  .option("--output <mode>", "Output mode: human, json, or jsonl", "human")
+  .addHelpText(
+    "after",
+    `
+Without model-route flags, setup preserves the route stored in
+deepsec.config.ts. It checks required outputs and resumes at the first stale,
+missing, errored, or incomplete phase.
+
+Examples:
+  $ pnpm deepsec setup
+  $ pnpm deepsec setup --status --output json
+  $ pnpm deepsec setup --project-id api
+  $ MY_KEY=... pnpm deepsec setup --agent codex --model-auth direct --ai-provider openai --ai-api-key-env MY_KEY`,
+  )
+  .action(setupCommand);
 
 program
   .command("init-project <target-root>")
@@ -89,6 +242,8 @@ program
 Run from inside a .deepsec/ workspace. Appends an entry to
 deepsec.config.ts (above the marker comment) and writes a fresh
 data/<id>/{INFO.md,SETUP.md,project.json}.
+Run \`pnpm deepsec setup --project-id <id>\` afterward to perform repository
+analysis, coverage-guided scanning, and processing for the new project.
 
 Examples:
   $ pnpm deepsec init-project ../another-app
@@ -396,20 +551,34 @@ const sandboxAllCmd = program
  * `DEEPSEC_DEBUG=1` to see them when debugging.
  */
 function printFatal(err: unknown): never {
+  const outputMode = outputModeFromArgv();
+  if (outputMode === "json" || outputMode === "jsonl") {
+    console.log(JSON.stringify(setupErrorPayload(err)));
+    process.exit(setupErrorExitCode(err));
+  }
   const verbose = process.env.DEEPSEC_DEBUG === "1";
-  console.error(`\n${err instanceof Error ? err.message : err}`);
+  console.error(
+    `\n${err instanceof SetupProtocolError ? formatSetupErrorHuman(err) : err instanceof Error ? err.message : err}`,
+  );
+  if (!(err instanceof SetupProtocolError)) {
+    const documentation = formatSetupDocumentationHuman();
+    if (documentation) console.error(`\n${documentation}`);
+  }
   if (verbose && err instanceof Error && err.stack) {
     console.error(err.stack);
-  } else if (!verbose) {
+  } else if (!verbose && !(err instanceof SetupProtocolError)) {
     console.error("\n(set DEEPSEC_DEBUG=1 for a stack trace)");
   }
-  process.exit(1);
+  process.exit(setupErrorExitCode(err));
 }
 
 process.on("unhandledRejection", printFatal);
 process.on("uncaughtException", printFatal);
 
 async function main() {
+  // Stamp the running CLI version into the AI Gateway App Attribution
+  // title (x-title: deepsec/<version>) before any agent is constructed.
+  setAttributionVersion(getDeepsecVersion());
   // Expand AI_GATEWAY_API_KEY (or fall back to a Vercel OIDC token) into
   // the per-SDK env vars before any command handler instantiates an agent.
   // Must run before loadConfig in case the user's deepsec.config.ts reads

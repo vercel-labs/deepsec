@@ -315,6 +315,41 @@ export function isUsingAiGateway(): boolean {
 }
 
 /**
+ * True when `url` targets Vercel AI Gateway (either the Anthropic adapter
+ * at the root or the OpenAI-compat adapter at /v1). Used to decide whether
+ * a request should carry the App Attribution headers — direct-provider
+ * endpoints get nothing.
+ */
+export function isGatewayBaseUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  const trimmed = url.replace(/\/+$/, "");
+  return trimmed === GATEWAY_ANTHROPIC_BASE_URL || trimmed === GATEWAY_OPENAI_BASE_URL;
+}
+
+// AI Gateway App Attribution (https://vercel.com/docs/ai-gateway/ecosystem/app-attribution):
+// the gateway reads `http-referer` + `x-title` to identify the app behind
+// a request; unknown to other endpoints, so only gateway-bound requests
+// carry them. The title embeds the CLI version so gateway-side logs can
+// segment traffic by release. The version lives in the deepsec package
+// (processor must not depend on it, and processor's own package version
+// is meaningless), so the CLI injects it at startup via
+// setAttributionVersion(); the bare "deepsec" fallback covers library
+// consumers that never call the setter.
+let attributionTitle = "deepsec";
+
+export function setAttributionVersion(version: string): void {
+  attributionTitle = `deepsec/${version}`;
+}
+
+/** Fresh object per call — call sites merge/mutate into header maps. */
+export function attributionHeaders(): Record<string, string> {
+  return {
+    "http-referer": "https://deepsec.sh",
+    "x-title": attributionTitle,
+  };
+}
+
+/**
  * Transient = worth retrying. Quota errors are NOT transient even though
  * many of them surface with status 429 — the gateway/upstream re-emits the
  * same body on every retry, so we'd just burn our backoff budget.

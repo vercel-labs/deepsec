@@ -48,11 +48,14 @@ export { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
 export { PiAgentPlugin } from "./agents/pi-sdk.js";
 export { AgentRegistry } from "./agents/registry.js";
 export {
+  attributionHeaders,
   classifyQuotaError,
+  isGatewayBaseUrl,
   isUsingAiGateway,
   type QuotaAgentHint,
   QuotaExhaustedError,
   type QuotaSource,
+  setAttributionVersion,
 } from "./agents/shared.js";
 export type { AgentPlugin, AgentProgress } from "./agents/types.js";
 export { batchCandidates } from "./batch.js";
@@ -79,6 +82,7 @@ export {
   reconcileVerdicts,
   resolveDuplicateRef,
 } from "./reconcile.js";
+export { type RunSetupTaskParams, runSetupTask } from "./setup-agent.js";
 export { triage } from "./triage.js";
 
 export function createDefaultAgentRegistry(): AgentRegistry {
@@ -144,7 +148,11 @@ export async function process(params: {
   filePaths?: string[];
   /** Free-form origin label for direct invocations (e.g. "git-diff:origin/main"). */
   source?: string;
+  /** Cancel in-flight agent work and stop claiming new batches. */
+  signal?: AbortSignal;
   onProgress?: (progress: ProcessProgress) => void;
+  /** Stop claiming new batches once completed batch cost reaches this limit. */
+  maxCostUsd?: number;
 }): Promise<{
   runId: string;
   analysisCount: number;
@@ -165,6 +173,8 @@ export async function process(params: {
    * provider / gateway).
    */
   quotaExhausted?: { source: QuotaSource; rawMessage: string };
+  totalCostUsd?: number;
+  costLimitReached?: { limitUsd: number; actualUsd: number };
 }> {
   const { projectId, agentType = "claude-agent-sdk", config = {}, reinvestigate = false } = params;
   // We deliberately don't default `promptTemplate` to DEFAULT_PROMPT_TEMPLATE
@@ -584,7 +594,12 @@ export async function process(params: {
     // for a polling tick. The captured `quotaExhausted` is returned to the
     // caller so the CLI can render a tailored remediation message.
     const quotaAbort = new AbortController();
+    if (params.signal?.aborted) quotaAbort.abort(params.signal.reason);
+    params.signal?.addEventListener("abort", () => quotaAbort.abort(params.signal?.reason), {
+      once: true,
+    });
     let quotaExhausted: { source: QuotaSource; rawMessage: string } | undefined;
+    let costLimitReached: { limitUsd: number; actualUsd: number } | undefined;
 
     async function processBatch(batch: FileRecord[], i: number) {
       batchesInFlight++;
@@ -738,6 +753,14 @@ export async function process(params: {
 
         batchesInFlight--;
         batchesCompleted++;
+        if (
+          params.maxCostUsd !== undefined &&
+          totalCostUsd >= params.maxCostUsd &&
+          !costLimitReached
+        ) {
+          costLimitReached = { limitUsd: params.maxCostUsd, actualUsd: totalCostUsd };
+          quotaAbort.abort(new Error(`Cost limit $${params.maxCostUsd.toFixed(2)} reached`));
+        }
         emitProgress({
           type: "batch_complete",
           message: `Batch ${i + 1}/${batches.length} complete: ${results.length} analyses, ${results.reduce((s, r) => s + r.findings.length, 0)} findings (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
@@ -794,6 +817,19 @@ export async function process(params: {
       await Promise.all(workers);
     }
 
+    // Cost/quota stops can leave batches that were claimed up front but never
+    // launched. Release those records immediately so the next resumable run
+    // does not have to wait for stale-lock reclamation.
+    if (costLimitReached || quotaExhausted) {
+      for (const record of toProcess) {
+        if (record.status !== "processing" || record.lockedByRunId !== runId) continue;
+        record.status = "pending";
+        record.lockedByRunId = undefined;
+        record.lockedAt = undefined;
+        writeFileRecord(record);
+      }
+    }
+
     completeRun(projectId, runId, "done", {
       filesProcessed: totalAnalyses,
       findingsCount: totalFindings,
@@ -816,6 +852,8 @@ export async function process(params: {
       findingCount: totalFindings,
       errorBatchCount: batchesFailed,
       quotaExhausted,
+      totalCostUsd,
+      costLimitReached,
     };
   } catch (err) {
     // Body threw before completing. Flip phase to "error" so the

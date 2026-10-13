@@ -12,11 +12,48 @@ deepsec talks to LLMs through interchangeable agent backends:
 | `pi`                        | `zai/glm-5.2`        | `process`, `revalidate` |
 | `claude` (triage)           | `claude-sonnet-4-6`   | `triage` (Claude-only)       |
 
-The built-in backends work with [Vercel AI Gateway](https://vercel.com/ai-gateway).
-One `AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN` covers Codex, Claude,
-and Pi. Pi also accepts provider/model identifiers directly through its
-model registry, which makes it useful for comparing gateway/provider
-behavior under the same deepsec workload.
+Interactive one-shot setup recommends five benchmark-backed combinations:
+GPT-5.6 Sol, Claude Opus 5, Kimi K3, Grok 4.5, and the current DeepSeek entry.
+Deepsec fetches the latest score, reasoning level, harness, and total run cost
+from [DeepSecBench](https://vercel.com/ai-gateway/leaderboards/deepsecbench/results.json),
+then displays cost relative to the cheapest recommendation. A bundled snapshot
+keeps onboarding usable offline and is visibly marked as cached. You can also
+paste any custom model slug.
+
+Choose the backend/model non-interactively so repository analysis and the
+first processing pass use the same pair:
+
+```bash
+npx deepsec init --agent codex --model gpt-5.5
+```
+
+For benchmark-backed headless selection, use a profile:
+
+| Profile | Selection rule |
+|---|---|
+| `best` | Highest compatible DeepSecBench score |
+| `value` | Highest score whose run cost is at most 2.5× the cheapest recommendation |
+| `budget` | Cheapest compatible recommended combination |
+
+```bash
+npx deepsec init --yes --model-profile value --output jsonl
+```
+
+Direct OpenAI and Anthropic credentials automatically restrict profiles to a
+compatible Codex or Claude harness; custom routes restrict them to Pi.
+
+The built-in backends work with Vercel AI Gateway through the linked
+workspace's OIDC credential. The model credential route is independent of the
+Vercel/Sandbox project link and is persisted as non-secret `ai` config. Direct
+OpenAI/Anthropic and custom Pi routes are documented in
+[vercel-setup](vercel-setup.md).
+
+There is also a `local` route (`--model-auth local`, or "Use local
+subscriptions" in the interactive prompt) for machines where the `claude` or
+`codex` CLI is already logged in. It configures no credential at all and
+disables the env-var preflight checks — the machine-wide login is used
+directly. Sandbox commands are the exception: they must broker a real token,
+so they still require `AI_GATEWAY_API_KEY` (or an equivalent key).
 
 ## CLI selection
 
@@ -43,9 +80,10 @@ pnpm deepsec process --project-id my-app --agent pi --model zai/glm-5.2
 pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
 ```
 
-`--agent` and `--model` are also accepted on `revalidate`. Set the
-default backend project-wide via `defaultAgent` in
-[`deepsec.config.ts`](configuration.md).
+`--agent`, `--model`, and `--thinking-level` are also accepted on `setup` and
+`revalidate`. Setup persists the interactive choice as `defaultAgent`,
+`defaultModel`, and `defaultThinkingLevel`, checkpoints the exact combination,
+and invalidates affected phases when it changes.
 
 ## Thinking level
 
@@ -57,7 +95,7 @@ pnpm deepsec process --project-id my-app --thinking-level high
 ```
 
 Accepted values: `minimal`, `low`, `medium`, `high`, `xhigh`. The
-default is `xhigh` — deepsec optimizes for finding hard bugs, not for
+default is `xhigh`. Deepsec optimizes for finding hard bugs, not for
 cost. Dial down for cheaper reinvestigation waves or quick smoke runs
 over large repos.
 
@@ -90,7 +128,7 @@ themselves in lower FP rate, even at higher per-call cost. Opus is the
 strongest of the Claude family at this kind of code reasoning.
 
 If cost matters more than precision (a 10k-file repo, a quick triaged
-starter list), drop to `claude-sonnet-4-6` — same prompt, ~3× cheaper,
+starter list), drop to `claude-sonnet-4-6`. Same prompt, ~3× cheaper,
 ~10–20% higher FP rate.
 
 ### `gpt-5.5` for the Codex backend
@@ -112,30 +150,31 @@ AI_GATEWAY_API_KEY=vck_...
 pnpm deepsec process --project-id my-app --agent pi
 ```
 
-If `.env.local` has `VERCEL_OIDC_TOKEN` from `vercel env pull`, deepsec
-uses that as the gateway credential automatically.
+Normal setup pulls and uses the exact linked workspace's OIDC credential.
 
-For OpenAI/Anthropic-compatible gateways such as Martian, point an
-existing Pi provider at the gateway with command-line flags:
+For OpenAI-compatible gateways such as Martian, select and persist a custom
+route during setup:
 
 ```bash
 MARTIAN_API_KEY=...
-pnpm deepsec process --project-id my-app \
+pnpm deepsec setup --project-id my-app \
   --agent pi \
   --model openai/gpt-5.5 \
-  --ai-provider openai \
+  --model-auth custom \
+  --ai-provider martian \
   --ai-base-url https://api.withmartian.com/v1 \
-  --ai-api-key-env MARTIAN_API_KEY
+  --ai-api-key-env MARTIAN_API_KEY \
+  --ai-credential-header authorization:bearer
 ```
 
-Repeat `--ai-header name=value` for provider-specific headers. There is
-no Martian-specific first-class integration; these flags are the generic
-provider override path.
+Later `process`, `revalidate`, and Sandbox commands resolve the persisted
+route. Per-command `--ai-provider`, `--ai-base-url`, `--ai-api-key-env`, and
+repeatable `--ai-header name=value` remain available as Pi runtime overrides.
 
 ### `claude-sonnet-4-6` for `triage`
 
-Triage buckets findings into P0/P1/P2/skip without re-reading the code
-— it just looks at the finding text. That's a cheap task; Opus is
+Triage buckets findings into P0/P1/P2/skip without re-reading the code.
+It just looks at the finding text. That's a cheap task; Opus is
 overkill. Sonnet keeps `triage` at ~1¢/finding.
 
 ## Refusals

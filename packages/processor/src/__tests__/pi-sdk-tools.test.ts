@@ -4,6 +4,7 @@ import path from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  configureProviderOverrides,
   createPiReadOnlyToolDefinitions,
   resolvePiModelWithDynamicGateway,
 } from "../agents/pi-sdk.js";
@@ -70,6 +71,7 @@ describe("Pi model resolution", () => {
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "ACME_MODEL_KEY",
   ] as const;
   const originalEnv = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
   const originalFetch = globalThis.fetch;
@@ -167,5 +169,47 @@ describe("Pi model resolution", () => {
       }),
     ).rejects.toThrow(/Pi model not found: acme\/nonexistent-model-1/);
     expect(called).toBe(false);
+  });
+
+  it("registers App Attribution headers on the gateway provider", async () => {
+    const registry = await freshRegistry();
+    configureProviderOverrides(registry, {});
+    const config = registry.getRegisteredProviderConfig("vercel-ai-gateway");
+    expect(config?.headers).toMatchObject({
+      "http-referer": "https://deepsec.sh",
+    });
+    expect(config?.headers?.["x-title"]).toMatch(/^deepsec/);
+    // Header-only extension registration must not clobber the builtin
+    // catalog — gateway models keep resolving.
+    process.env.AI_GATEWAY_API_KEY = "vck_test";
+    const model = await resolvePiModelWithDynamicGateway(registry, "google/gemini-3.6-flash", {});
+    expect(model.provider).toBe("vercel-ai-gateway");
+  });
+
+  it("keeps attribution headers when the pass-through registration re-registers the provider", async () => {
+    process.env.AI_GATEWAY_API_KEY = "vck_test";
+    process.env.OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
+    globalThis.fetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200 });
+
+    const registry = await freshRegistry();
+    configureProviderOverrides(registry, {});
+    await resolvePiModelWithDynamicGateway(registry, "acme/nonexistent-model-1", {});
+    const config = registry.getRegisteredProviderConfig("vercel-ai-gateway");
+    expect(config?.headers?.["http-referer"]).toBe("https://deepsec.sh");
+  });
+
+  it("configures a persisted custom provider base URL and credential header", async () => {
+    process.env.ACME_MODEL_KEY = "secret";
+    const registry = await freshRegistry();
+    configureProviderOverrides(registry, {
+      aiProvider: "acme",
+      aiBaseUrl: "https://models.acme.test/v1",
+      aiApiKeyEnv: "ACME_MODEL_KEY",
+      aiCredentialHeader: { name: "x-api-key", scheme: "raw" },
+    });
+    expect(registry.getRegisteredProviderConfig("acme")).toMatchObject({
+      baseUrl: "https://models.acme.test/v1",
+      headers: { "x-api-key": "secret" },
+    });
   });
 });

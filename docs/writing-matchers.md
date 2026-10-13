@@ -1,252 +1,180 @@
 ---
-title: "Writing matchers with your coding agent"
-description: "Add project-specific matchers for routes, RPC surfaces, auth helpers, webhooks, and internal frameworks."
+title: "Generated and hand-authored matchers"
+description: "Review setup-generated declarative matchers and add richer project-specific matcher plugins when data-only patterns are not enough."
 ---
 
-This doc is for users running deepsec inside a `.deepsec/` workspace —
-i.e. you ran `npx deepsec init`, deepsec is installed in
-`node_modules/`, and you have a `data/<id>/` directory with at least
-one scan in it. The matchers you write here live in *your* config; they
-ship alongside deepsec's built-ins for the projects in this workspace.
+## Start with setup coverage
 
-The intended loop:
+Normal initialization already asks whether custom matchers are needed:
 
-```
-scan (fast, wide) → process (AI, slow + expensive) → revalidate → write better matchers
+```bash
+npx deepsec init
 ```
 
-The default matcher set covers common CWE shapes (SQL injection, SSRF,
-path traversal, etc.) and a handful of popular framework shapes
-(Next.js, Prisma, Express). It will miss patterns specific to your
-codebase: an internal RPC framework, a less common language, a custom
-auth helper, a non-default route layout. Custom matchers fill those
-gaps.
+The setup agent inventories repository ingress surfaces, runs the built-in
+matchers, and applies a deterministic coverage policy. It generates matcher
+proposals only for concrete gaps such as an uncovered internal RPC registry,
+queue consumer family, or framework route primitive.
 
-## When to write one
+Accepted proposals are stored in `.deepsec/generated-matchers.ts` as strict
+data and loaded through `generatedMatchersPlugin`. Review and commit this
+file. Do not copy the generated setup inventory or setup-state file; those
+are reproducible and gitignored.
 
-- A revalidated true-positive needs a matcher to catch siblings on future scans.
-- A cluster of `other-*` slugs in `deepsec metrics` points at a real category deepsec has no name for.
-- The target repo has **entry points the default matchers don't see**. Check [docs/supported-tech.md](./supported-tech.md) first — your framework may already be covered. If not, a custom matcher fills the gap.
-- You have an **organization-specific** pattern (internal auth helper, internal SDK call, custom middleware).
+## Declarative matcher safety contract
 
-## Where matchers live in your workspace
+Generated specs are compiled by `compileDeclarativeMatchers`; model-written
+TypeScript is never evaluated. Each spec declares:
 
-Custom matchers go inside your `.deepsec/` workspace and are wired up
-through an inline plugin in `deepsec.config.ts`. The same shape as a
-published plugin, just defined alongside your config.
+- a unique kebab-case slug, description, and noise tier;
+- constrained relative file globs;
+- optional technology or sentinel-file gates;
+- bounded regex sources using only `i`, `m`, or `im` flags;
+- examples that every proposed matcher must actually match; and
+- the inventory surface IDs the matcher claims to close.
 
-Reference setup (ships in `node_modules/deepsec/dist/samples/webapp/`):
+Validation rejects unknown fields, traversal and catch-all globs, duplicate
+slugs, empty-string regexes, backreferences, lookbehind, common exponential
+backtracking shapes, huge repeats, and examples that do not fire.
 
+After compilation, setup rescans and applies an explosion policy. A generated
+matcher that reaches too many source files is removed from the plugin and its
+persisted candidates are deleted before another attempt. Setup makes at most
+two attempts per invocation and stops before processing if coverage still
+fails. The stop is resumable: its actions point to the saved proposals and
+coverage evidence, and re-running setup makes two fresh repair attempts.
+
+## When to keep or edit a generated matcher
+
+Keep it when its file scope and regex describe a stable repository primitive
+and its candidate count is close to the corresponding entry-point count.
+
+Edit or delete it when:
+
+- the glob follows generated code rather than the real ingress family;
+- the regex names an incidental identifier instead of the framework shape;
+- examples do not represent real repository syntax;
+- it claims a surface it does not actually reach; or
+- a hand-authored matcher can express the condition more precisely.
+
+After editing the data, run:
+
+```bash
+pnpm deepsec scan --matchers <slug>
+pnpm deepsec setup
 ```
+
+The first command is a focused spot-check; setup reconciles full coverage.
+
+## When to write a hand-authored matcher
+
+Declarative matchers are intentionally limited to safe regex sweeps. Write a
+TypeScript `MatcherPlugin` when the rule needs:
+
+- negative conditions, such as “route declaration without any auth helper”;
+- multiple related searches over the same file;
+- syntax-aware preprocessing or context windows;
+- organization-specific semantics that should be reviewed as code; or
+- a reusable public-framework/CWE rule worth contributing upstream.
+
+Also consider a hand-authored matcher after a revalidated true positive shows
+a stable sibling pattern that setup's entry-point coverage did not model.
+
+## Hand-authored workspace layout
+
+Keep richer matchers beside the generated plugin:
+
+```text
 .deepsec/
-├── deepsec.config.ts                # inline plugin lists the matchers
+├── deepsec.config.ts
+├── generated-matchers.ts
 └── matchers/
     ├── my-route-no-auth.ts
     └── my-internal-rpc.ts
 ```
 
-`deepsec.config.ts` looks like:
+Register them through an additive inline plugin:
 
 ```ts
 import { defineConfig, type DeepsecPlugin } from "deepsec/config";
+import { generatedMatchersPlugin } from "./generated-matchers.js";
 import { myRouteNoAuth } from "./matchers/my-route-no-auth.js";
 import { myInternalRpc } from "./matchers/my-internal-rpc.js";
 
-const myPlugin: DeepsecPlugin = {
-  name: "my-app",
+const projectMatchers: DeepsecPlugin = {
+  name: "my-app-matchers",
   matchers: [myRouteNoAuth, myInternalRpc],
 };
 
 export default defineConfig({
+  ai: { mode: "gateway", provider: "vercel" },
   projects: [{ id: "my-app", root: ".." }],
-  plugins: [myPlugin],
+  plugins: [generatedMatchersPlugin, projectMatchers],
 });
 ```
 
-Slugs are unique. If your slug collides with a built-in, **your
-matcher wins** — useful for swapping in a tighter org-specific version.
+Slugs must be unique. The one-shot generator refuses built-in, plugin, and
+intra-response collisions. Use a distinct slug for a hand-authored variant
+rather than relying on replacement order.
 
-If a matcher is genuinely reusable across orgs (e.g. a CWE shape or a
-public-framework shape), consider contributing it back to the
-[deepsec repo](https://github.com/vercel-labs/deepsec) instead. That
-flow is in `CONTRIBUTING.md` of that repo.
+## Matcher shape
 
-## Workflow
+```ts
+import { regexMatcher, type MatcherPlugin } from "deepsec/config";
 
-### 1. Run a scan + process pass first
-
-You want real `data/` to point the agent at.
-
-```bash
-pnpm deepsec scan
-pnpm deepsec process --limit 50          # cheap calibration pass
-pnpm deepsec revalidate --min-severity HIGH
+export const myInternalRpc: MatcherPlugin = {
+  slug: "my-internal-rpc",
+  description: "Internal RPC entry points",
+  noiseTier: "normal",
+  filePatterns: ["src/rpc/**/*.ts"],
+  examples: ['registerRpc("users.get", handler)'],
+  match(content) {
+    return regexMatcher(
+      "my-internal-rpc",
+      [{ regex: /registerRpc\s*\(/g, label: "RPC registration" }],
+      content,
+    );
+  },
+};
 ```
 
-### 2. Hand the workspace to your agent
+Use the narrowest practical `filePatterns`. Avoid repository-wide noisy
+globs. Inline `examples` are executable documentation: the scanner's matcher
+example suite verifies that every example produces a candidate.
 
-Open the *parent repo* (the codebase being scanned) in your coding
-agent so it can read both the source and `.deepsec/data/`. Then paste:
+Noise tiers:
 
-> I want to add custom matchers to deepsec for this repo. deepsec is
-> already installed at `.deepsec/node_modules/deepsec/` and
-> `.deepsec/data/<projectId>/` has at least one scan + process pass in
-> it.
->
-> **Read these first to understand the contract:**
-> - `.deepsec/node_modules/deepsec/dist/config.d.ts` — the
->   `MatcherPlugin` interface and the `regexMatcher` helper signature
-> - `.deepsec/node_modules/deepsec/dist/samples/webapp/matchers/webapp-debug-flag.ts`
->   — small `normal`-tier matcher
-> - `.deepsec/node_modules/deepsec/dist/samples/webapp/matchers/webapp-route-no-rate-limit.ts`
->   — slightly larger matcher that combines a regex sweep with a
->   negative pre-check
-> - `.deepsec/node_modules/deepsec/dist/samples/webapp/deepsec.config.ts`
->   — how the inline plugin wires matchers into the config
->
-> **Then do the analysis:**
-> 1. Walk `.deepsec/data/<projectId>/files/` and look at what the
->    default matchers already cover. Note which `vulnSlug`s show up in
->    `candidates[]` and where the AI's `findings[]` ended up landing
->    after revalidation.
-> 2. Compare that against the **target repository** (root above
->    `.deepsec/`). Identify the **major entry points** to the code:
->    public HTTP handlers, RPC entry points, queue consumers, cron
->    jobs, CLI commands, anything that takes untrusted input from the
->    outside. Walk the directories that look like routes/handlers/api,
->    and the framework config files (`next.config.*`,
->    `wrangler.toml`, `serverless.yml`, `Procfile`, `main.go`,
->    `app.py`, etc.) to figure out the entry-point shape.
-> 3. Decide which entry points the default matchers **don't reach**.
->    Common gaps:
->    - Frameworks deepsec doesn't ship a glob for (Hono, Elysia,
->      Cloudflare Workers, Bun, Deno, FastAPI, Rails controllers, Go
->      `chi`/`gin`, internal RPC).
->    - Languages with thin built-in coverage (Go, Python, Ruby, Lua,
->      shell, Terraform, SQL).
->    - Custom org-specific wrappers (auth middleware, rate-limit
->      wrappers, request-validation helpers) where deepsec's generic
->      regexes don't know the convention.
-> 4. **Then write matchers that cover those gaps.** Prefer one
->    matcher per concern. For each:
->    - **Slug** (kebab-case, names what it flags, e.g.
->      `hono-route-no-auth`, `worker-fetch-handler`).
->    - **Noise tier**:
->      - `precise` — pattern only matches the vulnerable shape, minimal FPs.
->      - `normal` — broader, the AI does the disambiguation. Default.
->      - `noisy` — very wide net; intentionally forces AI review of a
->        path glob (use for entry-point coverage where you just want
->        every file in a glob to be a candidate).
->    - **`filePatterns`** as tight as you can make them
->      (language-specific or directory-anchored). A `noisy` matcher
->      with `**/*.{ts,tsx}` will wedge the scanner on a large repo.
->    - **Regex(es)** that match the shape. Skip test files
->      (`.test.`, `.spec.`, `__tests__`, `_test.go`, etc.).
->    - Save to `.deepsec/matchers/<slug>.ts`. Import types from
->      `"deepsec/config"`.
-> 5. Wire the new matchers into the inline plugin in
->    `.deepsec/deepsec.config.ts` (create the plugin if it doesn't
->    exist yet — see `samples/webapp/deepsec.config.ts`).
-> 6. Run
->    `pnpm deepsec scan --matchers <slug1>,<slug2>,…` from `.deepsec/`
->    and report how many candidates each matcher fired. Open 3 of the
->    candidates per matcher to spot-check the regex isn't producing
->    obvious false positives.
->
-> Bias toward `precise` when you can describe the bug exactly. Use
-> `noisy` deliberately when the goal is **entry-point coverage** —
-> you'd rather the AI look at every `**/api/**/route.ts` than rely on
-> a regex to predict which ones are vulnerable.
->
-> Generalize the *shape* of the pattern, not specific identifiers. If
-> the repo's auth helper is `requireSession()`, the matcher should
-> catch any handler that doesn't call any session/auth helper, not the
-> literal string `requireSession`.
+| Tier | Use when |
+|---|---|
+| `precise` | The matched syntax is itself a strong vulnerability signal. |
+| `normal` | The pattern selects useful review candidates and the AI disambiguates. |
+| `noisy` | Every file in a tightly bounded entry-point family deserves review. |
 
-The agent will read the contract files (the interface is short — a few
-dozen lines for `MatcherPlugin`, plus the `regexMatcher` helper), walk
-`data/`, walk the target repo, and write the matchers.
+## Agent-assisted hand-authoring workflow
 
-### 3. Run them, tune them, ship them
+Ask a coding agent to read:
+
+1. `.deepsec/data/<id>/setup/surface-inventory.json` for the intended surface;
+2. `.deepsec/generated-matchers.ts` for already-covered gaps;
+3. `.deepsec/data/<id>/files/` for candidate counts and revalidated findings;
+4. `.deepsec/node_modules/deepsec/dist/config.d.ts` for `MatcherPlugin`; and
+5. `.deepsec/node_modules/deepsec/dist/samples/webapp/` for richer examples.
+
+Require it to explain the missed surface, propose a bounded matcher, add
+examples, register the plugin without removing `generatedMatchersPlugin`, and
+run a focused scan:
 
 ```bash
 pnpm deepsec scan --matchers <new-slug>
 ```
 
-Watch the candidate count. 0 means too strict (loosen). >100 in a
-small repo means too loose (tighten). Typical sweet spots: 1–20 hits
-per 1k files for `precise`; 5–100 for `normal`. `noisy` matchers
-should match approximately the entry-point count of the framework you
-targeted (10s, not 1000s).
+Open several candidates, tune the matcher, then run the full scan/setup
+reconciliation. Commit `deepsec.config.ts`, `generated-matchers.ts`, and
+`matchers/`; do not commit generated `data/<id>/setup/` evidence.
 
-When happy, commit `.deepsec/deepsec.config.ts` and
-`.deepsec/matchers/`. The next full scan picks them up.
+## Contributing reusable matchers
 
-## Noise tiers
-
-| Tier | When | Example |
-|---|---|---|
-| `precise` | Pattern is unambiguous. | `prisma-raw-sql`: `\$queryRawUnsafe\s*\(` matches only the unsafe API. |
-| `normal` | Pattern is broader; AI disambiguates. | `auth-bypass`: flags admin checks and skip-auth strings; AI judges. |
-| `noisy` | Every file matching a glob should be reviewed by the AI. | `service-entry-point`: every `**/api/**/route.ts` becomes a candidate. |
-
-Tier also influences ordering. `precise` candidates are processed
-first because they have the highest signal per token.
-
-## File globs
-
-Set `filePatterns` tightly. A noisy matcher with `**/*.{ts,tsx}`
-wedges the scanner on a 100k-file repo. Prefer:
-
-- Language-specific: `**/*.go`, `**/*.lua`, `**/*.tf`
-- Directory-anchored: `**/api/**/*.ts`, `**/services/**/handlers/*.ts`
-- Combined: `**/services/**/*.{ts,go}`
-
-## Worked example: covering missing entry points
-
-A team scans a FastAPI service. After a `process` pass,
-`data/<id>/files/` shows that the default matchers fired plenty on
-`requirements.txt` and a few `*.sql` files but barely touched
-`app/routers/*.py`, where the actual HTTP handlers live — the default
-glob set is tilted toward TypeScript/Next.js. The AI eventually
-investigates a couple of router files via priority paths but skips
-most.
-
-1. **Inspect coverage.** Walk `data/<id>/files/app/routers/`. Most
-   `FileRecord`s have empty `candidates[]`; the AI never picks them
-   up.
-2. **Identify entry points.** Each router file decorates handlers
-   with `@router.get("/…")`, `@router.post("/…")`, etc. The team's
-   convention is that authenticated handlers depend on a
-   `current_user: User = Depends(get_current_user)` parameter.
-3. **Add a noisy entry-point matcher.** Slug `fastapi-route`,
-   `noiseTier: "noisy"`, `filePatterns: ["app/routers/**/*.py",
-   "app/api/**/*.py"]`, regex
-   `/@\w+\.(get|post|put|delete|patch)\s*\(/`. Every router file
-   becomes a candidate; the AI reads them on the next `process` pass.
-4. **Add a precise auth-shape matcher.** Slug
-   `fastapi-route-no-auth`, `noiseTier: "precise"`, same globs,
-   regex sweep for `@\w+\.(get|post|...)` whose subsequent
-   `def`/`async def` signature doesn't include `Depends(get_current_user)`
-   or `Depends(require_*)`.
-
-Result on the next scan: the AI investigates every router file, and
-the precise matcher flags handlers that skip the auth dependency.
-
-## Generic vs plugin vs upstream contribution
-
-Decision tree:
-
-| Catches… | Where |
-|---|---|
-| An org-specific helper, package, or route layout | Your inline plugin (`.deepsec/matchers/`) |
-| A reference to a concrete internal service name | Your inline plugin |
-| A CWE shape (path traversal, SSRF, prototype pollution) the public set misses | Consider upstreaming to [deepsec](https://github.com/vercel-labs/deepsec) |
-| A shape for a popular OSS framework (Hono, FastAPI, Drizzle) | Upstreaming benefits everyone |
-
-For copy-paste starting points, see
-`.deepsec/node_modules/deepsec/dist/samples/webapp/matchers/` —
-two real matchers (`webapp-debug-flag.ts`, normal-tier; and
-`webapp-route-no-rate-limit.ts`, normal-tier with a negative
-pre-check) wired into the inline plugin in
-`.deepsec/node_modules/deepsec/dist/samples/webapp/deepsec.config.ts`.
+If the shape belongs to a public framework or broadly applicable weakness,
+add it to deepsec's built-in matcher registry instead of keeping an
+organization-specific copy. Follow `CONTRIBUTING.md`, include representative
+examples, and keep technology/sentinel gates as narrow as possible.

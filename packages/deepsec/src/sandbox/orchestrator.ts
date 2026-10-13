@@ -354,6 +354,7 @@ async function bootstrapAndSpawn(
         agentType: config.agentType,
         aiApiKeyEnv: config.aiApiKeyEnv,
         aiBaseUrl: config.aiBaseUrl,
+        brokeredModelCredential: config.brokeredModelCredential,
         vcpus: config.vcpus,
         timeout: config.timeout,
         mode: ctx.mode,

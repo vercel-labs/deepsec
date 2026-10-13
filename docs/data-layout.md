@@ -3,14 +3,18 @@ title: "Data layout"
 description: "The on-disk state deepsec writes for projects, files, runs, findings, and exports."
 ---
 
-`data/` is deepsec's on-disk state. Each project owns a subdirectory; the
-files inside are append-only across runs.
+`data/` is deepsec's on-disk state. Each project owns a subdirectory. Scan
+and analysis records are append-only across runs; setup evidence is replaced
+atomically when its inputs change.
 
 ```
 data/<projectId>/
 ├── project.json              # rootPath, githubUrl (auto-managed)
 ├── INFO.md                   # repo context injected into AI prompts
 ├── config.json               # priorityPaths, promptAppend, ignorePaths (optional)
+├── setup/
+│   ├── setup-state.json      # resumable one-shot phase checkpoints
+│   └── surface-inventory.json# generated structured ingress inventory
 ├── files/                    # one JSON per scanned source file (FileRecord)
 │   └── path/to/source.ts.json
 ├── runs/                     # one JSON per run (RunMeta)
@@ -18,12 +22,14 @@ data/<projectId>/
 └── reports/                  # generated markdown + JSON reports
 ```
 
-`data/` is gitignored by default. To version it (CI, sharing across
-machines), commit it explicitly.
+The scaffold keeps `INFO.md` and `SETUP.md` trackable, while ignoring
+`project.json`, `setup/`, `files/`, `runs/`, and `reports/`. The generated
+`setup/` evidence may contain repository paths and platform project IDs, but
+never credential values.
 
 The schemas below are the source of truth for any tool that reads
 `data/` directly. They live in
-[`packages/core/src/types.ts`](../packages/core/src/types.ts).
+[`packages/core/src/types.ts`](https://github.com/vercel-labs/deepsec/blob/main/packages/core/src/types.ts).
 
 ## project.json — `ProjectConfig`
 
@@ -50,8 +56,32 @@ Optional. Read by `scan` and the AI agents.
 
 Free-form markdown injected into the AI prompt for `process`,
 `triage`, and `revalidate`. See
-[getting-started.md](getting-started.md) for the agent prompt that
-writes a good one.
+[getting-started](getting-started.md) for the automatic repository-analysis
+phase and the manual scaffold fallback.
+
+## `setup/setup-state.json` — SetupState
+
+Versioned coordinator state for `deepsec init` / `deepsec setup`. It records:
+
+- phase status and input/output digests;
+- source, INFO, inventory, and generated-matcher fingerprints;
+- baseline/final scan IDs and summaries;
+- processing run ID;
+- non-secret project-link/model-route verification metadata; and
+- proposed matcher specs, accepted and rejected slugs, exact rejection
+  reasons, and whether an attempt returned no proposal.
+
+Writes use a temporary file plus rename. A phase marked `running` or `error`
+is safe to retry. A `complete` checkpoint is reused only when its input digest
+matches and required outputs still exist.
+
+## `setup/surface-inventory.json`
+
+The repository-analysis response used by coverage evaluation. Each surface
+has a stable ID, kind (`http`, `rpc`, `queue`, `cron`, `cli`, `webhook`,
+`agent-tool`, or `other`), exposure, file globs, representative files,
+optional anchor regexes, and expected auth primitives. Paths are relative to
+the target root and validated before use.
 
 ## `files/<path>.json` — FileRecord
 
@@ -143,7 +173,7 @@ deleted.
 | `numTurns` | `number?` | Conversation turn count. |
 | `costUsd` | `number?` | Estimated USD cost. |
 | `usage` | `{ inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens }?` | Token accounting. |
-| `refusal` | `RefusalReport?` | See [models.md](models.md#refusals-are-not-a-large-problem). |
+| `refusal` | `RefusalReport?` | See [models](models.md#refusals-are-not-a-large-problem). |
 | `codexStderr` | `string?` | Captured codex stderr when an investigation produced 0 output tokens (forensic only). |
 | `reinvestigateMarker` | `number?` | Wave marker from `--reinvestigate <N>`. |
 

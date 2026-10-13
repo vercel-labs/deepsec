@@ -178,6 +178,30 @@ describe("readFileRecord / loadAllFileRecords — per-finding salvage", () => {
 });
 
 describe("ensureProject", () => {
+  it("repairs a truncated generated project registration atomically", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-repair-project-"));
+    const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;
+    process.env.DEEPSEC_DATA_ROOT = path.join(tmp, "data");
+    const root = path.join(tmp, "project");
+    fs.mkdirSync(root);
+    const configDir = path.join(process.env.DEEPSEC_DATA_ROOT, "test-project");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, "project.json"), '{"projectId":');
+
+    try {
+      const project = ensureProject("test-project", root);
+      expect(project.rootPath).toBe(path.resolve(root));
+      expect(
+        JSON.parse(fs.readFileSync(path.join(configDir, "project.json"), "utf8")),
+      ).toMatchObject({ projectId: "test-project", rootPath: path.resolve(root) });
+      expect(fs.readdirSync(configDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      if (oldDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+      else process.env.DEEPSEC_DATA_ROOT = oldDataRoot;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("does not print git errors for non-git roots", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-ensure-project-"));
     const oldDataRoot = process.env.DEEPSEC_DATA_ROOT;

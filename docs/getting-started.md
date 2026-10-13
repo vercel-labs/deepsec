@@ -1,195 +1,245 @@
 ---
 title: "Getting started"
-description: "Install deepsec in a .deepsec workspace, fill in INFO.md, and run a limited scan before a full review."
+description: "Set up deepsec and run your first scan with one command."
 ---
 
-## Install
+## Run your first scan
 
-Requires **Node.js 22+**. The recipe below uses pnpm; npm and yarn
-work the same way.
-
-deepsec lives in a `.deepsec/` directory at the root of your codebase
-— checked into the same git repo, so config, project context, and
-custom matchers travel with the code. Generated scan output (findings,
-runs, reports) stays gitignored.
-
-From the root of the codebase you want to scan:
+From the root of the repository you want to scan:
 
 ```bash
-npx deepsec init                                   # creates .deepsec/ + registers this repo
+npx deepsec init
+```
+
+The command asks you two things, then does the rest on its own:
+
+1. **Which model to use.** You'll see a short list of recommended
+   model and reasoning-level combinations, each with its score on the
+   DeepSecBench benchmark and its cost relative to the cheapest option.
+   Pick one, or choose the last option to type in any model of your own.
+2. **How to pay for model calls.** The default routes through Vercel AI
+   Gateway — deepsec logs you in to Vercel if needed and sets up a small
+   dedicated project to hold credentials (nothing billable is created
+   during setup). If you'd rather use your own OpenAI or Anthropic API
+   key, no Vercel account is needed — see
+   [Using your own API key](#using-your-own-api-key).
+
+After that, deepsec works unattended. It creates a `.deepsec/` folder next
+to your code (this is the only thing it adds to your repository), studies
+the codebase to understand what it does and where the risky areas are,
+runs a fast pattern scan, and then starts the AI review of the flagged
+files. Depending on repository size, the AI review can take from minutes
+to many hours.
+
+## If it stops partway
+
+Just run the same command again:
+
+```bash
+npx deepsec init
+```
+
+Deepsec remembers how far it got. Finished steps are skipped and the run
+continues where it left off. This is also how you resume after hitting a
+cost limit, losing your connection, or pressing Ctrl-C.
+
+If setup cannot cover an inventoried surface, it stops before paid AI
+processing and prints the exact inventory, state, generated-matcher, and
+resume commands. The state records matcher proposals and rejection reasons.
+Re-running setup makes up to two fresh matcher-repair attempts, so a coverage
+pause is recoverable after editing `generated-matchers.ts` or the underlying
+repository pattern.
+
+## Limiting time and cost
+
+You can bound a run and pick up the rest later:
+
+```bash
+npx deepsec init --max-cost-usd 100 --max-duration 2h
+```
+
+When a limit is reached, deepsec stops at a safe point. Run the same
+command again to continue. Durations need an explicit unit: `ms`, `s`,
+`m`, or `h`.
+
+If the run stops because your model provider ran out of credits, deepsec
+tells you where to top up; re-run the same command afterwards.
+
+## Reading your results
+
+Everything deepsec produces lives in the `.deepsec/` folder. To get a
+readable report:
+
+```bash
 cd .deepsec
-pnpm install                                       # installs deepsec
-```
-
-`init` lays down a minimal scaffold inside `.deepsec/`: `package.json`,
-`deepsec.config.ts` (one `projects[]` entry pointing at `..`, id
-derived from your repo dir's basename), `data/<id>/INFO.md` (template
-with section placeholders), `data/<id>/SETUP.md` (per-project agent
-prompt), workspace-level `AGENTS.md`, `.env.local`, `.gitignore`. No
-custom matchers in the scaffold — add those later, only when a real
-finding shapes one for you.
-
-Open `.env.local` and pick one of:
-
-- **AI Gateway API key** — set `AI_GATEWAY_API_KEY=vck_…`. Get a key
-  from [Vercel AI Gateway](https://vercel.com/ai-gateway). One key
-  covers both Claude and Codex.
-- **Vercel OIDC token** — run `npx vercel link && npx vercel env pull`
-  in this workspace. That writes `VERCEL_OIDC_TOKEN` to `.env.local`,
-  which deepsec uses as the gateway credential automatically. The token
-  expires after 12 hours; re-pull when you hit auth errors. Convenient
-  if you're already using Vercel Sandbox (same token unlocks both).
-
-Prefer Anthropic directly? Set `ANTHROPIC_AUTH_TOKEN=sk-ant-…` and
-`ANTHROPIC_BASE_URL=https://api.anthropic.com` instead. If `claude` or
-`codex` is already logged in on this machine, non-sandbox runs
-(`process` / `revalidate` / `triage`) skip the token and reuse the
-subscription. See [vercel-setup.md](vercel-setup.md).
-
-To scan a *different* codebase from the same `.deepsec/`, run
-`pnpm deepsec init-project <path>` — relative paths resolve against
-`.deepsec/`'s parent.
-
-## Fill in INFO.md
-
-`INFO.md` is what makes deepsec project-aware. It's injected into the
-AI prompt for every batch — vague content here means vague findings.
-
-### Option A: let your coding agent do it (recommended)
-
-Open the *parent repo* (the codebase you scanned, not `.deepsec/`) in
-your coding agent (Claude Code, Codex, Cursor, …) and paste the prompt
-that `deepsec init` printed. It walks the agent through:
-
-1. Read `.deepsec/node_modules/deepsec/SKILL.md` to understand the tool.
-2. Open `.deepsec/data/<id>/SETUP.md` for project-specific instructions.
-3. Skim the codebase, then replace each section of
-   `.deepsec/data/<id>/INFO.md`.
-
-The same prompt is shown in the project root README and is what `init`
-prints to stdout after scaffold.
-
-### Option B: by hand
-
-The processor auto-loads `data/<id>/INFO.md` from the workspace's data
-dir. Edit it directly — no extra wiring needed in
-`deepsec.config.ts`. INFO.md is optional but worth keeping; even a
-paragraph noticeably improves the AI's output.
-
-## Run a scan
-
-Before the first command: deepsec writes per-project state to
-`./data/<project-id>/` next to your config — `files/` (one JSON per
-scanned source file), `runs/`, plus `project.json` and the optional
-`INFO.md` / `config.json`. The directory is gitignored by default; see
-[data-layout.md](data-layout.md) for the full schema.
-
-```bash
-pnpm deepsec scan
-```
-
-`--project-id` is auto-resolved when the config has a single project
-(the common case). Pass `--project-id <id>` once you've registered
-more than one project. Pass `--root <path>` to override the resolved
-path — useful for one-off scans against a different checkout.
-
-`scan` runs ~110 regex matchers across the codebase. There are no AI calls at this stage. 
-On a 2,000-file project it takes ~15s. Output goes to
-`data/<id>/files/` as one JSON file per scanned source file (called a
-`FileRecord`).
-
-```bash
-pnpm deepsec status
-```
-
-shows the current state: how many files were scanned, how many are
-pending AI investigation, etc.
-
-## Run the AI investigation
-
-```bash
-pnpm deepsec process --concurrency 5
-```
-
-Defaults: Claude Opus, 5 files per batch,
-5 batches in parallel = 25 files in flight at once. You can lower the
-parallelism (`--concurrency 1`) or set `--limit 50` to budget-cap.
-
-A rough cost guide (Opus, default settings):
-
-| Files | Approx cost | Approx wall time |
-|---|---|---|
-| 100 | $25–60 | 5–15 min |
-| 500 | $130–300 | 25–60 min |
-| 2,000 | $500–1200 | 1.5–4 hr |
-
-Costs swing 2–3x based on file complexity. Run `--limit 50` first to
-calibrate before committing to the full pass.
-
-### If a run errors out
-
-`process` is safe to re-run. If a batch fails (network blip, transient
-model error, quota exhausted, you hit Ctrl-C), just run the same command
-again — deepsec resumes, skipping files that already finished and
-re-investigating only the ones that didn't. Nothing to clean up. Same
-applies to `revalidate`.
-
-For a cheaper backend:
-
-```bash
-pnpm deepsec process --agent codex --model gpt-5.5
-```
-
-Codex is the OpenAI-flavored backend. Same prompt, same JSON output,
-different agent loop. Try both on a small sample to see which catches
-shapes you care about. See [models.md](models.md) for the full
-backend / model matrix, refusal handling, and how to swap in newer
-models.
-
-## Triage and revalidate
-
-```bash
-pnpm deepsec triage --severity HIGH
-pnpm deepsec revalidate --min-severity HIGH
-```
-
-- **triage**: classifies findings P0/P1/P2 without re-reading the code.
-  ~1¢/finding.
-- **revalidate**: re-reads the code and the git history, then emits a
-  TP/FP/Fixed/Uncertain verdict. Comparable cost to `process`. Cuts FP
-  rate by 50%+ on most repos.
-
-Both optional, but worth running on the HIGH/CRITICAL set.
-
-## Get the findings out
-
-```bash
 pnpm deepsec export --format md-dir --out ./findings
-pnpm deepsec export --format json   --out findings.json
 ```
 
-`md-dir` writes one markdown file per finding under
-`./findings/{CRITICAL,HIGH,MEDIUM,…}/`. `json` writes a single array
-suitable for piping to a downstream issue tracker.
-
-For a quick aggregate look:
+That writes one markdown file per finding into `./findings`. For a quick
+overview instead:
 
 ```bash
-pnpm deepsec metrics
+pnpm deepsec report
 ```
 
-(Each of these commands accepts `--project-id <id>` if your config has
-multiple projects; the auto-resolution only kicks in when there's
-exactly one.)
+## Everyday commands
+
+After the first run, work from inside `.deepsec/`:
+
+```bash
+pnpm deepsec status       # where things stand
+pnpm deepsec scan         # re-run the fast pattern scan (free, no AI)
+pnpm deepsec process      # AI review of new or changed candidates
+pnpm deepsec revalidate   # re-check findings; cuts false positives
+pnpm deepsec export --format md-dir --out ./findings
+```
+
+`scan` costs nothing (it's local pattern matching). `process` is the
+expensive AI stage. All of these resume cleanly if interrupted, and
+re-running them only looks at work that isn't done yet.
+
+## Using your own API key
+
+You don't need a Vercel account to use deepsec with your own API key.
+To use your own OpenAI key:
+
+```bash
+MY_OPENAI_KEY=... npx deepsec init \
+  --agent codex \
+  --model-auth direct \
+  --ai-provider openai \
+  --ai-api-key-env MY_OPENAI_KEY
+```
+
+For Anthropic, use `--agent claude --ai-provider anthropic`. Deepsec
+stores only the *name* of the environment variable, never the key itself.
+Export the variable again for later commands, or put it in
+`.deepsec/.env.local`. See [vercel-setup](vercel-setup.md) for other
+providers and the full credential reference.
+
+## Using local subscriptions
+
+If the `claude` or `codex` CLI is already logged in on your machine, you
+can skip model credentials entirely. Pick **Use local subscriptions** at
+the interactive model-access prompt, or pass the flag directly:
+
+```bash
+npx deepsec init --model-auth local
+```
+
+Deepsec then configures nothing for model access: no API key, no gateway
+token, no environment variables. Later commands (`process`,
+`revalidate`, `triage`) skip their credential checks and rely on the
+machine-wide login — if it's missing, the agent SDK itself reports a
+clear error on first use.
+
+Two caveats: the login must exist for the harness you actually run
+(`claude` for `--agent claude`, a logged-in `codex` for `--agent codex`),
+and `sandbox` commands still need a real API token
+(`AI_GATEWAY_API_KEY`), because a machine-local login can't be brokered
+into an isolated sandbox.
+
+## Scaffold only
+
+To create the workspace files without running any of the setup:
+
+```bash
+npx deepsec init --scaffold-only
+```
+
+This writes the `.deepsec/` skeleton — `deepsec.config.ts`,
+`package.json`, `README.md`, `AGENTS.md`, `.gitignore`, and
+`data/<project>/{INFO.md,SETUP.md,project.json}` for the first project —
+and stops. It does not install dependencies, log in to Vercel, pick a
+model, scan, or start AI processing.
+
+Use it when you want to review or commit the scaffold before anything
+runs, drive the remaining setup from a coding agent, or do the steps by
+hand. The command prints the manual path: `pnpm install` inside
+`.deepsec/`, an agent prompt for filling in `INFO.md`, then
+`pnpm deepsec scan` and `pnpm deepsec process`. You can also run
+`pnpm deepsec setup` (or re-run `npx deepsec init`) later to complete
+the normal automated flow from where the scaffold left off.
+
+## Two files worth a look
+
+Setup writes two things you may want to review:
+
+- `data/<project>/INFO.md` — a short description of your codebase and its
+  security-relevant areas that gets injected into every AI investigation.
+  It's meant to be hand-edited: the more accurate it is, the better the
+  findings.
+- `.deepsec/generated-matchers.ts` — extra scan patterns deepsec generated
+  to cover gaps in your codebase. Review and commit this file. To go
+  further, see [writing-matchers](writing-matchers.md).
+
+## A note on trust
+
+Treat deepsec like a coding agent: during setup it reads your source code
+with an AI agent that authenticates to your model provider. Only run it on
+code you trust at that level. For scanning untrusted pull requests, use
+the guarded CI patterns in [reviewing-changes](reviewing-changes.md),
+or run the work in isolated cloud sandboxes (this part does use a Vercel
+account, since the sandboxes run on Vercel):
+
+```bash
+pnpm deepsec sandbox process --project-id my-app --sandboxes 10 --concurrency 4
+```
+
+Sandboxes never see your real model credentials. The host machine keeps
+them and injects them only at the model provider's servers.
+
+## Running from CI or an agent
+
+Without a terminal attached, deepsec automatically runs in headless mode:
+it never prompts or opens a browser. The two commands that matter:
+
+```bash
+# Preview everything setup would do, without changing anything
+npx deepsec init --plan --output json
+
+# Run unattended: accept defaults, pick a model by profile, stream events
+npx deepsec init --yes --model-profile value --output jsonl
+```
+
+`--model-profile` picks the model for you: `best` (highest benchmark
+score), `value` (best score at reasonable cost), or `budget` (cheapest).
+
+Exit code 2 means deepsec needs input it couldn't get headlessly (for
+example a Vercel login) — the JSON output says exactly what to do and how
+to resume. Exit code 3 means a cost or duration limit was reached; re-run
+the same command to continue. In CI, a gateway-routed setup can
+authenticate with explicit values instead of a login:
+
+```bash
+VERCEL_TOKEN=... VERCEL_TEAM_ID=team_... VERCEL_PROJECT_ID=prj_... \
+npx deepsec init --headless
+```
+
+Coding agents should read the docs deepsec installs into the workspace,
+which always match the installed version: start with
+`.deepsec/node_modules/deepsec/SKILL.md`, then the topics under
+`.deepsec/node_modules/deepsec/dist/docs/`.
+
+## Scanning more than one repository
+
+A single `.deepsec/` workspace can track several repositories. From the
+existing workspace:
+
+```bash
+pnpm deepsec init-project ../another-service --id another-service
+pnpm deepsec setup --project-id another-service
+```
+
+When a workspace has more than one project, pass `--project-id` to the
+everyday commands.
 
 ## Next
 
-- [docs/writing-matchers.md](writing-matchers.md) — prompt your coding
-  agent to compare `data/` matches against the target repo and write
-  matchers that close the entry-point coverage gaps.
-- [docs/configuration.md](configuration.md) — every field on
-  `deepsec.config.ts` and `data/<id>/config.json`.
-- [docs/models.md](models.md) — defaults, `--agent` / `--model`,
-  refusal handling, future models.
-- [docs/plugins.md](plugins.md) — for org-specific patterns that don't
-  belong in the public matcher set.
+- [configuration](configuration.md) — project, model route, and
+  environment configuration.
+- [writing-matchers](writing-matchers.md) — improving scan coverage
+  with your own matchers.
+- [vercel-setup](vercel-setup.md) — credentials, CI setups, and
+  troubleshooting the Vercel connection.
+- [architecture](architecture.md) — how the pipeline works internally.

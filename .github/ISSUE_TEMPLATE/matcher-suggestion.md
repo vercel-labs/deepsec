@@ -28,3 +28,5 @@ or is it specific to one organization's helpers (better as a plugin)? -->
 
 <!-- See docs/writing-matchers.md for the agent-prompted workflow. PRs
 welcome — even a half-working matcher is a great starting point. -->
+
+<!-- AGENTS: Use the 'technical-writer' skill when writing the content for this issue. -->

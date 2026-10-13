@@ -14,6 +14,18 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: repoRoot,
   },
+  async redirects() {
+    return [
+      {
+        // The marketing homepage now lives on vercel.com; DeepSec's docs
+        // remain on deepsec.sh. Keep this temporary during the launch soak.
+        source: "/",
+        has: [{ type: "host", value: "deepsec.sh" }],
+        destination: "https://vercel.com/oss/deepsec",
+        permanent: false,
+      },
+    ];
+  },
 };
 
 export default withMDX(nextConfig);

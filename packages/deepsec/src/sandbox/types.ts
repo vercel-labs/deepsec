@@ -1,4 +1,5 @@
 import type { Sandbox } from "@vercel/sandbox";
+import type { BrokeredModelCredential } from "../auth/model-route.js";
 
 /** Supported subcommands for sandbox execution. `enrich` is intentionally
  * absent — enrichment runs locally (git committer lookups + plugin ownership
@@ -25,6 +26,8 @@ export interface SandboxConfig {
   aiApiKeyEnv?: string;
   /** Pi provider base URL for custom gateway/provider routing */
   aiBaseUrl?: string;
+  /** Host-only credential broker descriptor; never persisted in detached run state. */
+  brokeredModelCredential?: BrokeredModelCredential;
   /** Model to use */
   model: string;
   /** Restore from existing snapshot */

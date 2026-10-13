@@ -15,12 +15,23 @@ import {
   writeRunMeta,
 } from "@deepsec/core";
 import { glob, globSync } from "glob";
-import { escape as escapeGlob, minimatch } from "minimatch";
+import { escape as escapeGlob, makeRe } from "minimatch";
 import { type DetectedTech, detectTech, readTechJson, writeTechJson } from "./detect-tech.js";
 import type { MatcherRegistry } from "./matcher-registry.js";
 import { createDefaultRegistry } from "./matchers/index.js";
 import type { MatcherPlugin, ScannerDriver, ScanProgress } from "./types.js";
 
+export type {
+  CompileDeclarativeMatcherOptions,
+  DeclarativeMatcherPlugin,
+  DeclarativeMatcherSpec,
+} from "./declarative-matcher.js";
+export {
+  compileDeclarativeMatcher,
+  compileDeclarativeMatchers,
+  declarativeMatcherSpecSchema,
+  declarativeMatcherSpecsSchema,
+} from "./declarative-matcher.js";
 export type { DetectedTech } from "./detect-tech.js";
 export { detectTech, readTechJson, writeTechJson } from "./detect-tech.js";
 export { MatcherRegistry } from "./matcher-registry.js";
@@ -120,6 +131,7 @@ export const IGNORE_DIRS = [
   "**/.deepsec/data/**",
   "**/dist/**",
   "**/build/**",
+  "**/target/**",
   "**/.next/**",
   "**/coverage/**",
   "**/.turbo/**",
@@ -672,11 +684,16 @@ export async function scanFiles(params: {
   // Pre-compile a "does this matcher consider this file" predicate so we
   // run minimatch once per (matcher, file) pair rather than re-parsing
   // the patterns on every comparison.
-  const matcherFilters = matchers.map((m) => ({
-    matcher: m,
-    test: (rel: string) =>
-      m.filePatterns.some((pat) => minimatch(rel, pat, { dot: true, nocase: false })),
-  }));
+  const matcherFilters = matchers.map((matcher) => {
+    const patterns = matcher.filePatterns.map((pattern) =>
+      makeRe(pattern, { dot: true, nocase: false }),
+    );
+    return {
+      matcher,
+      test: (relative: string) =>
+        patterns.some((pattern) => pattern !== false && pattern.test(relative)),
+    };
+  });
 
   let totalCandidates = 0;
   for (let fi = 0; fi < normalizedPaths.length; fi++) {

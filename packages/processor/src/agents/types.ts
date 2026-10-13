@@ -6,6 +6,15 @@ export interface AgentProgress {
   candidateFile?: string;
 }
 
+/** A general read-only repository task used by first-run setup. */
+export interface SetupTaskParams {
+  prompt: string;
+  projectRoot: string;
+  config: Record<string, unknown>;
+  signal?: AbortSignal;
+  onProgress?: (progress: AgentProgress) => void;
+}
+
 export interface InvestigateParams {
   batch: FileRecord[];
   projectRoot: string;

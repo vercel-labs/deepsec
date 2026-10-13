@@ -1,21 +1,35 @@
 ---
 title: "Architecture"
-description: "Follow the append-only pipeline from scan to process, revalidate, enrich, report, and export."
+description: "Follow one-shot setup into the append-only scan, process, revalidate, enrich, report, and export pipeline."
 ---
 
-## Pipeline
+## Initialization and steady-state pipeline
 
 ```
-       scan          process        revalidate          enrich           export
-        │              │                │                │                  │    
-        ▼              ▼                ▼                ▼                  ▼
-  candidates  →   findings    TP/FP/Fixed verdict  →  +committers  →  JSON / md-dir
-                                                      +ownership
+ scaffold → install → link/model/Sandbox → INFO + inventory
+                                           │
+                                           ▼
+                        baseline scan → coverage policy
+                                           │ gap
+                                           ▼
+                            declarative matcher generation
+                                           │
+                                           └──→ final scan → process
+
+ steady state: scan → process → revalidate → enrich → export/report
 ```
 
-Each stage is a separate CLI subcommand and reads/writes a consistent
-on-disk representation. Stages are idempotent: re-running merges new
-information rather than overwriting.
+`deepsec init` and `deepsec setup` coordinate the initialization graph.
+Each phase writes an input digest and output checkpoint; a retry skips a
+current completed phase and resumes at the first missing or invalid output.
+Steady-state stages remain separate CLI subcommands and use the same on-disk
+representation.
+
+Install and auth have two levels of idempotency. Setup state avoids expensive
+work, while cheap probes still confirm `node_modules/deepsec` exists and
+rehydrate the configured model credential. The auth layer independently
+short-circuits fresh model and Sandbox probes when the exact project link,
+route, and agent set are unchanged.
 
 ## On-disk layout
 
@@ -24,6 +38,9 @@ data/<projectId>/
 ├── project.json              # rootPath, githubUrl (auto-managed)
 ├── INFO.md                   # repo context injected into AI prompts (manual or agent-written)
 ├── config.json               # priorityPaths, promptAppend, ignorePaths (optional)
+├── setup/                    # generated setup evidence (gitignored)
+│   ├── setup-state.json      # phase checkpoints, digests, run IDs
+│   └── surface-inventory.json# structured ingress inventory
 ├── files/                    # one JSON per scanned file (FileRecord)
 │   └── path/to/file.ts.json
 ├── runs/                     # one JSON per run (RunMeta)
@@ -31,11 +48,12 @@ data/<projectId>/
 └── reports/                  # generated reports (markdown + JSON)
 ```
 
-`data/` is gitignored by default. Each `FileRecord` is the source of truth
+Generated `files/`, `runs/`, `reports/`, `project.json`, and `setup/` are
+gitignored by the scaffold; `INFO.md` remains trackable. Each `FileRecord` is the source of truth
 for everything deepsec knows about a single source file: candidate
 matches, AI findings, analysis history, git committer info, ownership.
 Full schemas for every file under `data/` are documented in
-[data-layout.md](data-layout.md).
+[data-layout](data-layout.md).
 
 The merge model is additive: every stage adds to the FileRecord. A
 re-scan merges new candidates into the existing set; a re-process appends
@@ -43,6 +61,25 @@ to `analysisHistory` and merges new findings; revalidation tags existing
 findings with verdicts. Nothing is overwritten or deleted.
 
 ## Stage details
+
+### setup coordinator
+
+- **Repository analysis:** a read-only agent produces concise `INFO.md` plus
+  a validated structured surface inventory. Invalid output receives one
+  repair attempt.
+- **Coverage:** inventory globs expand against the scanner's ignored-file
+  universe. The evaluator checks representative files, broad surface ratios,
+  sensitive zero-coverage surfaces, dominant-language blind spots, and new
+  matcher breadth.
+- **Generated matchers:** model output is strict JSON data compiled without
+  evaluating generated code. Regex/glob complexity, examples, slug collisions,
+  traversal, and match explosions are rejected. Accepted specs are written to
+  `generated-matchers.ts` for review and commit.
+- **Gate:** setup performs at most two generation/rescan attempts and never
+  starts paid processing while coverage still fails.
+
+The setup agent runner supports Codex, Claude, and Pi through a small
+read-only task interface separate from the investigation interface.
 
 ### scan
 
@@ -53,9 +90,9 @@ findings with verdicts. Nothing is overwritten or deleted.
 - **Outputs:** `data/<id>/files/**/*.json` with `candidates` populated and
   `status: "pending"`.
 
-The matcher set is built per-run from the default registry plus any
-matchers contributed by active plugins. Plugin matchers can override
-built-ins by reusing the same slug.
+The matcher set is built per-run from the default registry plus any matchers
+contributed by active plugins, including the generated matcher plugin.
+Generated specs must use unique slugs; collisions are rejected before scan.
 
 ### process
 
@@ -118,7 +155,7 @@ or downstream consumption.
 ## Plugin architecture
 
 Five extension points, all defined in
-[`packages/core/src/plugin.ts`](../packages/core/src/plugin.ts):
+[`packages/core/src/plugin.ts`](https://github.com/vercel-labs/deepsec/blob/main/packages/core/src/plugin.ts):
 
 - `matchers` — additive
 - `notifiers` — additive
@@ -140,7 +177,7 @@ from the active plugins, and stashes it on a module-level singleton
 (`getRegistry()`). All internal code consults the registry rather than
 hard-coding integrations.
 
-See [docs/plugins.md](plugins.md) for the full plugin authoring guide.
+See [plugins](plugins.md) for the full plugin authoring guide.
 
 ## Design decisions
 

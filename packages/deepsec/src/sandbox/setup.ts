@@ -1,4 +1,6 @@
+import { attributionHeaders } from "@deepsec/processor";
 import { type NetworkPolicy, type NetworkPolicyRule, Sandbox } from "@vercel/sandbox";
+import type { BrokeredModelCredential } from "../auth/model-route.js";
 import { markSetupComplete } from "./download.js";
 import { trackSandbox, untrackSandbox } from "./shutdown.js";
 import { extractTarballOnSandbox, type TarballStats, uploadTarballToSandbox } from "./upload.js";
@@ -59,7 +61,7 @@ const PI_CUSTOM_BASE_URL_ENV = "DEEPSEC_PI_AI_BASE_URL";
  * placeholder; the firewall replaces the Authorization header at egress
  * with the real token.
  */
-interface BrokeredCredentials {
+export interface BrokeredCredentials {
   anthropicToken?: string;
   openaiToken?: string;
   aiGatewayToken?: string;
@@ -67,11 +69,14 @@ interface BrokeredCredentials {
     envName: string;
     token: string;
   };
+  /** Explicit route selected during setup; takes precedence over ambient vars. */
+  selected?: BrokeredModelCredential;
 }
 
-interface BrokeredCredentialOptions {
+export interface BrokeredCredentialOptions {
   aiApiKeyEnv?: string;
   aiBaseUrl?: string;
+  brokeredModelCredential?: BrokeredModelCredential;
 }
 
 /**
@@ -84,6 +89,9 @@ export function resolveBrokeredCredentials(
   agentType: string | undefined,
   options: BrokeredCredentialOptions = {},
 ): BrokeredCredentials {
+  if (options.brokeredModelCredential) {
+    return { selected: options.brokeredModelCredential };
+  }
   const anthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const explicitOpenai = process.env.OPENAI_API_KEY;
   const aiGatewayToken = agentType === "pi" ? process.env.AI_GATEWAY_API_KEY : undefined;
@@ -119,6 +127,18 @@ export function buildSandboxEnv(
   const env: Record<string, string> = {};
   for (const key of SANDBOX_ENV_KEYS) {
     if (key in process.env) env[key] = process.env[key]!;
+  }
+
+  if (credentials.selected) {
+    env[credentials.selected.placeholderEnv] = BROKERED_TOKEN_PLACEHOLDER;
+    // The broker's source env identifies the real host-side credential, but
+    // the SDKs construct themselves from their standard variables before the
+    // firewall gets a chance to replace the outbound header.
+    if (agentType === "codex") env.OPENAI_API_KEY = BROKERED_TOKEN_PLACEHOLDER;
+    if (agentType === "claude-agent-sdk") {
+      env.ANTHROPIC_AUTH_TOKEN = BROKERED_TOKEN_PLACEHOLDER;
+      env.ANTHROPIC_API_KEY = BROKERED_TOKEN_PLACEHOLDER;
+    }
   }
 
   // Decoy tokens. Real values stay on the orchestrator host; the firewall
@@ -225,15 +245,18 @@ export function buildWorkerNetworkPolicy(
   // Single AI host per backend. Prefer derived from the base URL the agent
   // will actually use; fall back to the provider's documented default when
   // the user hasn't configured one.
-  const aiHost = isPi
-    ? (hostFromUrl(env[PI_CUSTOM_BASE_URL_ENV]) ?? DEFAULT_AI_GATEWAY_HOST)
-    : isCodex
-      ? (hostFromUrl(env["OPENAI_BASE_URL"]) ?? DEFAULT_OPENAI_HOST)
-      : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ?? DEFAULT_ANTHROPIC_HOST);
+  const aiHost =
+    credentials.selected?.host ??
+    (isPi
+      ? (hostFromUrl(env[PI_CUSTOM_BASE_URL_ENV]) ?? DEFAULT_AI_GATEWAY_HOST)
+      : isCodex
+        ? (hostFromUrl(env["OPENAI_BASE_URL"]) ?? DEFAULT_OPENAI_HOST)
+        : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ?? DEFAULT_ANTHROPIC_HOST));
 
   // The fallback flips at resolveBrokeredCredentials — by here, openaiToken
   // already carries the ANTHROPIC gateway token if the user only set that
   // one and is running codex.
+  const selectedHeader = credentials.selected?.header;
   const injectToken = isPi
     ? env[PI_CUSTOM_BASE_URL_ENV]
       ? credentials.customToken?.token
@@ -242,14 +265,32 @@ export function buildWorkerNetworkPolicy(
       ? credentials.openaiToken
       : credentials.anthropicToken;
 
+  // App Attribution rides the same per-domain header rewrite that brokers
+  // credentials, so every sandboxed agent's gateway traffic is tagged
+  // regardless of whether its in-VM config carries the headers itself.
+  // The firewall transform overwrites whatever the agent sent, and all
+  // injection points share attributionHeaders(), so values stay
+  // consistent. Gateway host only — never direct-provider hosts.
+  const attribution = aiHost === DEFAULT_AI_GATEWAY_HOST ? attributionHeaders() : undefined;
+
   const allow: Record<string, NetworkPolicyRule[]> = {
-    [aiHost]: injectToken
+    [aiHost]: selectedHeader
       ? [
           {
-            transform: [{ headers: { authorization: `Bearer ${injectToken}` } }],
+            transform: [
+              { headers: { ...attribution, [selectedHeader.name]: selectedHeader.value } },
+            ],
           },
         ]
-      : [],
+      : injectToken
+        ? [
+            {
+              transform: [{ headers: { ...attribution, authorization: `Bearer ${injectToken}` } }],
+            },
+          ]
+        : attribution
+          ? [{ transform: [{ headers: attribution }] }]
+          : [],
   };
   for (const h of extraAllow) {
     if (!(h in allow)) allow[h] = [];
@@ -389,12 +430,14 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
 
 // --- Worker: spawn from snapshot, no upload ---
 
-interface SpawnOptions {
+export interface SpawnOptions {
   snapshotId: string;
   /** Drives which API base URL gets rewritten to the local proxy */
   agentType?: string;
   aiApiKeyEnv?: string;
   aiBaseUrl?: string;
+  /** Explicit setup-selected route. Real value remains host-side. */
+  brokeredModelCredential?: BrokeredModelCredential;
   vcpus: number;
   timeout: number;
   /** Source repo vs. user's `.deepsec/` install — see DeepsecMode docstring */
@@ -419,6 +462,7 @@ export async function spawnFromSnapshot(opts: SpawnOptions): Promise<Sandbox> {
   const credentialOptions = {
     aiApiKeyEnv: opts.aiApiKeyEnv,
     aiBaseUrl: opts.aiBaseUrl,
+    brokeredModelCredential: opts.brokeredModelCredential,
   };
   const credentials = resolveBrokeredCredentials(opts.agentType, credentialOptions);
   const sandboxEnv = buildSandboxEnv(opts.agentType, credentials, credentialOptions);

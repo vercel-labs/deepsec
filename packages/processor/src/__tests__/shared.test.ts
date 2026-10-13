@@ -4,12 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AgentPolicyRefusalError,
+  attributionHeaders,
   buildInvestigateFieldRepairPrompt,
   buildInvestigateJsonRepairPrompt,
   buildRevalidateJsonRepairPrompt,
   classifyPolicyRefusal,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  isGatewayBaseUrl,
   isTransientError,
   isUsingAiGateway,
   parseInvestigateResults,
@@ -17,6 +19,7 @@ import {
   parseRevalidateVerdicts,
   QuotaExhaustedError,
   runInvestigateFieldRepairLoop,
+  setAttributionVersion,
   writeParseFailureDebug,
 } from "../agents/shared.js";
 
@@ -283,6 +286,47 @@ describe("isUsingAiGateway", () => {
 
   it("returns false when no relevant env vars are set", () => {
     expect(isUsingAiGateway()).toBe(false);
+  });
+});
+
+describe("isGatewayBaseUrl", () => {
+  it("accepts the Anthropic-adapter root URL, with and without trailing slash", () => {
+    expect(isGatewayBaseUrl("https://ai-gateway.vercel.sh")).toBe(true);
+    expect(isGatewayBaseUrl("https://ai-gateway.vercel.sh/")).toBe(true);
+  });
+
+  it("accepts the OpenAI-compat /v1 URL, with and without trailing slash", () => {
+    expect(isGatewayBaseUrl("https://ai-gateway.vercel.sh/v1")).toBe(true);
+    expect(isGatewayBaseUrl("https://ai-gateway.vercel.sh/v1/")).toBe(true);
+  });
+
+  it("rejects direct-provider URLs and undefined", () => {
+    expect(isGatewayBaseUrl("https://api.anthropic.com")).toBe(false);
+    expect(isGatewayBaseUrl("https://api.openai.com/v1")).toBe(false);
+    expect(isGatewayBaseUrl(undefined)).toBe(false);
+    expect(isGatewayBaseUrl("")).toBe(false);
+  });
+});
+
+describe("attributionHeaders", () => {
+  // Ordering matters within this block: the fallback assertion must run
+  // before setAttributionVersion mutates module state. Vitest executes
+  // `it`s in declaration order, and module isolation gives other test
+  // files a fresh copy.
+  it("falls back to a bare title when the version setter never ran", () => {
+    expect(attributionHeaders()).toEqual({
+      "http-referer": "https://deepsec.sh",
+      "x-title": "deepsec",
+    });
+  });
+
+  it("embeds the version after setAttributionVersion", () => {
+    setAttributionVersion("9.9.9-test");
+    expect(attributionHeaders()["x-title"]).toBe("deepsec/9.9.9-test");
+  });
+
+  it("returns a fresh object per call (call sites mutate/merge)", () => {
+    expect(attributionHeaders()).not.toBe(attributionHeaders());
   });
 });
 

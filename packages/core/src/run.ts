@@ -60,21 +60,24 @@ function detectGithubUrl(rootPath: string): string | undefined {
 export function ensureProject(projectId: string, rootPath: string): ProjectConfig {
   const configPath = projectConfigPath(projectId);
   if (fs.existsSync(configPath)) {
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const config = projectConfigSchema.parse(raw);
-    let changed = false;
-    if (path.resolve(rootPath) !== config.rootPath) {
-      config.rootPath = path.resolve(rootPath);
-      changed = true;
+    try {
+      const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      const config = projectConfigSchema.parse(raw);
+      let changed = false;
+      if (path.resolve(rootPath) !== config.rootPath) {
+        config.rootPath = path.resolve(rootPath);
+        changed = true;
+      }
+      if (!config.githubUrl) {
+        config.githubUrl = detectGithubUrl(path.resolve(rootPath));
+        if (config.githubUrl) changed = true;
+      }
+      if (changed) writeProjectConfig(configPath, config);
+      return config;
+    } catch {
+      // project.json is generated state. An interrupted non-atomic write from
+      // an older Deepsec version must not permanently wedge --force recovery.
     }
-    if (!config.githubUrl) {
-      config.githubUrl = detectGithubUrl(path.resolve(rootPath));
-      if (config.githubUrl) changed = true;
-    }
-    if (changed) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-    }
-    return config;
   }
   const config: ProjectConfig = {
     projectId,
@@ -83,8 +86,18 @@ export function ensureProject(projectId: string, rootPath: string): ProjectConfi
     githubUrl: detectGithubUrl(path.resolve(rootPath)),
   };
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  writeProjectConfig(configPath, config);
   return config;
+}
+
+function writeProjectConfig(file: string, config: ProjectConfig): void {
+  const temp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temp, file);
+  } finally {
+    if (fs.existsSync(temp)) fs.unlinkSync(temp);
+  }
 }
 
 export function readProjectConfig(projectId: string): ProjectConfig {

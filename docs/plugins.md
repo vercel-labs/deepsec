@@ -16,7 +16,7 @@ A deepsec plugin can fill any of five slots:
 A single plugin can fill any subset.
 
 The plugin contract lives in
-[`packages/core/src/plugin.ts`](../packages/core/src/plugin.ts):
+[`packages/core/src/plugin.ts`](https://github.com/vercel-labs/deepsec/blob/main/packages/core/src/plugin.ts):
 
 ```ts
 export interface DeepsecPlugin {
@@ -55,7 +55,7 @@ e.g. `@my-org/plugin-internal-services`.
 ## Slot 1: matchers
 
 Most common. Same shape as a built-in matcher; see
-[writing-matchers.md](writing-matchers.md) for how to write one.
+[writing-matchers](writing-matchers.md) for how to write one.
 
 ```ts
 // my-plugin/src/matchers/internal-rpc.ts
@@ -105,8 +105,8 @@ are unique. If your slug collides with a built-in, **the plugin wins**
 a tighter org-specific version.
 
 A complete inline-plugin example with two real matchers lives at
-[`samples/webapp/deepsec.config.ts`](../samples/webapp/deepsec.config.ts) and
-[`samples/webapp/matchers/`](../samples/webapp/matchers/) — the same
+[`samples/webapp/deepsec.config.ts`](https://github.com/vercel-labs/deepsec/blob/main/samples/webapp/deepsec.config.ts) and
+[`samples/webapp/matchers/`](https://github.com/vercel-labs/deepsec/tree/main/samples/webapp/matchers/) — the same
 shape as a published plugin, just defined in the user's config file.
 
 ## Slot 2: ownership
@@ -208,7 +208,7 @@ interface ExecutorProvider {
 ```
 
 The Vercel-Sandbox path lives in
-[`packages/deepsec/src/sandbox/`](../packages/deepsec/src/sandbox); it's
+[`packages/deepsec/src/sandbox/`](https://github.com/vercel-labs/deepsec/tree/main/packages/deepsec/src/sandbox); it's
 not yet routed through `ExecutorProvider`. That refactor is on the
 roadmap. For now, this is the most experimental slot of the five.
 

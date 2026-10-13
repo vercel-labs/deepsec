@@ -14,6 +14,7 @@ import {
 } from "@openai/codex-sdk";
 import {
   AgentPolicyRefusalError,
+  attributionHeaders,
   backoff,
   buildInvestigateJsonRepairPrompt,
   buildInvestigatePrompt,
@@ -21,6 +22,7 @@ import {
   buildRevalidatePrompt,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  isGatewayBaseUrl,
   isTransientError,
   jsonRepairFailureError,
   MAX_ATTEMPTS,
@@ -45,6 +47,7 @@ import type {
   RevalidateParams,
   RevalidateRawResponse,
   RevalidateVerdict,
+  SetupTaskParams,
 } from "./types.js";
 
 const DEFAULT_MODEL = "gpt-5.5";
@@ -282,6 +285,34 @@ interface CodexInvocation {
   codexHome: string;
 }
 
+/**
+ * Codex model-provider config for gateway mode. Exported for tests.
+ */
+export function buildGatewayProviderConfig(
+  baseUrl: string | undefined,
+): Record<string, string | boolean | Record<string, string>> {
+  const providerConfig: Record<string, string | boolean | Record<string, string>> = {
+    name: "Vercel AI Gateway (OpenAI-compat)",
+    env_key: "OPENAI_API_KEY",
+    wire_api: "responses",
+    supports_websockets: false,
+  };
+  // Codex appends `/responses` (and `/models` for listing) directly to
+  // base_url, so base_url MUST include `/v1` — final URL needs to be
+  // `<gateway>/v1/responses`. We tolerate either form coming in via env.
+  if (baseUrl) {
+    const trimmed = baseUrl.replace(/\/$/, "");
+    providerConfig.base_url = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+  }
+  // App Attribution: static headers codex adds to every request to this
+  // provider. Gateway-bound only — a user-supplied direct-provider base
+  // URL gets nothing.
+  if (isGatewayBaseUrl(providerConfig.base_url as string | undefined)) {
+    providerConfig.http_headers = attributionHeaders();
+  }
+  return providerConfig;
+}
+
 function buildCodexInvocation(): CodexInvocation {
   // Decide between gateway mode (orchestrator has an API token, we route
   // through Vercel AI Gateway via a custom provider) and subscription mode
@@ -342,19 +373,7 @@ function buildCodexInvocation(): CodexInvocation {
   const baseUrl = process.env.OPENAI_BASE_URL ?? process.env.ANTHROPIC_BASE_URL ?? undefined;
   const apiKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN ?? undefined;
 
-  const providerConfig: Record<string, string | boolean> = {
-    name: "Vercel AI Gateway (OpenAI-compat)",
-    env_key: "OPENAI_API_KEY",
-    wire_api: "responses",
-    supports_websockets: false,
-  };
-  // Codex appends `/responses` (and `/models` for listing) directly to
-  // base_url, so base_url MUST include `/v1` — final URL needs to be
-  // `<gateway>/v1/responses`. We tolerate either form coming in via env.
-  if (baseUrl) {
-    const trimmed = baseUrl.replace(/\/$/, "");
-    providerConfig.base_url = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
-  }
+  const providerConfig = buildGatewayProviderConfig(baseUrl);
 
   const config = {
     ...pluginLockdown,
@@ -662,6 +681,63 @@ async function runToollessFollowUp(
   }
 
   return raw;
+}
+
+export async function runCodexSetupTask(params: SetupTaskParams): Promise<string> {
+  const model = (params.config.model as string) ?? DEFAULT_MODEL;
+  const effort = (params.config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
+  const invocation = buildCodexInvocation();
+  const codex = new Codex(invocation.options);
+  const messages: string[] = [];
+  let failure = "";
+  try {
+    params.onProgress?.({
+      type: "started",
+      message: `Understanding repository with Codex (${model})`,
+    });
+    const thread = codex.startThread({
+      model,
+      workingDirectory: params.projectRoot,
+      skipGitRepoCheck: true,
+      sandboxMode: "read-only",
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      modelReasoningEffort: effort,
+      webSearchEnabled: false,
+    });
+    const prompt = `${codexEnvironmentPreamble(params.projectRoot)}\n\n${params.prompt}`;
+    const { events } = await thread.runStreamed(prompt, { signal: params.signal });
+    for await (const event of events as AsyncGenerator<ThreadEvent>) {
+      if (event.type === "item.completed") {
+        const progress = itemToProgress(event.item);
+        if (progress) params.onProgress?.(progress);
+        if (event.item.type === "agent_message" && event.item.text) {
+          messages.push(event.item.text);
+        }
+      } else if (event.type === "turn.failed") {
+        failure = event.error?.message ?? "Codex setup turn failed";
+      } else if (event.type === "error") {
+        failure = event.message;
+      }
+    }
+  } finally {
+    cleanupStderrLog(invocation.stderrLog);
+    cleanupCodexHome(invocation.codexHome);
+  }
+  const text = finalizeCodexSetupResult(messages, failure);
+  params.onProgress?.({ type: "complete", message: "Repository setup analysis complete" });
+  return text;
+}
+
+export function finalizeCodexSetupResult(messages: string[], failure: string): string {
+  const text = messages.join("\n").trim();
+  if (failure) {
+    const quotaSource = classifyQuotaError(failure, "codex");
+    if (quotaSource) throw new QuotaExhaustedError(quotaSource, failure);
+    throw new Error(failure);
+  }
+  if (!text) throw new Error("Codex produced no setup result");
+  return text;
 }
 
 export class CodexAgentSdkPlugin implements AgentPlugin {

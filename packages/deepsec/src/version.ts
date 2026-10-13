@@ -1,8 +1,33 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 let cached: string | null = null;
+let cachedPackageRoot: string | null = null;
+
+/** Locate the package root for both source and bundled execution. */
+function getDeepsecPackageRoot(): string {
+  if (cachedPackageRoot !== null) return cachedPackageRoot;
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  while (dir !== path.dirname(dir)) {
+    const pkgPath = path.join(dir, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+        if (pkg.name === "deepsec" && typeof pkg.version === "string") {
+          cachedPackageRoot = dir;
+          return dir;
+        }
+      } catch {
+        // unreadable / non-JSON — keep walking
+      }
+    }
+    dir = path.dirname(dir);
+  }
+  throw new Error(
+    "Could not locate the deepsec package.json (no ancestor with name === 'deepsec' found)",
+  );
+}
 
 /**
  * Read the version string from the deepsec package's package.json. Walks
@@ -21,23 +46,25 @@ let cached: string | null = null;
  */
 export function getDeepsecVersion(): string {
   if (cached !== null) return cached;
-  let dir = path.dirname(fileURLToPath(import.meta.url));
-  while (dir !== path.dirname(dir)) {
-    const pkgPath = path.join(dir, "package.json");
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-        if (pkg.name === "deepsec" && typeof pkg.version === "string") {
-          cached = pkg.version;
-          return pkg.version;
-        }
-      } catch {
-        // unreadable / non-JSON — keep walking
-      }
-    }
-    dir = path.dirname(dir);
-  }
-  throw new Error(
-    "Could not locate the deepsec package.json (no ancestor with name === 'deepsec' found)",
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(getDeepsecPackageRoot(), "package.json"), "utf-8"),
   );
+  cached = pkg.version;
+  return pkg.version;
+}
+
+/**
+ * Dependency spec written into a newly scaffolded workspace.
+ *
+ * A bundled CLI launched directly from a source checkout must install that
+ * checkout, not an older package with the same version from npm. Published
+ * packages omit `src/` and `build.mjs`, so normal npx/npm execution keeps an
+ * exact registry version and never persists a reference to an npm cache path.
+ */
+export function getDeepsecWorkspaceDependency(): string {
+  const packageRoot = getDeepsecPackageRoot();
+  const isSourceCheckout =
+    fs.existsSync(path.join(packageRoot, "src", "cli.ts")) &&
+    fs.existsSync(path.join(packageRoot, "build.mjs"));
+  return isSourceCheckout ? pathToFileURL(packageRoot).href : getDeepsecVersion();
 }

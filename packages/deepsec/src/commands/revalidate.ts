@@ -4,7 +4,7 @@ import { revalidate } from "@deepsec/processor";
 import { buildAgentConfig } from "../agent-config.js";
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
-import { assertAgentCredential } from "../preflight.js";
+import { applyConfiguredModelRoute, assertAgentCredential } from "../preflight.js";
 import { renderQuotaMessage } from "../quota-message.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import { resolveProjectId } from "../resolve-project-id.js";
@@ -84,11 +84,13 @@ export async function revalidateCommand(opts: {
   const _project = readProjectConfig(projectId);
   const agentType = resolveAgentType(opts.agent);
   const model = opts.model ?? defaultModelForAgent(agentType);
-  const agentConfig = buildAgentConfig({ ...opts, model });
   const minSeverity = opts.minSeverity as Severity | undefined;
   const onlySlugs = parseCsv(opts.onlySlugs);
   const skipSlugs = parseCsv(opts.skipSlugs);
 
+  const resolvedRoute =
+    !opts.aiApiKeyEnv && !opts.aiBaseUrl ? await applyConfiguredModelRoute(agentType) : undefined;
+  const agentConfig = buildAgentConfig({ ...opts, model, modelRoute: resolvedRoute?.route });
   assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);

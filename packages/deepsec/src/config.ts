@@ -55,5 +55,11 @@ export {
   PluginRegistry,
   setLoadedConfig,
 } from "@deepsec/core";
-
-export { createDefaultRegistry, MatcherRegistry, regexMatcher } from "@deepsec/scanner";
+export type { DeclarativeMatcherSpec } from "@deepsec/scanner";
+export {
+  compileDeclarativeMatcher,
+  compileDeclarativeMatchers,
+  createDefaultRegistry,
+  MatcherRegistry,
+  regexMatcher,
+} from "@deepsec/scanner";
