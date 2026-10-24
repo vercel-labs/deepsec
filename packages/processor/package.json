@@ -13,8 +13,8 @@
     "@deepsec/core": "workspace:*",
     "@deepsec/scanner": "workspace:*",
     "@earendil-works/pi-coding-agent": "0.81.1",
-    "@openai/codex": "^0.156.1",
-    "@openai/codex-sdk": "^0.156.1",
+    "@openai/codex": "^0.164.0",
+    "@openai/codex-sdk": "^0.164.0",
     "jsonrepair": "^3.14.0"
   }
 }
