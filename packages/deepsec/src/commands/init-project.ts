@@ -4,6 +4,7 @@ import { dataDir, ensureProject } from "@deepsec/core";
 import { BOLD, CYAN, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { requireExistingDir } from "../require-dir.js";
 import { validateProjectId } from "../resolve-project-id.js";
+import { INFO_SETUP_INCOMPLETE_MARKER } from "../setup/repository-analysis.js";
 
 export const PROJECTS_INSERT_MARKER = "// <deepsec:projects-insert-above>";
 
@@ -154,6 +155,8 @@ function insertProjectIntoConfig(configPath: string, id: string, root: string): 
 
 function infoMdTemplate(id: string): string {
   return `# ${id}
+
+${INFO_SETUP_INCOMPLETE_MARKER}
 
 > Replace each section. Target 50–100 lines total. INFO.md is injected
 > into every AI scan batch — verbose context dilutes signal.

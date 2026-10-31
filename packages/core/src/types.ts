@@ -183,9 +183,10 @@ export interface Revalidation {
   reasoning: string;
   adjustedSeverity?: Severity;
   /**
-   * Set iff `verdict === "duplicate"`. Holds the `title` of the primary
-   * finding in the same file. The primary's verdict is the canonical
-   * one for the underlying issue.
+   * Set iff `verdict === "duplicate"`. Holds the identity of the primary
+   * finding — the `findingId` when known (new writes), or the primary's
+   * `title` for records written before finding IDs existed. The
+   * primary's verdict is the canonical one for the underlying issue.
    */
   duplicateOf?: string;
   revalidatedAt: string;
@@ -205,6 +206,19 @@ export interface Triage {
 }
 
 export interface Finding {
+  /**
+   * Stable, deterministic identifier: `finding_` + sha256 prefix of
+   * (projectId, normalized filePath, original title). Assigned at append
+   * time for new findings and lazily backfilled on load for records
+   * written before the field existed (see `ensureFindingIds`). This is
+   * the primary identity used by the revalidation response contract —
+   * titles are human-readable context only.
+   *
+   * Optional in the schema for backward compatibility, but always
+   * present in memory after a record passes through
+   * readFileRecord/loadAllFileRecords.
+   */
+  findingId?: string;
   severity: Severity;
   vulnSlug: string;
   title: string;

@@ -18,24 +18,24 @@ Files (read in this order):
 5. [`config.json`](config.json) — optional per-project config
    (`priorityPaths`, `promptAppend`, `ignorePaths`).
 
-## How this relates to `deepsec init`
+## How this relates to one-shot setup
 
-`deepsec init` produces a **minimal** scaffold inside `.deepsec/` —
-config + INFO.md + SETUP.md + env/gitignore. No custom matchers,
-no plugin.
+`deepsec init` now creates and installs the workspace, links and verifies
+Vercel/Sandbox/model access, writes `INFO.md`, evaluates a structured surface
+inventory, and adds safe declarative matchers to `generated-matchers.ts` when
+coverage needs them.
 
-This sample is what `.deepsec/` can grow into over time. Read it for
-shape; don't copy it as your starting point. The intended flow:
+This sample demonstrates the next layer: hand-authored matcher code for rules
+that need negative checks or richer file logic. Read it for that shape; do not
+replace the generated workspace config wholesale.
 
 ```bash
-# Start minimal: from your repo root.
+# Start and complete setup from your repo root.
 npx deepsec init
-cd .deepsec && pnpm install
-# Let your agent fill INFO.md, then scan.
 
-# Later, when a true-positive finding suggests a matcher worth keeping,
+# Later, when a true-positive needs richer logic than a declarative matcher,
 # look at this sample's matchers/*.ts for the shape, and read
-# docs/writing-matchers.md for the workflow that grows it.
+# docs/writing-matchers.md. Add the plugin beside generatedMatchersPlugin.
 ```
 
 ## Run the sample as-is

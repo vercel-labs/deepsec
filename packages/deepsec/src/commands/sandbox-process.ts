@@ -1,6 +1,10 @@
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET } from "../formatters.js";
-import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
+import {
+  applyConfiguredModelRoute,
+  assertAgentCredential,
+  assertSandboxCredential,
+} from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import { resolveProjectId } from "../resolve-project-id.js";
 import { checkStatus, collect, launch, orchestrate } from "../sandbox/orchestrator.js";
@@ -143,6 +147,14 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
 
   const projectId = resolveProjectId(opts.projectId);
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
+
+  if (!config.aiApiKeyEnv && !config.aiBaseUrl) {
+    const resolved = await applyConfiguredModelRoute(config.agentType ?? "codex", process.env, {
+      inSandbox: true,
+    });
+    config.brokeredModelCredential = resolved?.broker;
+    config.aiBaseUrl = resolved?.route.baseUrl;
+  }
 
   // Preflight: fail fast with an actionable message before we spend ~30s
   // on a doomed bootstrap sandbox. The credential brokering path needs

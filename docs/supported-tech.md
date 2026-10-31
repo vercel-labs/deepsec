@@ -1,4 +1,7 @@
-# Supported tech
+---
+title: "Supported tech"
+description: "The frameworks, languages, infrastructure files, and prompt highlights deepsec recognizes out of the box."
+---
 
 Canonical list of frameworks and ecosystems deepsec recognizes out of the box.
 Each entry tells you three things:

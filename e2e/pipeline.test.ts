@@ -158,10 +158,7 @@ function injectStubPlugin(configPath: string): void {
       'import { defineConfig } from "deepsec/config";\n',
       'import { defineConfig } from "deepsec/config";\nimport stubPlugin from "./stub-plugin.mjs";\n',
     )
-    .replace(
-      /export default defineConfig\(\{\s*\n\s*projects:/,
-      "export default defineConfig({\n  plugins: [stubPlugin],\n  projects:",
-    );
+    .replace(/plugins:\s*\[/, "plugins: [stubPlugin, ");
   if (patched === original) {
     throw new Error(`failed to patch ${configPath} — template format changed?`);
   }
@@ -186,8 +183,11 @@ describe("pipeline e2e", () => {
       // the package without a real `pnpm install` round-trip.
       fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(tmp, "node_modules"), "dir");
 
-      // 1. init — scaffolds .deepsec/ with the fixture as the first project
-      const init = runBundle(["init", workspaceDir, FIXTURES, "--id", "fixture"], tmp);
+      // 1. Scaffold-only init; this test exercises the later commands directly.
+      const init = runBundle(
+        ["init", workspaceDir, FIXTURES, "--id", "fixture", "--scaffold-only"],
+        tmp,
+      );
       expect(init.status, `init stderr: ${init.stderr}\nstdout: ${init.stdout}`).toBe(0);
       expect(fs.existsSync(path.join(workspaceDir, "deepsec.config.ts"))).toBe(true);
       expect(fs.existsSync(path.join(workspaceDir, "data/fixture/project.json"))).toBe(true);

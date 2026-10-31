@@ -8,6 +8,7 @@ import {
   createRunMeta,
   dataDir,
   defaultConcurrency,
+  ensureFindingIds,
   getRegistry,
   isPidAlive,
   loadAllFileRecords,
@@ -34,17 +35,27 @@ import { batchCandidates } from "./batch.js";
 import { enrichFileRecord } from "./enrich.js";
 import { assemblePrompt } from "./prompt/assemble.js";
 import { languagesForBatch } from "./prompt/file-language.js";
+import {
+  buildAliasMap,
+  type ExpectedFinding,
+  expectedFindingsForBatch,
+  reconcileVerdicts,
+  resolveDuplicateRef,
+} from "./reconcile.js";
 
 export { ClaudeAgentSdkPlugin } from "./agents/claude-agent-sdk.js";
 export { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
 export { PiAgentPlugin } from "./agents/pi-sdk.js";
 export { AgentRegistry } from "./agents/registry.js";
 export {
+  attributionHeaders,
   classifyQuotaError,
+  isGatewayBaseUrl,
   isUsingAiGateway,
   type QuotaAgentHint,
   QuotaExhaustedError,
   type QuotaSource,
+  setAttributionVersion,
 } from "./agents/shared.js";
 export type { AgentPlugin, AgentProgress } from "./agents/types.js";
 export { batchCandidates } from "./batch.js";
@@ -57,6 +68,21 @@ export {
   noteForSlug,
   TECH_HIGHLIGHTS,
 } from "./prompt/index.js";
+export {
+  buildAliasMap,
+  type ExpectedFinding,
+  expectedFindingsForBatch,
+  type MatchedBy,
+  normalizeAliasRef,
+  normalizePath,
+  normalizeTitle,
+  type ReconcileDiagnostic,
+  type ReconcileMatch,
+  type ReconcileResult,
+  reconcileVerdicts,
+  resolveDuplicateRef,
+} from "./reconcile.js";
+export { type RunSetupTaskParams, runSetupTask } from "./setup-agent.js";
 export { triage } from "./triage.js";
 
 export function createDefaultAgentRegistry(): AgentRegistry {
@@ -122,7 +148,11 @@ export async function process(params: {
   filePaths?: string[];
   /** Free-form origin label for direct invocations (e.g. "git-diff:origin/main"). */
   source?: string;
+  /** Cancel in-flight agent work and stop claiming new batches. */
+  signal?: AbortSignal;
   onProgress?: (progress: ProcessProgress) => void;
+  /** Stop claiming new batches once completed batch cost reaches this limit. */
+  maxCostUsd?: number;
 }): Promise<{
   runId: string;
   analysisCount: number;
@@ -143,6 +173,8 @@ export async function process(params: {
    * provider / gateway).
    */
   quotaExhausted?: { source: QuotaSource; rawMessage: string };
+  totalCostUsd?: number;
+  costLimitReached?: { limitUsd: number; actualUsd: number };
 }> {
   const { projectId, agentType = "claude-agent-sdk", config = {}, reinvestigate = false } = params;
   // We deliberately don't default `promptTemplate` to DEFAULT_PROMPT_TEMPLATE
@@ -562,7 +594,12 @@ export async function process(params: {
     // for a polling tick. The captured `quotaExhausted` is returned to the
     // caller so the CLI can render a tailored remediation message.
     const quotaAbort = new AbortController();
+    if (params.signal?.aborted) quotaAbort.abort(params.signal.reason);
+    params.signal?.addEventListener("abort", () => quotaAbort.abort(params.signal?.reason), {
+      once: true,
+    });
     let quotaExhausted: { source: QuotaSource; rawMessage: string } | undefined;
+    let costLimitReached: { limitUsd: number; actualUsd: number } | undefined;
 
     async function processBatch(batch: FileRecord[], i: number) {
       batchesInFlight++;
@@ -662,6 +699,9 @@ export async function process(params: {
             // undefined for findings written before this field existed.
             .map((f) => ({ ...f, producedByRunId: runId }));
           record.findings = [...(record.findings ?? []), ...newFindings];
+          // Stamp stable findingIds on the appended findings at creation
+          // time (existing findings already have theirs from load).
+          ensureFindingIds(record);
           const findingsForHistoryCount = newFindings.length;
 
           record.analysisHistory.push({
@@ -713,6 +753,14 @@ export async function process(params: {
 
         batchesInFlight--;
         batchesCompleted++;
+        if (
+          params.maxCostUsd !== undefined &&
+          totalCostUsd >= params.maxCostUsd &&
+          !costLimitReached
+        ) {
+          costLimitReached = { limitUsd: params.maxCostUsd, actualUsd: totalCostUsd };
+          quotaAbort.abort(new Error(`Cost limit $${params.maxCostUsd.toFixed(2)} reached`));
+        }
         emitProgress({
           type: "batch_complete",
           message: `Batch ${i + 1}/${batches.length} complete: ${results.length} analyses, ${results.reduce((s, r) => s + r.findings.length, 0)} findings (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
@@ -769,6 +817,19 @@ export async function process(params: {
       await Promise.all(workers);
     }
 
+    // Cost/quota stops can leave batches that were claimed up front but never
+    // launched. Release those records immediately so the next resumable run
+    // does not have to wait for stale-lock reclamation.
+    if (costLimitReached || quotaExhausted) {
+      for (const record of toProcess) {
+        if (record.status !== "processing" || record.lockedByRunId !== runId) continue;
+        record.status = "pending";
+        record.lockedByRunId = undefined;
+        record.lockedAt = undefined;
+        writeFileRecord(record);
+      }
+    }
+
     completeRun(projectId, runId, "done", {
       filesProcessed: totalAnalyses,
       findingsCount: totalFindings,
@@ -791,6 +852,8 @@ export async function process(params: {
       findingCount: totalFindings,
       errorBatchCount: batchesFailed,
       quotaExhausted,
+      totalCostUsd,
+      costLimitReached,
     };
   } catch (err) {
     // Body threw before completing. Flip phase to "error" so the
@@ -838,6 +901,12 @@ export async function revalidate(params: {
   onlySlugs?: string[];
   /** Skip findings with any of these vulnSlugs */
   skipSlugs?: string[];
+  /**
+   * Allow a `duplicateOf` reference to resolve to a finding in another
+   * file of the same batch. Default false — duplicates are same-file
+   * only, matching the prompt's instructions.
+   */
+  crossFileDuplicates?: boolean;
   onProgress?: (progress: ProcessProgress) => void;
 }): Promise<{
   runId: string;
@@ -854,6 +923,15 @@ export async function revalidate(params: {
    * on the next run.
    */
   duplicatesRejected: number;
+  /** Total findings this run asked the agent(s) to revalidate. */
+  requested: number;
+  /**
+   * Findings that still have no persisted verdict after in-session
+   * repair and adaptive batch splitting. Non-empty means the run is
+   * incomplete — the CLI treats this as a failure exit. Each entry
+   * identifies the finding so a follow-up run can target it.
+   */
+  unresolved: Array<{ findingId: string; filePath: string; title: string }>;
   /** Same semantics as `process()` — see that return type. */
   quotaExhausted?: { source: QuotaSource; rawMessage: string };
 }> {
@@ -863,6 +941,7 @@ export async function revalidate(params: {
     config = {},
     minSeverity,
     force = false,
+    crossFileDuplicates = false,
   } = params;
 
   const emitProgress = (progress: ProcessProgress) => {
@@ -988,6 +1067,8 @@ export async function revalidate(params: {
         uncertain: 0,
         duplicates: 0,
         duplicatesRejected: 0,
+        requested: 0,
+        unresolved: [],
       };
     }
 
@@ -997,8 +1078,12 @@ export async function revalidate(params: {
     let totalFixed = 0;
     let totalUncertain = 0;
     let totalDuplicate = 0;
-    let totalDupeRejected = 0;
+    // Rejected DUPEs keyed by findingId — split retries re-reject the
+    // same finding, and counting per attempt would inflate the stat.
+    const dupeRejectedIds = new Set<string>();
     let totalCostUsd = 0;
+    let totalRequested = 0;
+    const totalUnresolved: ExpectedFinding[] = [];
     let batchesCompleted = 0;
     let batchesInFlight = 0;
     const concurrency = params.concurrency ?? defaultConcurrency();
@@ -1010,181 +1095,440 @@ export async function revalidate(params: {
     const quotaAbort = new AbortController();
     let quotaExhausted: { source: QuotaSource; rawMessage: string } | undefined;
 
+    // Every agent invocation (initial batch, per-file retry, per-finding
+    // retry) drops one artifact here: raw model responses, parsed
+    // verdicts, reconciliation diagnostics, and repair prompts. Lives in
+    // the project data dir — not an ephemeral debug location — so
+    // failures can be diagnosed and rescored without repeating model
+    // work.
+    const artifactsDir = path.join(dataDir(projectId), "revalidation", runId);
+    let artifactSeq = 0;
+    const writeInvocationArtifact = (artifact: Record<string, unknown>): void => {
+      try {
+        fs.mkdirSync(artifactsDir, { recursive: true });
+        const name = `invocation-${String(artifactSeq++).padStart(3, "0")}.json`;
+        fs.writeFileSync(
+          path.join(artifactsDir, name),
+          JSON.stringify(artifact, null, 2) + "\n",
+          "utf-8",
+        );
+      } catch (e) {
+        console.error(
+          `[deepsec] failed to write revalidation artifact: ${e instanceof Error ? e.message : e}`,
+        );
+      }
+    };
+
+    interface InvocationResult {
+      expectedCount: number;
+      returnedCount: number;
+      matchedCount: number;
+      persistedCount: number;
+      /** Expected findings that still have no persisted verdict. */
+      unresolved: ExpectedFinding[];
+    }
+
+    /**
+     * One agent call + reconcile + persist. Verdicts that reconcile
+     * unambiguously are applied and written to disk IMMEDIATELY — a miss
+     * elsewhere in the batch never discards them. Returns the findings
+     * that remain unresolved so the caller can retry just those.
+     */
+    async function runRevalidateInvocation(inv: {
+      files: FileRecord[];
+      onlyFindingIds?: string[];
+      batchIdx: number;
+      label: string;
+    }): Promise<InvocationResult> {
+      const { files, onlyFindingIds, batchIdx, label } = inv;
+      const onlySet = onlyFindingIds ? new Set(onlyFindingIds) : undefined;
+      const expected = expectedFindingsForBatch(files, { force, onlyFindingIds: onlySet });
+      if (expected.length === 0) {
+        return {
+          expectedCount: 0,
+          returnedCount: 0,
+          matchedCount: 0,
+          persistedCount: 0,
+          unresolved: [],
+        };
+      }
+
+      const gen = agent.revalidate({
+        batch: files,
+        projectRoot: effectiveRootPath,
+        projectInfo,
+        config,
+        force,
+        onlyFindingIds,
+        signal: quotaAbort.signal,
+        projectId,
+      });
+
+      let result = await gen.next();
+      while (!result.done) {
+        emitProgress({
+          type: "agent_progress",
+          message: (result.value as AgentProgress).message,
+          batchIndex: batchIdx,
+          totalBatches: batches.length,
+          agentProgress: result.value as AgentProgress,
+        });
+        result = await gen.next();
+      }
+
+      const output = result.value as RevalidateOutput;
+      const batchMeta = output.meta;
+      totalCostUsd += batchMeta.costUsd ?? 0;
+
+      const reconciled = reconcileVerdicts(expected, output.verdicts);
+      // Translates "F2"-style duplicateOf references (the short aliases
+      // the prompt displayed) back to stable findingIds.
+      const aliasMap = buildAliasMap(expected);
+
+      // Index findings by their stable id — reconciliation already
+      // resolved every match to a findingId, so application is exact.
+      const byId = new Map<
+        string,
+        { file: FileRecord; finding: (typeof files)[0]["findings"][0] }
+      >();
+      for (const file of files) {
+        for (const finding of file.findings) {
+          if (finding.findingId) byId.set(finding.findingId, { file, finding });
+        }
+      }
+
+      // Two-pass apply + writeback. Pass 1 applies every non-duplicate
+      // verdict. Pass 2 applies "duplicate" verdicts, but only when the
+      // referenced primary has a non-duplicate verdict — either freshly
+      // applied in pass 1 or already on the file from a prior run. This
+      // enforces the invariant that every equivalence class of
+      // duplicates has exactly one non-duplicate primary; an all-DUPE
+      // group gets every member rejected (they stay unresolved and get
+      // retried in the split stage / next run).
+      const nowIso = new Date().toISOString();
+      const resolvedIds = new Set<string>();
+      let persistedCount = 0;
+      const dupeMatches: typeof reconciled.matches = [];
+
+      for (const m of reconciled.matches) {
+        if (m.verdict.verdict === "duplicate") {
+          dupeMatches.push(m);
+          continue;
+        }
+        const target = byId.get(m.expected.findingId);
+        if (!target) continue;
+        const { finding } = target;
+        // Never overwrite the manual accepted-risk marker, and never
+        // re-apply over an existing verdict outside force mode (keeps
+        // restarts/retries idempotent). Both count as resolved so the
+        // finding isn't retried.
+        if (finding.revalidation?.verdict === "accepted-risk") {
+          resolvedIds.add(m.expected.findingId);
+          continue;
+        }
+        if (finding.revalidation && !force) {
+          resolvedIds.add(m.expected.findingId);
+          continue;
+        }
+        finding.revalidation = {
+          verdict: m.verdict.verdict,
+          reasoning: m.verdict.reasoning,
+          adjustedSeverity: m.verdict.adjustedSeverity,
+          revalidatedAt: nowIso,
+          runId,
+          model,
+        };
+        if (m.verdict.adjustedSeverity) {
+          finding.severity = m.verdict.adjustedSeverity;
+        }
+        resolvedIds.add(m.expected.findingId);
+        dupeRejectedIds.delete(m.expected.findingId);
+        persistedCount++;
+        totalRevalidated++;
+        if (m.verdict.verdict === "true-positive") totalTP++;
+        else if (m.verdict.verdict === "false-positive") totalFP++;
+        else if (m.verdict.verdict === "fixed") totalFixed++;
+        else totalUncertain++;
+      }
+
+      for (const m of dupeMatches) {
+        const target = byId.get(m.expected.findingId);
+        if (!target) continue;
+        const { file, finding } = target;
+        if (finding.revalidation?.verdict === "accepted-risk") {
+          resolvedIds.add(m.expected.findingId);
+          continue;
+        }
+        if (finding.revalidation && !force) {
+          resolvedIds.add(m.expected.findingId);
+          continue;
+        }
+        // `duplicateOf` resolves through the same reconciliation-style
+        // matching: short alias / findingId first, then exact /
+        // normalized title. Reject self-reference, unresolvable
+        // reference, and pointing at another DUPE. Rejected DUPEs are
+        // NOT discarded silently — they stay unresolved and are retried
+        // by the split stage.
+        const ref = m.verdict.duplicateOf;
+        if (!ref) {
+          dupeRejectedIds.add(m.expected.findingId);
+          continue;
+        }
+        const primary = resolveDuplicateRef({
+          ref,
+          file,
+          batch: files,
+          crossFile: crossFileDuplicates,
+          aliasMap,
+        });
+        if (!primary || primary.finding === finding) {
+          dupeRejectedIds.add(m.expected.findingId);
+          continue;
+        }
+        if (!primary.finding.revalidation || primary.finding.revalidation.verdict === "duplicate") {
+          dupeRejectedIds.add(m.expected.findingId);
+          continue;
+        }
+        finding.revalidation = {
+          verdict: "duplicate",
+          reasoning: m.verdict.reasoning,
+          // Persist the primary's stable id (falls back to the raw ref
+          // for pre-findingId primaries, matching the legacy format).
+          duplicateOf: primary.finding.findingId ?? ref,
+          revalidatedAt: nowIso,
+          runId,
+          model,
+        };
+        resolvedIds.add(m.expected.findingId);
+        dupeRejectedIds.delete(m.expected.findingId);
+        persistedCount++;
+        totalRevalidated++;
+        totalDuplicate++;
+      }
+
+      // Push a per-file `analysisHistory` entry for this invocation.
+      // Without this, revalidate cost is only ever recorded in
+      // `runMeta.stats.totalCostUsd` and is invisible to the `metrics`
+      // command (which aggregates strictly off `record.analysisHistory`).
+      // We split invocation-level cost / tokens / duration / turns evenly
+      // over the files so per-file totals add up to actual spend.
+      const splitN = Math.max(1, files.length);
+      const perFileCost = batchMeta.costUsd != null ? batchMeta.costUsd / splitN : undefined;
+      const perFileUsage = batchMeta.usage
+        ? {
+            inputTokens: batchMeta.usage.inputTokens / splitN,
+            outputTokens: batchMeta.usage.outputTokens / splitN,
+            cacheReadInputTokens: batchMeta.usage.cacheReadInputTokens / splitN,
+            cacheCreationInputTokens: batchMeta.usage.cacheCreationInputTokens / splitN,
+          }
+        : undefined;
+      const perFileDurationMs = batchMeta.durationMs / splitN;
+      const perFileDurationApiMs =
+        batchMeta.durationApiMs != null ? batchMeta.durationApiMs / splitN : undefined;
+      const perFileNumTurns = batchMeta.numTurns != null ? batchMeta.numTurns / splitN : undefined;
+      const investigatedAt = new Date().toISOString();
+
+      for (const file of files) {
+        const persistedForFile = reconciled.matches.filter(
+          (m) => resolvedIds.has(m.expected.findingId) && m.expected.filePath === file.filePath,
+        ).length;
+        file.analysisHistory.push({
+          runId,
+          investigatedAt,
+          durationMs: perFileDurationMs,
+          durationApiMs: perFileDurationApiMs,
+          agentType,
+          model,
+          modelConfig: config,
+          agentSessionId: batchMeta.agentSessionId,
+          findingCount: persistedForFile,
+          numTurns: perFileNumTurns,
+          phase: "revalidate",
+          costUsd: perFileCost,
+          usage: perFileUsage,
+          refusal: batchMeta.refusal,
+          codexStderr: batchMeta.codexStderr,
+        });
+
+        try {
+          enrichFileRecord(file, effectiveRootPath);
+        } catch (e) {
+          console.error(
+            `[deepsec] enrich failed for ${file.filePath}: ${e instanceof Error ? e.message : e}`,
+          );
+        }
+        writeFileRecord(file);
+      }
+
+      const unresolved = expected.filter((e) => !resolvedIds.has(e.findingId));
+
+      writeInvocationArtifact({
+        batchIndex: batchIdx,
+        label,
+        timestamp: investigatedAt,
+        files: files.map((f) => f.filePath),
+        requested: expected,
+        rawResponses: output.rawResponses,
+        repairAttempts: output.repairAttempts,
+        parsedVerdicts: output.verdicts,
+        reconciliation: {
+          matches: reconciled.matches.map((m) => m.diagnostic),
+          missingFindingIds: reconciled.missing.map((e) => e.findingId),
+          unknownVerdicts: reconciled.unknown,
+          ambiguousVerdicts: reconciled.ambiguous,
+        },
+        persistedCount,
+        unresolvedFindingIds: unresolved.map((e) => e.findingId),
+      });
+
+      return {
+        expectedCount: expected.length,
+        returnedCount: output.verdicts.length,
+        matchedCount: reconciled.matches.length,
+        persistedCount,
+        unresolved,
+      };
+    }
+
+    /**
+     * Retry wrapper for the split stages: a non-quota failure in a
+     * sub-invocation shouldn't sink verdicts already persisted for the
+     * rest of the batch — record its findings as unresolved and move on.
+     */
+    async function runInvocationSafe(inv: {
+      files: FileRecord[];
+      onlyFindingIds: string[];
+      batchIdx: number;
+      label: string;
+      fallbackUnresolved: ExpectedFinding[];
+    }): Promise<InvocationResult> {
+      try {
+        return await runRevalidateInvocation(inv);
+      } catch (err) {
+        if (err instanceof QuotaExhaustedError) throw err;
+        emitProgress({
+          type: "agent_progress",
+          message: `Retry ${inv.label} failed: ${err instanceof Error ? err.message : String(err)}`,
+          batchIndex: inv.batchIdx,
+          totalBatches: batches.length,
+          agentProgress: {
+            type: "error",
+            message: `Retry ${inv.label} failed: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        });
+        return {
+          expectedCount: inv.fallbackUnresolved.length,
+          returnedCount: 0,
+          matchedCount: 0,
+          persistedCount: 0,
+          unresolved: inv.fallbackUnresolved,
+        };
+      }
+    }
+
     async function revalidateBatch(batch: FileRecord[], idx: number) {
       batchesInFlight++;
-      const findingCount = batch.reduce(
-        (s, f) => s + f.findings.filter((ff) => (!force ? !ff.revalidation : true)).length,
-        0,
-      );
+      const requested = expectedFindingsForBatch(batch, { force });
+      totalRequested += requested.length;
       emitProgress({
         type: "batch_started",
-        message: `Revalidating batch ${idx + 1}/${batches.length} (${batch.length} files, ${findingCount} findings, ${batchesInFlight} in flight)`,
+        message: `Revalidating batch ${idx + 1}/${batches.length} (${batch.length} files, ${requested.length} findings, ${batchesInFlight} in flight)`,
         batchIndex: idx,
         totalBatches: batches.length,
       });
 
       try {
-        const gen = agent.revalidate({
-          batch,
-          projectRoot: effectiveRootPath,
-          projectInfo,
-          config,
-          force,
-          signal: quotaAbort.signal,
-          projectId,
+        const first = await runRevalidateInvocation({
+          files: batch,
+          batchIdx: idx,
+          label: "initial",
         });
+        let persisted = first.persistedCount;
+        let unresolved = first.unresolved;
 
-        let result = await gen.next();
-        while (!result.done) {
+        // Adaptive split, stage 1: retry each file that still has
+        // unresolved findings on its own — fewer identifiers to
+        // reproduce, less output to format. Already-persisted findings
+        // are never re-requested (onlyFindingIds pins the subset).
+        const perFileRequestSize = new Map<string, number>();
+        if (unresolved.length > 0 && !quotaAbort.signal.aborted) {
           emitProgress({
-            type: "agent_progress",
-            message: (result.value as AgentProgress).message,
+            type: "batch_complete",
+            message: `Batch ${idx + 1}/${batches.length}: ${unresolved.length} unresolved after repair — retrying per file`,
             batchIndex: idx,
             totalBatches: batches.length,
-            agentProgress: result.value as AgentProgress,
           });
-          result = await gen.next();
-        }
-
-        const output = result.value as RevalidateOutput;
-        const batchMeta = output.meta;
-        totalCostUsd += batchMeta.costUsd ?? 0;
-
-        // Two-pass match + writeback. Pass 1 applies every non-duplicate
-        // verdict. Pass 2 applies "duplicate" verdicts, but only when the
-        // referenced primary (within the same file) has a non-duplicate
-        // verdict — either freshly applied in pass 1 or already on the
-        // file from a prior revalidation run. This is the invariant
-        // enforcement: every equivalence class of duplicates must have
-        // exactly one non-duplicate primary, so an agent that marks
-        // every member of a group as duplicate has all of those DUPEs
-        // rejected (they just stay unrevalidated and get retried on
-        // the next pass).
-        const dupeVerdicts: typeof output.verdicts = [];
-        const nowIso = new Date().toISOString();
-        for (const verdict of output.verdicts) {
-          if (verdict.verdict === "duplicate") {
-            dupeVerdicts.push(verdict);
-            continue;
+          const byFile = new Map<string, ExpectedFinding[]>();
+          for (const e of unresolved) {
+            byFile.set(e.filePath, [...(byFile.get(e.filePath) ?? []), e]);
           }
-          const file = batch.find((f) => f.filePath === verdict.filePath);
-          if (!file) continue;
-          const finding = file.findings.find((f) => f.title === verdict.title);
-          if (!finding) continue;
-          finding.revalidation = {
-            verdict: verdict.verdict,
-            reasoning: verdict.reasoning,
-            adjustedSeverity: verdict.adjustedSeverity,
-            revalidatedAt: nowIso,
-            runId,
-            model,
-          };
-          if (verdict.adjustedSeverity) {
-            finding.severity = verdict.adjustedSeverity;
-          }
-          totalRevalidated++;
-          if (verdict.verdict === "true-positive") totalTP++;
-          else if (verdict.verdict === "false-positive") totalFP++;
-          else if (verdict.verdict === "fixed") totalFixed++;
-          else totalUncertain++;
-        }
-
-        for (const verdict of dupeVerdicts) {
-          const file = batch.find((f) => f.filePath === verdict.filePath);
-          if (!file) continue;
-          const finding = file.findings.find((f) => f.title === verdict.title);
-          if (!finding) continue;
-          // Reject self-reference, missing reference, and pointing at
-          // another DUPE — these all violate the single-primary
-          // invariant. The agent will re-see this finding as
-          // unrevalidated on the next run and can re-classify it.
-          const ref = verdict.duplicateOf;
-          if (!ref || ref === verdict.title) {
-            totalDupeRejected++;
-            continue;
-          }
-          const primary = file.findings.find((f) => f.title === ref);
-          if (!primary) {
-            totalDupeRejected++;
-            continue;
-          }
-          if (!primary.revalidation || primary.revalidation.verdict === "duplicate") {
-            totalDupeRejected++;
-            continue;
-          }
-          finding.revalidation = {
-            verdict: "duplicate",
-            reasoning: verdict.reasoning,
-            duplicateOf: ref,
-            revalidatedAt: nowIso,
-            runId,
-            model,
-          };
-          totalRevalidated++;
-          totalDuplicate++;
-        }
-
-        // Push a per-file `analysisHistory` entry for this revalidate batch.
-        // Without this, revalidate cost is only ever recorded in
-        // `runMeta.stats.totalCostUsd` and is invisible to the `metrics`
-        // command (which aggregates strictly off `record.analysisHistory`).
-        // We split batch-level cost / tokens / duration / turns evenly over
-        // the files in the batch so the per-file totals add up to the
-        // batch's actual spend.
-        const splitN = Math.max(1, batch.length);
-        const perFileCost = batchMeta.costUsd != null ? batchMeta.costUsd / splitN : undefined;
-        const perFileUsage = batchMeta.usage
-          ? {
-              inputTokens: batchMeta.usage.inputTokens / splitN,
-              outputTokens: batchMeta.usage.outputTokens / splitN,
-              cacheReadInputTokens: batchMeta.usage.cacheReadInputTokens / splitN,
-              cacheCreationInputTokens: batchMeta.usage.cacheCreationInputTokens / splitN,
+          const next: ExpectedFinding[] = [];
+          for (const [filePath, findings] of byFile) {
+            if (quotaAbort.signal.aborted) {
+              next.push(...findings);
+              continue;
             }
-          : undefined;
-        const perFileDurationMs = batchMeta.durationMs / splitN;
-        const perFileDurationApiMs =
-          batchMeta.durationApiMs != null ? batchMeta.durationApiMs / splitN : undefined;
-        const perFileNumTurns =
-          batchMeta.numTurns != null ? batchMeta.numTurns / splitN : undefined;
-        const investigatedAt = new Date().toISOString();
-
-        for (const file of batch) {
-          const verdictsForFile = output.verdicts.filter(
-            (v) => v.filePath === file.filePath,
-          ).length;
-          file.analysisHistory.push({
-            runId,
-            investigatedAt,
-            durationMs: perFileDurationMs,
-            durationApiMs: perFileDurationApiMs,
-            agentType,
-            model,
-            modelConfig: config,
-            agentSessionId: batchMeta.agentSessionId,
-            findingCount: verdictsForFile,
-            numTurns: perFileNumTurns,
-            phase: "revalidate",
-            costUsd: perFileCost,
-            usage: perFileUsage,
-            refusal: batchMeta.refusal,
-            codexStderr: batchMeta.codexStderr,
-          });
-
-          try {
-            enrichFileRecord(file, effectiveRootPath);
-          } catch (e) {
-            console.error(
-              `[deepsec] enrich failed for ${file.filePath}: ${e instanceof Error ? e.message : e}`,
-            );
+            const file = batch.find((f) => f.filePath === filePath);
+            if (!file) {
+              next.push(...findings);
+              continue;
+            }
+            perFileRequestSize.set(filePath, findings.length);
+            const res = await runInvocationSafe({
+              files: [file],
+              onlyFindingIds: findings.map((e) => e.findingId),
+              batchIdx: idx,
+              label: `retry-file:${filePath}`,
+              fallbackUnresolved: findings,
+            });
+            persisted += res.persistedCount;
+            next.push(...res.unresolved);
           }
-          writeFileRecord(file);
+          unresolved = next;
         }
+
+        // Stage 2: findings from files that were retried with more than
+        // one finding and still have misses get retried individually. A
+        // finding whose per-file retry already asked for exactly one is
+        // skipped — an individual retry would be the identical request.
+        if (unresolved.length > 0 && !quotaAbort.signal.aborted) {
+          const individual = unresolved.filter(
+            (e) => (perFileRequestSize.get(e.filePath) ?? 0) > 1,
+          );
+          const skipped = unresolved.filter((e) => (perFileRequestSize.get(e.filePath) ?? 0) <= 1);
+          const next: ExpectedFinding[] = [...skipped];
+          for (const e of individual) {
+            if (quotaAbort.signal.aborted) {
+              next.push(e);
+              continue;
+            }
+            const file = batch.find((f) => f.filePath === e.filePath);
+            if (!file) {
+              next.push(e);
+              continue;
+            }
+            const res = await runInvocationSafe({
+              files: [file],
+              onlyFindingIds: [e.findingId],
+              batchIdx: idx,
+              label: `retry-finding:${e.findingId}`,
+              fallbackUnresolved: [e],
+            });
+            persisted += res.persistedCount;
+            next.push(...res.unresolved);
+          }
+          unresolved = next;
+        }
+
+        totalUnresolved.push(...unresolved);
 
         batchesInFlight--;
         batchesCompleted++;
         emitProgress({
           type: "batch_complete",
-          message: `Batch ${idx + 1}/${batches.length}: ${output.verdicts.length} verdicts (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
+          message: `Batch ${idx + 1}/${batches.length}: requested ${first.expectedCount}, returned ${first.returnedCount}, matched ${first.matchedCount}, persisted ${persisted}${
+            unresolved.length > 0 ? `, unresolved ${unresolved.length}` : ""
+          } (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
           batchIndex: idx,
           totalBatches: batches.length,
         });
@@ -1194,6 +1538,21 @@ export async function revalidate(params: {
         if (err instanceof QuotaExhaustedError && !quotaExhausted) {
           quotaExhausted = { source: err.source, rawMessage: err.rawMessage };
           quotaAbort.abort(err);
+        }
+        // Whatever this batch persisted before the throw is already on
+        // disk; only the requested findings that never got a verdict are
+        // lost, and they surface as unresolved. (In force mode a finding
+        // counts as done only when THIS run wrote its verdict.)
+        for (const e of requested) {
+          const file = batch.find((f) => f.filePath === e.filePath);
+          const finding = file?.findings.find((f) => f.findingId === e.findingId);
+          if (!finding) continue;
+          const doneThisRun =
+            finding.revalidation !== undefined &&
+            (!force ||
+              finding.revalidation.runId === runId ||
+              finding.revalidation.verdict === "accepted-risk");
+          if (!doneThisRun) totalUnresolved.push(e);
         }
         emitProgress({
           type: "batch_complete",
@@ -1233,12 +1592,15 @@ export async function revalidate(params: {
       totalCostUsd,
     });
 
+    const totalDupeRejected = dupeRejectedIds.size;
     const dupeRejectedSuffix = totalDupeRejected > 0 ? `, ${totalDupeRejected} DUPE rejected` : "";
+    const unresolvedSuffix =
+      totalUnresolved.length > 0 ? `, ${totalUnresolved.length} UNRESOLVED` : "";
     emitProgress({
       type: "all_complete",
       message: quotaExhausted
         ? `Revalidation stopped: ${quotaExhausted.source} quota/credits exhausted (${totalRevalidated} verdicts before stop)`
-        : `Revalidation complete: ${totalRevalidated} findings — TP: ${totalTP}, FP: ${totalFP}, Fixed: ${totalFixed}, Uncertain: ${totalUncertain}, Dupe: ${totalDuplicate}${dupeRejectedSuffix}`,
+        : `Revalidation complete: ${totalRevalidated}/${totalRequested} findings — TP: ${totalTP}, FP: ${totalFP}, Fixed: ${totalFixed}, Uncertain: ${totalUncertain}, Dupe: ${totalDuplicate}${dupeRejectedSuffix}${unresolvedSuffix}`,
     });
 
     return {
@@ -1250,6 +1612,8 @@ export async function revalidate(params: {
       uncertain: totalUncertain,
       duplicates: totalDuplicate,
       duplicatesRejected: totalDupeRejected,
+      requested: totalRequested,
+      unresolved: totalUnresolved,
       quotaExhausted,
     };
   } catch (err) {

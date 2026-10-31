@@ -6,6 +6,15 @@ export interface AgentProgress {
   candidateFile?: string;
 }
 
+/** A general read-only repository task used by first-run setup. */
+export interface SetupTaskParams {
+  prompt: string;
+  projectRoot: string;
+  config: Record<string, unknown>;
+  signal?: AbortSignal;
+  onProgress?: (progress: AgentProgress) => void;
+}
+
 export interface InvestigateParams {
   batch: FileRecord[];
   projectRoot: string;
@@ -69,6 +78,13 @@ export interface RevalidateParams {
   config: Record<string, unknown>;
   /** When true, re-check findings that already have a revalidation verdict */
   force?: boolean;
+  /**
+   * Restrict the prompt to exactly these findingIds. Used by the
+   * processor's adaptive-split retries: after a partial batch is
+   * persisted, only the unresolved findings are re-requested —
+   * regardless of `force` and of what got a verdict in the meantime.
+   */
+  onlyFindingIds?: string[];
   /** See InvestigateParams.signal — same semantics for revalidation. */
   signal?: AbortSignal;
   /** See InvestigateParams.projectId — used for debug-log placement. */
@@ -76,23 +92,51 @@ export interface RevalidateParams {
 }
 
 export interface RevalidateVerdict {
-  filePath: string;
-  title: string;
+  /**
+   * Primary identity in the response contract: the stable `findingId`
+   * echoed back from the prompt. Old responses (and old prompts) carry
+   * filePath+title instead — the reconciliation layer accepts either.
+   */
+  findingId?: string;
+  filePath?: string;
+  title?: string;
   verdict: RevalidationVerdict;
   reasoning: string;
   adjustedSeverity?: "CRITICAL" | "HIGH" | "MEDIUM" | "HIGH_BUG" | "BUG";
   /**
-   * Required when `verdict === "duplicate"`. `title` of the primary
-   * finding in the same file — the canonical one that should keep its
-   * real verdict. The processor rejects DUPEs that don't reference a
-   * non-DUPE primary in the same file.
+   * Required when `verdict === "duplicate"`. The `findingId` of the
+   * primary finding (preferred), or its `title` for legacy responses —
+   * the canonical finding that should keep its real verdict. The
+   * processor rejects DUPEs that don't reference a non-DUPE primary.
    */
   duplicateOf?: string;
+}
+
+/**
+ * One raw agent response captured during a revalidation batch — the
+ * initial answer plus any repair turns. Persisted verbatim under the
+ * project data dir so mismatches can be diagnosed and rescored without
+ * repeating model work.
+ */
+export interface RevalidateRawResponse {
+  kind: "initial" | "json-repair" | "id-repair";
+  /** The follow-up prompt that produced this response (repair turns only). */
+  prompt?: string;
+  rawText: string;
+  /** How many verdicts parsed out of this response (undefined if parsing failed). */
+  parsedCount?: number;
 }
 
 export interface RevalidateOutput {
   verdicts: RevalidateVerdict[];
   meta: BatchMeta;
+  /**
+   * Raw model responses (initial + repair turns) for artifact logging.
+   * Optional: plugins that predate the field simply produce no artifact.
+   */
+  rawResponses?: RevalidateRawResponse[];
+  /** Number of in-session id-repair turns the plugin ran. */
+  repairAttempts?: number;
 }
 
 export interface AgentPlugin {

@@ -1,0 +1,29 @@
+@import "@vercel/geistdocs/styles.css";
+@source "../node_modules/@vercel/geistdocs/dist/**/*.js";
+
+body {
+  font-family: var(--font-sans);
+}
+
+a {
+  text-underline-offset: 4px;
+}
+
+::selection {
+  background: var(--ds-gray-1000);
+  color: var(--ds-background-100);
+}
+
+.hero-grid {
+  background-image:
+    linear-gradient(to right, var(--ds-gray-alpha-200) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--ds-gray-alpha-200) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-position: center top;
+}
+
+@media (max-width: 640px) {
+  .hero-grid {
+    background-size: 32px 32px;
+  }
+}

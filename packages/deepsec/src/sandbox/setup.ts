@@ -1,4 +1,6 @@
+import { attributionHeaders } from "@deepsec/processor";
 import { type NetworkPolicy, type NetworkPolicyRule, Sandbox } from "@vercel/sandbox";
+import type { BrokeredModelCredential } from "../auth/model-route.js";
 import { markSetupComplete } from "./download.js";
 import { trackSandbox, untrackSandbox } from "./shutdown.js";
 import { extractTarballOnSandbox, type TarballStats, uploadTarballToSandbox } from "./upload.js";
@@ -59,7 +61,7 @@ const PI_CUSTOM_BASE_URL_ENV = "DEEPSEC_PI_AI_BASE_URL";
  * placeholder; the firewall replaces the Authorization header at egress
  * with the real token.
  */
-interface BrokeredCredentials {
+export interface BrokeredCredentials {
   anthropicToken?: string;
   openaiToken?: string;
   aiGatewayToken?: string;
@@ -67,11 +69,14 @@ interface BrokeredCredentials {
     envName: string;
     token: string;
   };
+  /** Explicit route selected during setup; takes precedence over ambient vars. */
+  selected?: BrokeredModelCredential;
 }
 
-interface BrokeredCredentialOptions {
+export interface BrokeredCredentialOptions {
   aiApiKeyEnv?: string;
   aiBaseUrl?: string;
+  brokeredModelCredential?: BrokeredModelCredential;
 }
 
 /**
@@ -84,6 +89,9 @@ export function resolveBrokeredCredentials(
   agentType: string | undefined,
   options: BrokeredCredentialOptions = {},
 ): BrokeredCredentials {
+  if (options.brokeredModelCredential) {
+    return { selected: options.brokeredModelCredential };
+  }
   const anthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const explicitOpenai = process.env.OPENAI_API_KEY;
   const aiGatewayToken = agentType === "pi" ? process.env.AI_GATEWAY_API_KEY : undefined;
@@ -119,6 +127,18 @@ export function buildSandboxEnv(
   const env: Record<string, string> = {};
   for (const key of SANDBOX_ENV_KEYS) {
     if (key in process.env) env[key] = process.env[key]!;
+  }
+
+  if (credentials.selected) {
+    env[credentials.selected.placeholderEnv] = BROKERED_TOKEN_PLACEHOLDER;
+    // The broker's source env identifies the real host-side credential, but
+    // the SDKs construct themselves from their standard variables before the
+    // firewall gets a chance to replace the outbound header.
+    if (agentType === "codex") env.OPENAI_API_KEY = BROKERED_TOKEN_PLACEHOLDER;
+    if (agentType === "claude-agent-sdk") {
+      env.ANTHROPIC_AUTH_TOKEN = BROKERED_TOKEN_PLACEHOLDER;
+      env.ANTHROPIC_API_KEY = BROKERED_TOKEN_PLACEHOLDER;
+    }
   }
 
   // Decoy tokens. Real values stay on the orchestrator host; the firewall
@@ -225,15 +245,18 @@ export function buildWorkerNetworkPolicy(
   // Single AI host per backend. Prefer derived from the base URL the agent
   // will actually use; fall back to the provider's documented default when
   // the user hasn't configured one.
-  const aiHost = isPi
-    ? (hostFromUrl(env[PI_CUSTOM_BASE_URL_ENV]) ?? DEFAULT_AI_GATEWAY_HOST)
-    : isCodex
-      ? (hostFromUrl(env["OPENAI_BASE_URL"]) ?? DEFAULT_OPENAI_HOST)
-      : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ?? DEFAULT_ANTHROPIC_HOST);
+  const aiHost =
+    credentials.selected?.host ??
+    (isPi
+      ? (hostFromUrl(env[PI_CUSTOM_BASE_URL_ENV]) ?? DEFAULT_AI_GATEWAY_HOST)
+      : isCodex
+        ? (hostFromUrl(env["OPENAI_BASE_URL"]) ?? DEFAULT_OPENAI_HOST)
+        : (hostFromUrl(env["ANTHROPIC_UPSTREAM_BASE_URL"]) ?? DEFAULT_ANTHROPIC_HOST));
 
   // The fallback flips at resolveBrokeredCredentials — by here, openaiToken
   // already carries the ANTHROPIC gateway token if the user only set that
   // one and is running codex.
+  const selectedHeader = credentials.selected?.header;
   const injectToken = isPi
     ? env[PI_CUSTOM_BASE_URL_ENV]
       ? credentials.customToken?.token
@@ -242,14 +265,32 @@ export function buildWorkerNetworkPolicy(
       ? credentials.openaiToken
       : credentials.anthropicToken;
 
+  // App Attribution rides the same per-domain header rewrite that brokers
+  // credentials, so every sandboxed agent's gateway traffic is tagged
+  // regardless of whether its in-VM config carries the headers itself.
+  // The firewall transform overwrites whatever the agent sent, and all
+  // injection points share attributionHeaders(), so values stay
+  // consistent. Gateway host only — never direct-provider hosts.
+  const attribution = aiHost === DEFAULT_AI_GATEWAY_HOST ? attributionHeaders() : undefined;
+
   const allow: Record<string, NetworkPolicyRule[]> = {
-    [aiHost]: injectToken
+    [aiHost]: selectedHeader
       ? [
           {
-            transform: [{ headers: { authorization: `Bearer ${injectToken}` } }],
+            transform: [
+              { headers: { ...attribution, [selectedHeader.name]: selectedHeader.value } },
+            ],
           },
         ]
-      : [],
+      : injectToken
+        ? [
+            {
+              transform: [{ headers: { ...attribution, authorization: `Bearer ${injectToken}` } }],
+            },
+          ]
+        : attribution
+          ? [{ transform: [{ headers: attribution }] }]
+          : [],
   };
   for (const h of extraAllow) {
     if (!(h in allow)) allow[h] = [];
@@ -389,12 +430,14 @@ export async function createBootstrapSnapshot(opts: BootstrapOptions): Promise<s
 
 // --- Worker: spawn from snapshot, no upload ---
 
-interface SpawnOptions {
+export interface SpawnOptions {
   snapshotId: string;
   /** Drives which API base URL gets rewritten to the local proxy */
   agentType?: string;
   aiApiKeyEnv?: string;
   aiBaseUrl?: string;
+  /** Explicit setup-selected route. Real value remains host-side. */
+  brokeredModelCredential?: BrokeredModelCredential;
   vcpus: number;
   timeout: number;
   /** Source repo vs. user's `.deepsec/` install — see DeepsecMode docstring */
@@ -419,6 +462,7 @@ export async function spawnFromSnapshot(opts: SpawnOptions): Promise<Sandbox> {
   const credentialOptions = {
     aiApiKeyEnv: opts.aiApiKeyEnv,
     aiBaseUrl: opts.aiBaseUrl,
+    brokeredModelCredential: opts.brokeredModelCredential,
   };
   const credentials = resolveBrokeredCredentials(opts.agentType, credentialOptions);
   const sandboxEnv = buildSandboxEnv(opts.agentType, credentials, credentialOptions);
@@ -759,13 +803,18 @@ async function installAgentTools(sandbox: Sandbox, onLog: (msg: string) => void)
 
 /**
  * Codex CLI ships a vendored Rust binary via platform-specific optional
- * dependencies (e.g. `@openai/codex-linux-x64`). pnpm running on the bootstrap
- * host (Mac arm64 typically) installs only host-matching optional deps, so the
- * sandbox often comes up without the linux binary it needs.
+ * dependencies (e.g. `@openai/codex-linux-x64` → `@openai/codex@<ver>-linux-x64`).
+ * pnpm running on the bootstrap host (Mac arm64 typically) installs only
+ * host-matching optional deps, so the sandbox often comes up without the
+ * linux binary it needs.
  *
  * We resolve the SDK version, force-install the linux variant matching the
- * sandbox arch via `npm pack`, and place its `vendor/<triple>/codex/` tree
- * where the bin script (`bin/codex.js`) looks it up via `require.resolve`.
+ * sandbox arch via `npm pack`, and place its `vendor/<triple>/` tree where
+ * `bin/codex.js` looks it up via `require.resolve("@openai/codex-linux-*")`.
+ *
+ * Layout note (Codex ≥0.144): the Mach-O/ELF lives at
+ * `vendor/<triple>/bin/codex` (older releases used `vendor/<triple>/codex/codex`).
+ * We accept either path so a mid-flight pin doesn't break bootstrap.
  *
  * Codex linux binaries are statically linked musl, so they run on glibc
  * sandboxes too — no libc detection needed.
@@ -778,6 +827,7 @@ async function ensureCodexNativeBinary(
 set -e
 cd ${DEEPSEC_DIR}
 SDK_VER=""
+CODEX_PKG_DIR=""
 for CANDIDATE in \\
   ./node_modules/@openai/codex \\
   ./packages/processor/node_modules/@openai/codex \\
@@ -785,8 +835,17 @@ for CANDIDATE in \\
   ./node_modules/.pnpm/@openai+codex@*/node_modules/@openai/codex; do
   for DIR in $CANDIDATE; do
     if [ -f "$DIR/package.json" ]; then
-      SDK_VER=$(node -p "require('$DIR/package.json').version" 2>/dev/null)
-      break 2
+      VER=$(node -p "require('$DIR/package.json').version" 2>/dev/null || true)
+      # Skip platform-suffixed packages (e.g. 0.144.0-darwin-arm64).
+      case "$VER" in
+        *-linux-*|*-darwin-*|*-win32-*) continue ;;
+      esac
+      if [ -n "$VER" ]; then
+        SDK_VER="$VER"
+        # Absolute path — the alias step below runs after cd'ing elsewhere.
+        CODEX_PKG_DIR="$(cd "$DIR" && pwd)"
+        break 2
+      fi
     fi
   done
 done
@@ -806,34 +865,55 @@ esac
 echo "  Sandbox arch: $UNAME_M (linux-\${ARCH}, $TRIPLE)"
 
 # The platform package's actual published version is "<sdk_ver>-linux-<arch>".
-PLATFORM_PKG="@openai/codex-linux-\${ARCH}"
+# pnpm aliases it as @openai/codex-linux-<arch> → @openai/codex@<ver>-linux-<arch>.
+PLATFORM_ALIAS="@openai/codex-linux-\${ARCH}"
 PLATFORM_VER="\${SDK_VER}-linux-\${ARCH}"
+PNPM_STORE_KEY="@openai+codex@\${PLATFORM_VER}"
+STORE_DEST="${DEEPSEC_DIR}/node_modules/.pnpm/\${PNPM_STORE_KEY}/node_modules/@openai/codex"
 
 echo "  Fetching @openai/codex@\${PLATFORM_VER} (platform binary)..."
 rm -rf /tmp/codex-native-fetch && mkdir -p /tmp/codex-native-fetch
 cd /tmp/codex-native-fetch
 npm pack "@openai/codex@\${PLATFORM_VER}" --silent 2>&1 | tail -1
 tar -xzf ./*.tgz
-if [ ! -f "package/vendor/\${TRIPLE}/codex/codex" ]; then
-  echo "  ERROR: vendor/\${TRIPLE}/codex/codex not present in tarball"
-  ls -la package/vendor/ 2>/dev/null || true
+
+# Codex ≥0.144: vendor/<triple>/bin/codex
+# Codex ≤0.130-ish: vendor/<triple>/codex/codex
+BIN_REL=""
+if [ -f "package/vendor/\${TRIPLE}/bin/codex" ]; then
+  BIN_REL="vendor/\${TRIPLE}/bin/codex"
+elif [ -f "package/vendor/\${TRIPLE}/codex/codex" ]; then
+  BIN_REL="vendor/\${TRIPLE}/codex/codex"
+else
+  echo "  ERROR: neither vendor/\${TRIPLE}/bin/codex nor vendor/\${TRIPLE}/codex/codex present"
+  ls -la package/vendor/\${TRIPLE}/ 2>/dev/null || ls -la package/vendor/ 2>/dev/null || true
   exit 1
 fi
-SIZE=$(stat -c%s "package/vendor/\${TRIPLE}/codex/codex" 2>/dev/null || echo "?")
+SIZE=$(stat -c%s "package/\${BIN_REL}" 2>/dev/null || echo "?")
+echo "  Found binary at \${BIN_REL} (\${SIZE} bytes)"
 
-# pnpm stores platform packages under the alias name — drop the binary at every
-# place pnpm might have created (or expects) the vendor tree.
-PNPM_KEY="@openai+codex-linux-\${ARCH}@\${PLATFORM_VER}"
-DEST_PATHS=(
-  "${DEEPSEC_DIR}/node_modules/.pnpm/\${PNPM_KEY}/node_modules/\${PLATFORM_PKG}"
-  "${DEEPSEC_DIR}/node_modules/\${PLATFORM_PKG}"
+# Materialize the platform package where pnpm would have put it, then alias
+# it as @openai/codex-linux-<arch> next to the host @openai/codex package so
+# bin/codex.js's require.resolve(alias) succeeds inside the sandbox.
+mkdir -p "\${STORE_DEST}"
+rm -rf "\${STORE_DEST}/vendor"
+cp -a package/vendor "\${STORE_DEST}/vendor"
+cp package/package.json "\${STORE_DEST}/package.json"
+chmod +x "\${STORE_DEST}/\${BIN_REL}"
+echo "    → \${STORE_DEST}"
+
+# Alias symlink targets (require.resolve from bin/codex.js walks these).
+ALIAS_TARGETS=(
+  "${DEEPSEC_DIR}/node_modules/.pnpm/@openai+codex@\${SDK_VER}/node_modules/\${PLATFORM_ALIAS}"
+  "${DEEPSEC_DIR}/node_modules/\${PLATFORM_ALIAS}"
 )
-for DEST in "\${DEST_PATHS[@]}"; do
-  mkdir -p "\${DEST}/vendor/\${TRIPLE}/codex"
-  cp "package/vendor/\${TRIPLE}/codex/codex" "\${DEST}/vendor/\${TRIPLE}/codex/codex"
-  chmod +x "\${DEST}/vendor/\${TRIPLE}/codex/codex"
-  cp package/package.json "\${DEST}/package.json"
-  echo "    → \${DEST} (\${SIZE} bytes)"
+if [ -n "$CODEX_PKG_DIR" ]; then
+  ALIAS_TARGETS+=("\${CODEX_PKG_DIR}/node_modules/\${PLATFORM_ALIAS}")
+fi
+for ALIAS in "\${ALIAS_TARGETS[@]}"; do
+  mkdir -p "$(dirname "$ALIAS")"
+  ln -sfn "\${STORE_DEST}" "$ALIAS"
+  echo "    → alias $ALIAS"
 done
 rm -rf /tmp/codex-native-fetch
 `;
@@ -862,7 +942,8 @@ rm -rf /tmp/codex-native-fetch
 async function writeCodexConfig(sandbox: Sandbox, onLog: (msg: string) => void): Promise<void> {
   const configToml = `# Written by deepsec sandbox bootstrap. Disables non-AI egress
 # (analytics, update checks, OTEL exporters) so the agent stays within
-# the sandbox firewall allowlist.
+# the sandbox firewall allowlist. Also pins plugins off — Codex 0.143+
+# enables remote_plugin by default, which we don't want in workers.
 check_for_update_on_startup = false
 
 [analytics]
@@ -871,6 +952,10 @@ enabled = false
 [otel]
 metrics_exporter = "none"
 trace_exporter = "none"
+
+[features]
+plugins = false
+remote_plugin = false
 `;
   const mkdir = await sandbox.runCommand({
     cmd: "mkdir",

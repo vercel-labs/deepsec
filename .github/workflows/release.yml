@@ -87,10 +87,34 @@ jobs:
       - if: steps.ver.outputs.publish == 'true'
         run: pnpm install --frozen-lockfile
 
-      # Trusted Publishing requires npm CLI ≥ 11.5.1. Node 24 LTS ships a
-      # recent npm but the patch level drifts; upgrade to latest to be safe.
+      # Trusted Publishing requires npm CLI ≥ 11.5.1, and `--provenance`
+      # pulls `sigstore` in via libnpmpublish. Node 24's bundled npm has
+      # shipped broken trees where `sigstore` is missing, producing
+      # `Cannot find module 'sigstore'` at publish time. A plain
+      # `npm install -g npm@latest` doesn't reliably fix this: npm is
+      # overwriting itself mid-run and can leave a half-written tree, and
+      # `@latest` drifts onto whatever the newest release happens to be.
+      #
+      # So: pin an explicit major, force a clean self-reinstall, then
+      # fail fast if the provenance dependency still can't be resolved the
+      # same way libnpmpublish/lib/provenance.js resolves it — reinstalling
+      # once more before giving up. This surfaces a broken toolchain here
+      # instead of halfway through `npm publish`.
       - if: steps.ver.outputs.publish == 'true'
-        run: npm install -g npm@latest
+        name: Install a provenance-capable npm
+        run: |
+          set -eo pipefail
+          verify_sigstore() {
+            node -e "require.resolve('sigstore', { paths: ['$(npm root -g)/npm/node_modules/libnpmpublish/lib'] })"
+          }
+          npm install -g npm@11 --force
+          npm --version
+          if ! verify_sigstore; then
+            echo "::warning::sigstore unresolved after npm upgrade — reinstalling"
+            npm install -g npm@11 --force
+            verify_sigstore
+          fi
+          echo "::notice::npm $(npm --version) ready with provenance support (sigstore resolves)"
 
       # `npm publish` runs the package's prepublishOnly hook (`pnpm -w validate`)
       # and then prepack (`pnpm bundle`) — full validation + fresh bundle ship
@@ -103,8 +127,8 @@ jobs:
       # tarball to this exact workflow run + commit SHA. Requires:
       #   - the GitHub repo to be PUBLIC (npm 422s on private/internal repos),
       #   - `id-token: write` on this job (set above),
-      #   - npm CLI ≥ 9.5 (the `npm install -g npm@latest` step above ensures
-      #     a recent enough release).
+      #   - npm CLI ≥ 9.5 with a resolvable sigstore (the npm install step
+      #     above pins a recent release and verifies provenance support).
       # The attestation is published to npm's transparency log and shows up
       # on the package's npmjs.com page as a "Provenance" badge. We chose
       # the CLI flag over `publishConfig.provenance` so an accidental

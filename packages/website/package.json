@@ -1,0 +1,33 @@
+{
+  "name": "website",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "postinstall": "fumadocs-mdx"
+  },
+  "dependencies": {
+    "@vercel/analytics": "2.0.1",
+    "@vercel/geistdocs": "1.15.5",
+    "@vercel/speed-insights": "2.0.0",
+    "feed": "^5.2.1",
+    "fumadocs-mdx": "14.0.4",
+    "next": "16.3.0-preview.9",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.0",
+    "@types/mdx": "^2.0.14",
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.0-preview.9",
+    "postcss": "^8.5.19",
+    "typescript": "^5"
+  }
+}

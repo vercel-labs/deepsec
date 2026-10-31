@@ -66,17 +66,45 @@ describe("mergeFileRecord", () => {
     expect(merged.status).toBe("analyzed");
   });
 
-  it("dedupes analysisHistory when both sides serialize the same runId", () => {
+  it("dedupes an identical entry seen on both sides, regardless of key order", () => {
     const sameEntry = entry("run-x", "codex", "2026-05-06T15:59:48.000Z");
+    // Same entry, keys in a different order — simulates the host path
+    // (raw JSON.parse) vs the incoming path (zod parse) serializing the
+    // same entry differently.
+    const reordered = Object.fromEntries(
+      Object.entries(sameEntry).reverse(),
+    ) as unknown as AnalysisEntry;
     const host = record({ analysisHistory: [sameEntry] });
-    const incoming = record({
-      analysisHistory: [{ ...sameEntry, findingCount: 5 }],
-    });
+    const incoming = record({ analysisHistory: [reordered] });
 
     const merged = mergeFileRecord(host, incoming);
 
     expect(merged.analysisHistory).toHaveLength(1);
-    expect(merged.analysisHistory[0].findingCount).toBe(5); // incoming wins
+  });
+
+  it("keeps multiple same-runId entries (revalidate split retries) with their own accounting", () => {
+    // One revalidate run appends several entries per file under the same
+    // runId: the initial invocation plus per-file / per-finding split
+    // retries, each carrying its own cost/token share. Keying the merge
+    // by runId alone collapsed these and silently dropped the accounting.
+    const initial = {
+      ...entry("reval-run", "claude-agent-sdk", "2026-05-06T15:54:37.000Z"),
+      phase: "revalidate" as const,
+      costUsd: 0.4,
+    };
+    const retry = {
+      ...entry("reval-run", "claude-agent-sdk", "2026-05-06T15:58:02.000Z"),
+      phase: "revalidate" as const,
+      costUsd: 0.1,
+    };
+    const host = record({ analysisHistory: [initial] });
+    const incoming = record({ analysisHistory: [initial, retry] });
+
+    const merged = mergeFileRecord(host, incoming);
+
+    expect(merged.analysisHistory).toHaveLength(2);
+    const totalCost = merged.analysisHistory.reduce((s, e) => s + (e.costUsd ?? 0), 0);
+    expect(totalCost).toBeCloseTo(0.5, 6);
   });
 
   it("unions findings by vulnSlug+title signature", () => {
@@ -196,11 +224,11 @@ describe("snapshotFileRecords + mergeAfterExtract", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("returns an empty snapshot when files/ doesn't exist", () => {
-    expect(snapshotFileRecords(dir).size).toBe(0);
+  it("returns an empty snapshot when the requested records don't exist", () => {
+    expect(snapshotFileRecords(dir, ["files/missing.ts.json"]).size).toBe(0);
   });
 
-  it("walks files/ recursively and indexes records by relative path", () => {
+  it("reads only the requested relative paths", () => {
     const inner = path.join(dir, "files", "src", "nested");
     fs.mkdirSync(inner, { recursive: true });
     fs.writeFileSync(
@@ -212,11 +240,17 @@ describe("snapshotFileRecords + mergeAfterExtract", () => {
       JSON.stringify(record({ filePath: "shallow.ts" })),
     );
 
-    const snap = snapshotFileRecords(dir);
+    const snap = snapshotFileRecords(dir, ["files/src/nested/deep.ts.json"]);
 
-    expect(snap.size).toBe(2);
-    expect(snap.has(path.join("files", "src", "nested", "deep.ts.json"))).toBe(true);
-    expect(snap.has(path.join("files", "shallow.ts.json"))).toBe(true);
+    expect(snap.size).toBe(1);
+    expect(snap.has("files/src/nested/deep.ts.json")).toBe(true);
+    expect(snap.has("files/shallow.ts.json")).toBe(false);
+  });
+
+  it("ignores requested paths outside files/", () => {
+    fs.mkdirSync(path.join(dir, "runs"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "runs", "r1.json"), JSON.stringify({ runId: "r1" }));
+    expect(snapshotFileRecords(dir, ["runs/r1.json"]).size).toBe(0);
   });
 
   it("rewrites only files that existed in both the host snapshot and the post-extract state", () => {
@@ -234,7 +268,8 @@ describe("snapshotFileRecords + mergeAfterExtract", () => {
         }),
       ),
     );
-    const snap = snapshotFileRecords(dir);
+    const tarballEntries = ["files/src/foo.ts.json", "files/src/bar.ts.json"];
+    const snap = snapshotFileRecords(dir, tarballEntries);
 
     // Simulate a tar extract overwriting that file with [codexB] only —
     // the pattern that drops history without merging.
@@ -261,7 +296,7 @@ describe("snapshotFileRecords + mergeAfterExtract", () => {
       ),
     );
 
-    const merged = mergeAfterExtract(dir, snap, "p");
+    const merged = mergeAfterExtract(dir, snap, "p", tarballEntries);
     expect(merged).toBe(1);
 
     const fooAfter = JSON.parse(fs.readFileSync(recPath, "utf-8"));
@@ -281,7 +316,83 @@ describe("snapshotFileRecords + mergeAfterExtract", () => {
     fs.writeFileSync(path.join(filesDir, "broken.ts.json"), "{not valid json");
     fs.writeFileSync(path.join(filesDir, "ok.ts.json"), JSON.stringify(record()));
 
-    const snap = snapshotFileRecords(dir);
+    const snap = snapshotFileRecords(dir, ["files/broken.ts.json", "files/ok.ts.json"]);
     expect(snap.size).toBe(1);
+  });
+
+  it("salvages valid findings from a sandbox record with one malformed finding", () => {
+    // Regression: one bad enum in one finding used to fail the whole
+    // record's schema parse, silently restoring the host version — every
+    // valid finding from the sandbox run vanished with no error.
+    const filesDir = path.join(dir, "files", "src");
+    fs.mkdirSync(filesDir, { recursive: true });
+    const recPath = path.join(filesDir, "foo.ts.json");
+    const projectId = path.basename(dir);
+    fs.writeFileSync(
+      recPath,
+      JSON.stringify(record({ projectId, findings: [finding("xss", "Host finding")] })),
+    );
+    const tarballEntries = ["files/src/foo.ts.json"];
+    const snap = snapshotFileRecords(dir, tarballEntries);
+
+    // Simulate the extract landing a sandbox record with one valid and
+    // one field-invalid finding.
+    const incoming = record({
+      projectId,
+      findings: [
+        finding("sqli", "Valid sandbox finding"),
+        finding("csrf", "Invalid sandbox finding", { severity: "INFORMATIONAL" as never }),
+      ],
+    });
+    fs.writeFileSync(recPath, JSON.stringify(incoming));
+
+    const merged = mergeAfterExtract(dir, snap, projectId, tarballEntries);
+    expect(merged).toBe(1);
+
+    const after = JSON.parse(fs.readFileSync(recPath, "utf-8"));
+    expect(after.findings.map((f: Finding) => f.title).sort()).toEqual([
+      "Host finding",
+      "Valid sandbox finding",
+    ]);
+  });
+
+  it("rewrites a host-less sandbox record without its malformed findings", () => {
+    const filesDir = path.join(dir, "files", "src");
+    fs.mkdirSync(filesDir, { recursive: true });
+    const recPath = path.join(filesDir, "new.ts.json");
+    const projectId = path.basename(dir);
+    const incoming = record({
+      filePath: "src/new.ts",
+      projectId,
+      findings: [
+        finding("sqli", "Valid"),
+        finding("csrf", "Invalid", { lineNumbers: ["7"] as never }),
+      ],
+    });
+    fs.writeFileSync(recPath, JSON.stringify(incoming));
+
+    mergeAfterExtract(dir, new Map(), projectId, ["files/src/new.ts.json"]);
+
+    const after = JSON.parse(fs.readFileSync(recPath, "utf-8"));
+    expect(after.findings.map((f: Finding) => f.title)).toEqual(["Valid"]);
+  });
+
+  it("still restores the host version when the record envelope is invalid", () => {
+    const filesDir = path.join(dir, "files", "src");
+    fs.mkdirSync(filesDir, { recursive: true });
+    const recPath = path.join(filesDir, "foo.ts.json");
+    const projectId = path.basename(dir);
+    const host = record({ projectId, findings: [finding("xss", "Host finding")] });
+    fs.writeFileSync(recPath, JSON.stringify(host));
+    const tarballEntries = ["files/src/foo.ts.json"];
+    const snap = snapshotFileRecords(dir, tarballEntries);
+
+    fs.writeFileSync(recPath, JSON.stringify({ ...record({ projectId }), status: "not-a-status" }));
+
+    mergeAfterExtract(dir, snap, projectId, tarballEntries);
+
+    const after = JSON.parse(fs.readFileSync(recPath, "utf-8"));
+    expect(after.findings.map((f: Finding) => f.title)).toEqual(["Host finding"]);
+    expect(after.status).toBe(host.status);
   });
 });

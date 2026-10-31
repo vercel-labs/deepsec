@@ -14,7 +14,7 @@
     "url": "https://github.com/vercel-labs/deepsec"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "pnpm -r build",
     "bundle": "pnpm --filter deepsec bundle",
     "deepsec": "tsx packages/deepsec/src/cli.ts",
     "test": "vitest run",
@@ -42,11 +42,19 @@
     "@biomejs/biome": "^2.4.13",
     "@types/node": "^22.0.0",
     "knip": "^6.9.0",
-    "tsx": "^4.19.0",
+    "tsx": "^4.23.1",
     "typescript": "^5.7.0",
-    "vitest": "^3.1.0"
+    "vitest": "^3.2.7"
   },
   "dependencies": {
     "deepsec": "workspace:*"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici@>=7.0.0 <7.28.0": "^7.28.0",
+      "postcss@<8.5.10": "^8.5.10",
+      "brace-expansion@>=5.0.0 <5.0.6": "^5.0.6",
+      "esbuild@>=0.27.3 <0.28.1": "^0.28.1"
+    }
   }
 }

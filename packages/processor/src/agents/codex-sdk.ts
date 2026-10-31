@@ -13,23 +13,28 @@ import {
   type ThreadItem,
 } from "@openai/codex-sdk";
 import {
+  attributionHeaders,
   backoff,
   buildInvestigateJsonRepairPrompt,
   buildInvestigatePrompt,
   buildRevalidateJsonRepairPrompt,
   buildRevalidatePrompt,
   classifyQuotaError,
-  formatMissingCodexBinaryError,
   formatJsonRepairFailureDebugText,
+  formatMissingCodexBinaryError,
+  isGatewayBaseUrl,
   isMissingBinaryError,
   isTransientError,
   jsonRepairFailureError,
   MAX_ATTEMPTS,
+  type ParsedInvestigateResults,
   parseInvestigateResults,
   parseRefusalReport,
   parseRevalidateVerdicts,
   QuotaExhaustedError,
   REFUSAL_FOLLOWUP_PROMPT,
+  runInvestigateFieldRepairLoop,
+  runRevalidateIdRepairLoop,
   writeParseFailureDebug,
 } from "./shared.js";
 import type {
@@ -41,7 +46,9 @@ import type {
   InvestigateResult,
   RevalidateOutput,
   RevalidateParams,
+  RevalidateRawResponse,
   RevalidateVerdict,
+  SetupTaskParams,
 } from "./types.js";
 
 const DEFAULT_MODEL = "gpt-5.5";
@@ -279,6 +286,34 @@ interface CodexInvocation {
   codexHome: string;
 }
 
+/**
+ * Codex model-provider config for gateway mode. Exported for tests.
+ */
+export function buildGatewayProviderConfig(
+  baseUrl: string | undefined,
+): Record<string, string | boolean | Record<string, string>> {
+  const providerConfig: Record<string, string | boolean | Record<string, string>> = {
+    name: "Vercel AI Gateway (OpenAI-compat)",
+    env_key: "OPENAI_API_KEY",
+    wire_api: "responses",
+    supports_websockets: false,
+  };
+  // Codex appends `/responses` (and `/models` for listing) directly to
+  // base_url, so base_url MUST include `/v1` — final URL needs to be
+  // `<gateway>/v1/responses`. We tolerate either form coming in via env.
+  if (baseUrl) {
+    const trimmed = baseUrl.replace(/\/$/, "");
+    providerConfig.base_url = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+  }
+  // App Attribution: static headers codex adds to every request to this
+  // provider. Gateway-bound only — a user-supplied direct-provider base
+  // URL gets nothing.
+  if (isGatewayBaseUrl(providerConfig.base_url as string | undefined)) {
+    providerConfig.http_headers = attributionHeaders();
+  }
+  return providerConfig;
+}
+
 function buildCodexInvocation(): CodexInvocation {
   // Decide between gateway mode (orchestrator has an API token, we route
   // through Vercel AI Gateway via a custom provider) and subscription mode
@@ -312,13 +347,23 @@ function buildCodexInvocation(): CodexInvocation {
     if (!process.env.RUST_LOG) extras.RUST_LOG = "info";
   }
 
+  // Codex 0.143+ enables remote_plugin by default. Deepsec never wants
+  // marketplace/plugin installs during investigate/revalidate — pin off
+  // for both subscription and gateway modes.
+  const pluginLockdown = {
+    features: {
+      plugins: false,
+      remote_plugin: false,
+    },
+  };
+
   if (subscriptionHome) {
     // No credentials enter the codex env in subscription mode — auth
     // happens via the mirrored auth.json. The allowlist already drops
     // OPENAI_API_KEY/ANTHROPIC_AUTH_TOKEN/_BASE_URL, so no explicit
     // delete is needed.
     const env = buildCodexEnv(extras);
-    const options: CodexOptions = { env };
+    const options: CodexOptions = { env, config: pluginLockdown };
     if (codexPathOverride) options.codexPathOverride = codexPathOverride;
     return { options, stderrLog, codexHome };
   }
@@ -329,21 +374,10 @@ function buildCodexInvocation(): CodexInvocation {
   const baseUrl = process.env.OPENAI_BASE_URL ?? process.env.ANTHROPIC_BASE_URL ?? undefined;
   const apiKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN ?? undefined;
 
-  const providerConfig: Record<string, string | boolean> = {
-    name: "Vercel AI Gateway (OpenAI-compat)",
-    env_key: "OPENAI_API_KEY",
-    wire_api: "responses",
-    supports_websockets: false,
-  };
-  // Codex appends `/responses` (and `/models` for listing) directly to
-  // base_url, so base_url MUST include `/v1` — final URL needs to be
-  // `<gateway>/v1/responses`. We tolerate either form coming in via env.
-  if (baseUrl) {
-    const trimmed = baseUrl.replace(/\/$/, "");
-    providerConfig.base_url = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
-  }
+  const providerConfig = buildGatewayProviderConfig(baseUrl);
 
   const config = {
+    ...pluginLockdown,
     model_provider: CUSTOM_PROVIDER_ID,
     model_providers: {
       [CUSTOM_PROVIDER_ID]: providerConfig,
@@ -676,6 +710,63 @@ async function runToollessFollowUp(
   return raw;
 }
 
+export async function runCodexSetupTask(params: SetupTaskParams): Promise<string> {
+  const model = (params.config.model as string) ?? DEFAULT_MODEL;
+  const effort = (params.config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
+  const invocation = buildCodexInvocation();
+  const codex = new Codex(invocation.options);
+  const messages: string[] = [];
+  let failure = "";
+  try {
+    params.onProgress?.({
+      type: "started",
+      message: `Understanding repository with Codex (${model})`,
+    });
+    const thread = codex.startThread({
+      model,
+      workingDirectory: params.projectRoot,
+      skipGitRepoCheck: true,
+      sandboxMode: "read-only",
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      modelReasoningEffort: effort,
+      webSearchEnabled: false,
+    });
+    const prompt = `${codexEnvironmentPreamble(params.projectRoot)}\n\n${params.prompt}`;
+    const { events } = await thread.runStreamed(prompt, { signal: params.signal });
+    for await (const event of events as AsyncGenerator<ThreadEvent>) {
+      if (event.type === "item.completed") {
+        const progress = itemToProgress(event.item);
+        if (progress) params.onProgress?.(progress);
+        if (event.item.type === "agent_message" && event.item.text) {
+          messages.push(event.item.text);
+        }
+      } else if (event.type === "turn.failed") {
+        failure = event.error?.message ?? "Codex setup turn failed";
+      } else if (event.type === "error") {
+        failure = event.message;
+      }
+    }
+  } finally {
+    cleanupStderrLog(invocation.stderrLog);
+    cleanupCodexHome(invocation.codexHome);
+  }
+  const text = finalizeCodexSetupResult(messages, failure);
+  params.onProgress?.({ type: "complete", message: "Repository setup analysis complete" });
+  return text;
+}
+
+export function finalizeCodexSetupResult(messages: string[], failure: string): string {
+  const text = messages.join("\n").trim();
+  if (failure) {
+    const quotaSource = classifyQuotaError(failure, "codex");
+    if (quotaSource) throw new QuotaExhaustedError(quotaSource, failure);
+    throw new Error(failure);
+  }
+  if (!text) throw new Error("Codex produced no setup result");
+  return text;
+}
+
 export class CodexAgentSdkPlugin implements AgentPlugin {
   type = "codex";
 
@@ -898,9 +989,9 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         );
       }
 
-      let parsed: InvestigateResult[];
+      let parsedOutcome: ParsedInvestigateResults;
       try {
-        parsed = parseInvestigateResults(resultText, batch);
+        parsedOutcome = parseInvestigateResults(resultText, batch);
       } catch (err) {
         yield {
           type: "thinking" as const,
@@ -925,7 +1016,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           throw err;
         }
         try {
-          parsed = parseInvestigateResults(repairText, batch);
+          parsedOutcome = parseInvestigateResults(repairText, batch);
           yield { type: "thinking" as const, message: "Codex JSON repair succeeded" };
         } catch (repairErr) {
           const combinedError = jsonRepairFailureError(err, repairErr);
@@ -940,6 +1031,20 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           throw combinedError;
         }
       }
+      let parsed: InvestigateResult[] = parsedOutcome.results;
+      if (parsedOutcome.invalid.length > 0) {
+        const fieldRepair = yield* runInvestigateFieldRepairLoop({
+          results: parsed,
+          invalid: parsedOutcome.invalid,
+          batch,
+          followUp: (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p),
+          agentLabel: "Codex",
+          agentType: this.type,
+          projectId,
+        });
+        parsed = fieldRepair.results;
+      }
+
       if (DEBUG) {
         const matched = parsed.filter((r) => r.findings.length > 0).length;
         const totalFindings = parsed.reduce((s, r) => s + r.findings.length, 0);
@@ -978,7 +1083,16 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
   }
 
   async *revalidate(params: RevalidateParams): AsyncGenerator<AgentProgress, RevalidateOutput> {
-    const { batch, projectRoot, projectInfo, config, force = false, signal, projectId } = params;
+    const {
+      batch,
+      projectRoot,
+      projectInfo,
+      config,
+      force = false,
+      onlyFindingIds,
+      signal,
+      projectId,
+    } = params;
     const model = (config.model as string) ?? DEFAULT_MODEL;
     const effort = (config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
 
@@ -987,8 +1101,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       projectRoot,
       projectInfo,
       force,
+      onlyFindingIds: onlyFindingIds ? new Set(onlyFindingIds) : undefined,
     });
     const totalFindings = built.totalFindings;
+    const expected = built.expected;
     const prompt = `${codexEnvironmentPreamble(projectRoot)}\n\n${built.prompt}`;
 
     yield {
@@ -1165,6 +1281,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         );
       }
 
+      const preResponses: RevalidateRawResponse[] = [];
+      let parsedText = resultText;
       let verdicts: RevalidateVerdict[];
       try {
         verdicts = parseRevalidateVerdicts(resultText);
@@ -1173,12 +1291,13 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           type: "thinking" as const,
           message: "Codex returned non-JSON revalidation output; requesting JSON-only repair",
         };
+        const jsonRepairPrompt = buildRevalidateJsonRepairPrompt(expected);
         const repairText = await runToollessFollowUp(
           codex,
           threadId,
           projectRoot,
           model,
-          buildRevalidateJsonRepairPrompt(),
+          jsonRepairPrompt,
         );
         if (repairText === undefined) {
           writeParseFailureDebug({
@@ -1193,6 +1312,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         }
         try {
           verdicts = parseRevalidateVerdicts(repairText);
+          preResponses.push({ kind: "json-repair", prompt: jsonRepairPrompt, rawText: resultText });
+          parsedText = repairText;
           yield { type: "thinking" as const, message: "Codex JSON repair succeeded" };
         } catch (repairErr) {
           const combinedError = jsonRepairFailureError(err, repairErr);
@@ -1214,6 +1335,19 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         };
       }
 
+      // Id-repair inside the still-live thread (must run before the
+      // finally block tears down CODEX_HOME).
+      const repair = yield* runRevalidateIdRepairLoop({
+        expected,
+        verdicts,
+        initialRawText: parsedText,
+        followUp: threadId
+          ? (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p)
+          : undefined,
+        agentLabel: "Codex",
+      });
+      verdicts = repair.verdicts;
+
       const refusal = await runRefusalFollowUp(codex, threadId, projectRoot, model);
       if (refusal?.refused) {
         yield {
@@ -1231,6 +1365,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       return {
         verdicts,
         meta: { durationMs, ...sdkMeta, refusal },
+        rawResponses: [...preResponses, ...repair.rawResponses],
+        repairAttempts: repair.repairAttempts,
       };
     } finally {
       cleanup();

@@ -1,4 +1,7 @@
-# Reviewing changes (PR mode)
+---
+title: "Reviewing changes (PR mode)"
+description: "Use PR mode to investigate only changed files and fail CI when new findings appear."
+---
 
 `deepsec process` has a direct-invocation mode for reviewing a specific
 set of files — typically the files changed in a pull request. This is
@@ -54,7 +57,8 @@ Other knobs:
 ```
 
 The usual `--agent`, `--model`, `--concurrency`, `--batch-size`,
-`--max-turns` flags work the same as in standard mode.
+`--max-turns`, `--thinking-level` flags work the same as in standard
+mode.
 
 ## Auto-created projects
 

@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -109,6 +110,33 @@ describe("extractTarballLocally — strict allowlist", () => {
     ).toBe(true);
   });
 
+  it("accepts revalidation invocation artifacts under revalidation/<runId>/*.json", async () => {
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-tar-reval-"));
+    fs.mkdirSync(path.join(src, "revalidation", "20260101000000-abcdef0123456789"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(src, "revalidation", "20260101000000-abcdef0123456789", "invocation-000.json"),
+      JSON.stringify({ rawResponses: [] }),
+    );
+    const stats = await makeTarball(src, []);
+    fs.rmSync(src, { recursive: true, force: true });
+
+    const count = await extractTarballLocally(stats.tarPath, destDir);
+    fs.unlinkSync(stats.tarPath);
+    expect(count).toBe(1);
+    expect(
+      fs.existsSync(
+        path.join(
+          destDir,
+          "revalidation",
+          "20260101000000-abcdef0123456789",
+          "invocation-000.json",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("refuses a tarball with a disallowed extension and writes nothing", async () => {
     const src = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-tar-bad-"));
     fs.mkdirSync(path.join(src, "files"));
@@ -193,6 +221,37 @@ describe("extractTarballLocally — strict allowlist", () => {
     // implicitly by the existing strict-namespace test which would also
     // catch the same shape. This test documents the intent.
     expect("files/../etc/passwd.json".split("/").includes("..")).toBe(true);
+  });
+
+  it("skips an oversized entry but extracts the rest of the tarball", async () => {
+    const projectId = path.basename(destDir);
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-tar-fat-"));
+    fs.mkdirSync(path.join(src, "files"));
+    fs.writeFileSync(
+      path.join(src, "files", "ok.ts.json"),
+      JSON.stringify(validRecord(projectId, "ok.ts")),
+    );
+    // Just over the 64MiB per-file cap. Random bytes, not zeros — tar's
+    // decompression-bomb guard rejects archives with a >1000x ratio.
+    fs.writeFileSync(
+      path.join(src, "files", "fat.ts.json"),
+      crypto.randomBytes(64 * 1024 * 1024 + 1),
+    );
+    const stats = await makeTarball(src, []);
+    fs.rmSync(src, { recursive: true, force: true });
+
+    const skipped: { entryPath: string; sizeBytes: number }[] = [];
+    const count = await extractTarballLocally(stats.tarPath, destDir, (entryPath, sizeBytes) =>
+      skipped.push({ entryPath, sizeBytes }),
+    );
+    fs.unlinkSync(stats.tarPath);
+
+    expect(count).toBe(1);
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0].entryPath.endsWith("files/fat.ts.json")).toBe(true);
+    expect(skipped[0].sizeBytes).toBe(64 * 1024 * 1024 + 1);
+    expect(fs.existsSync(path.join(destDir, "files", "ok.ts.json"))).toBe(true);
+    expect(fs.existsSync(path.join(destDir, "files", "fat.ts.json"))).toBe(false);
   });
 
   it("refuses a tarball containing a symlink entry", async () => {

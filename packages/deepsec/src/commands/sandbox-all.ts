@@ -3,7 +3,11 @@ import path from "node:path";
 import { getDataRoot, readProjectConfig } from "@deepsec/core";
 import { defaultModelForAgent } from "../agent-defaults.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
-import { assertAgentCredential, assertSandboxCredential } from "../preflight.js";
+import {
+  applyConfiguredModelRoute,
+  assertAgentCredential,
+  assertSandboxCredential,
+} from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import { orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
@@ -89,12 +93,18 @@ export async function sandboxAllCommand(
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
   const timeout = opts.timeout ?? 5 * 60 * 60 * 1000;
   const agentType = resolveAgentType(extractFlag(passthrough, "--agent"));
+  const explicitAiApiKeyEnv = extractFlag(passthrough, "--ai-api-key-env");
+  const explicitAiBaseUrl = extractFlag(passthrough, "--ai-base-url");
+  const resolvedRoute =
+    !explicitAiApiKeyEnv && !explicitAiBaseUrl
+      ? await applyConfiguredModelRoute(agentType, process.env, { inSandbox: true })
+      : undefined;
 
   // Same preflight as sandbox-process — fail fast before fanning out.
   assertSandboxCredential();
   assertAgentCredential(agentType, {
     inSandbox: true,
-    aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
+    aiApiKeyEnv: explicitAiApiKeyEnv,
   });
 
   console.log(`${BOLD}Sandbox All${RESET} — ${CYAN}${command}${RESET}`);
@@ -204,8 +214,9 @@ export async function sandboxAllCommand(
       concurrency,
       batchSize: parseInt(extractFlag(passthrough, "--batch-size") ?? "5", 10) || 5,
       agentType,
-      aiApiKeyEnv: extractFlag(passthrough, "--ai-api-key-env"),
-      aiBaseUrl: extractFlag(passthrough, "--ai-base-url"),
+      aiApiKeyEnv: explicitAiApiKeyEnv,
+      aiBaseUrl: explicitAiBaseUrl ?? resolvedRoute?.route.baseUrl,
+      brokeredModelCredential: resolvedRoute?.broker,
       model: extractFlag(passthrough, "--model") ?? defaultModelForAgent(agentType),
       snapshotId: undefined,
       saveSnapshot: false,

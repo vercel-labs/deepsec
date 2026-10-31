@@ -35,6 +35,9 @@ export const revalidationSchema = z.object({
 });
 
 export const findingSchema = z.object({
+  // Stable deterministic identity (`finding_<sha256 prefix>`). Optional
+  // for records written before the field existed; backfilled on load.
+  findingId: z.string().optional(),
   severity: z.enum(["CRITICAL", "HIGH", "MEDIUM", "HIGH_BUG", "BUG", "LOW"]),
   vulnSlug: z.string(),
   title: z.string(),
@@ -179,6 +182,63 @@ export const fileRecordSchema = z.object({
   lockedByRunId: z.string().optional(),
   lockedAt: z.string().optional(),
 });
+
+/**
+ * Compact one-line rendering of a zod error for log messages:
+ * `severity: Invalid enum value ...; lineNumbers.0: Expected number ...`.
+ */
+export function formatSchemaIssues(error: z.ZodError, limit = 5): string {
+  const issues = error.issues
+    .slice(0, limit)
+    .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
+  const extra = error.issues.length > limit ? ` (+${error.issues.length - limit} more)` : "";
+  return issues.join("; ") + extra;
+}
+
+/**
+ * The record envelope with findings left unvalidated, so a record whose
+ * only defect is inside `findings` can still be salvaged finding-by-finding.
+ */
+const fileRecordEnvelopeSchema = fileRecordSchema.extend({ findings: z.array(z.unknown()) });
+
+export type FileRecordSalvageResult =
+  | {
+      ok: true;
+      record: z.infer<typeof fileRecordSchema>;
+      /** Findings dropped because they individually failed `findingSchema`. */
+      droppedFindings: Array<{ index: number; issues: string }>;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Validate an already-JSON-parsed value as a FileRecord, salvaging at
+ * finding granularity. Agent output is only field-validated on the write
+ * path since findings-validation landed there — records written by older
+ * versions (or by a model that slipped a malformed field past a repair
+ * pass) still exist on disk. All-or-nothing `fileRecordSchema.parse` made
+ * one bad finding silently erase every valid finding in the same file;
+ * this keeps the valid ones and reports what was dropped so callers can
+ * warn instead of swallowing.
+ *
+ * `ok: false` means the envelope itself (any field other than the
+ * individual findings) is invalid — nothing safe to keep.
+ */
+export function salvageFileRecord(raw: unknown): FileRecordSalvageResult {
+  const strict = fileRecordSchema.safeParse(raw);
+  if (strict.success) return { ok: true, record: strict.data, droppedFindings: [] };
+
+  const envelope = fileRecordEnvelopeSchema.safeParse(raw);
+  if (!envelope.success) return { ok: false, error: formatSchemaIssues(envelope.error) };
+
+  const findings: z.infer<typeof findingSchema>[] = [];
+  const droppedFindings: Array<{ index: number; issues: string }> = [];
+  envelope.data.findings.forEach((f, index) => {
+    const parsed = findingSchema.safeParse(f);
+    if (parsed.success) findings.push(parsed.data);
+    else droppedFindings.push({ index, issues: formatSchemaIssues(parsed.error) });
+  });
+  return { ok: true, record: { ...envelope.data, findings }, droppedFindings };
+}
 
 export const runMetaSchema = z.object({
   runId: z.string(),

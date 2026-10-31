@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureFindingIds } from "./finding-id.js";
 import {
   dataDir,
   fileRecordPath,
@@ -11,7 +12,7 @@ import {
   runMetaPath,
   runsDir,
 } from "./paths.js";
-import { fileRecordSchema, projectConfigSchema, runMetaSchema } from "./schemas.js";
+import { projectConfigSchema, runMetaSchema, salvageFileRecord } from "./schemas.js";
 import type { FileRecord, ProjectConfig, RunMeta } from "./types.js";
 
 /**
@@ -59,21 +60,24 @@ function detectGithubUrl(rootPath: string): string | undefined {
 export function ensureProject(projectId: string, rootPath: string): ProjectConfig {
   const configPath = projectConfigPath(projectId);
   if (fs.existsSync(configPath)) {
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const config = projectConfigSchema.parse(raw);
-    let changed = false;
-    if (path.resolve(rootPath) !== config.rootPath) {
-      config.rootPath = path.resolve(rootPath);
-      changed = true;
+    try {
+      const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      const config = projectConfigSchema.parse(raw);
+      let changed = false;
+      if (path.resolve(rootPath) !== config.rootPath) {
+        config.rootPath = path.resolve(rootPath);
+        changed = true;
+      }
+      if (!config.githubUrl) {
+        config.githubUrl = detectGithubUrl(path.resolve(rootPath));
+        if (config.githubUrl) changed = true;
+      }
+      if (changed) writeProjectConfig(configPath, config);
+      return config;
+    } catch {
+      // project.json is generated state. An interrupted non-atomic write from
+      // an older Deepsec version must not permanently wedge --force recovery.
     }
-    if (!config.githubUrl) {
-      config.githubUrl = detectGithubUrl(path.resolve(rootPath));
-      if (config.githubUrl) changed = true;
-    }
-    if (changed) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-    }
-    return config;
   }
   const config: ProjectConfig = {
     projectId,
@@ -82,8 +86,18 @@ export function ensureProject(projectId: string, rootPath: string): ProjectConfi
     githubUrl: detectGithubUrl(path.resolve(rootPath)),
   };
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  writeProjectConfig(configPath, config);
   return config;
+}
+
+function writeProjectConfig(file: string, config: ProjectConfig): void {
+  const temp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temp, file);
+  } finally {
+    if (fs.existsSync(temp)) fs.unlinkSync(temp);
+  }
 }
 
 export function readProjectConfig(projectId: string): ProjectConfig {
@@ -274,12 +288,43 @@ export function listRuns(projectId: string): RunMeta[] {
 export function readFileRecord(projectId: string, filePath: string): FileRecord | null {
   const p = fileRecordPath(projectId, filePath);
   if (!fs.existsSync(p)) return null;
+  let raw: unknown;
   try {
-    const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-    return fileRecordSchema.parse(raw);
-  } catch {
+    raw = JSON.parse(fs.readFileSync(p, "utf-8"));
+  } catch (err) {
+    console.warn(
+      `[deepsec] skipping unreadable file record ${p}: ${err instanceof Error ? err.message : err}`,
+    );
     return null;
   }
+  const record = parseFileRecordSalvaging(raw, p);
+  if (!record) return null;
+  // Lazy backfill: records written before findingId existed get
+  // deterministic IDs assigned in memory on every load (same inputs →
+  // same IDs), and the IDs persist on the next write.
+  ensureFindingIds(record);
+  return record;
+}
+
+/**
+ * Validate a raw record via `salvageFileRecord`, warning (never silently)
+ * about anything dropped. One malformed finding used to fail the whole
+ * record's parse and vanish the file's *valid* findings along with it —
+ * 148 findings in one observed 12-run comparison. Returns null only when
+ * the record envelope itself is invalid.
+ */
+function parseFileRecordSalvaging(raw: unknown, sourcePath: string): FileRecord | null {
+  const salvaged = salvageFileRecord(raw);
+  if (!salvaged.ok) {
+    console.warn(`[deepsec] skipping invalid file record ${sourcePath}: ${salvaged.error}`);
+    return null;
+  }
+  for (const dropped of salvaged.droppedFindings) {
+    console.warn(
+      `[deepsec] dropping malformed finding #${dropped.index} in ${sourcePath}: ${dropped.issues}`,
+    );
+  }
+  return salvaged.record;
 }
 
 export function writeFileRecord(record: FileRecord): void {
@@ -388,12 +433,19 @@ export function loadAllFileRecords(projectId: string): FileRecord[] {
       if (entry.isDirectory()) {
         walk(full);
       } else if (entry.name.endsWith(".json")) {
+        let raw: unknown;
         try {
-          const raw = JSON.parse(fs.readFileSync(full, "utf-8"));
-          records.push(fileRecordSchema.parse(raw));
-        } catch {
-          // skip malformed
+          raw = JSON.parse(fs.readFileSync(full, "utf-8"));
+        } catch (err) {
+          console.warn(
+            `[deepsec] skipping unreadable file record ${full}: ${err instanceof Error ? err.message : err}`,
+          );
+          continue;
         }
+        const record = parseFileRecordSalvaging(raw, full);
+        if (!record) continue;
+        ensureFindingIds(record); // see readFileRecord
+        records.push(record);
       }
     }
   }

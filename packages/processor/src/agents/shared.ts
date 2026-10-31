@@ -1,9 +1,27 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { dataDir, type FileRecord, type Finding, type RefusalReport } from "@deepsec/core";
+import {
+  dataDir,
+  type FileRecord,
+  type Finding,
+  findingSchema,
+  formatSchemaIssues,
+  type RefusalReport,
+} from "@deepsec/core";
 import { jsonrepair } from "jsonrepair";
-import type { InvestigateResult, RevalidateVerdict } from "./types.js";
+import {
+  type ExpectedFinding,
+  expectedFindingsForBatch,
+  reconcileVerdicts,
+  shouldRevalidateFinding,
+} from "../reconcile.js";
+import type {
+  AgentProgress,
+  InvestigateResult,
+  RevalidateRawResponse,
+  RevalidateVerdict,
+} from "./types.js";
 
 // --- Retry / backoff -------------------------------------------------------
 
@@ -50,7 +68,7 @@ export type QuotaAgentHint = "claude" | "codex";
  * Patterns below were extracted from the actual platform binaries via
  * `strings`:
  *   - Claude: `@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`
- *   - Codex:  `@openai/codex/vendor/.../codex/codex`
+ *   - Codex:  `@openai/codex/vendor/.../bin/codex`
  * plus the well-known stable strings from the upstream HTTP error
  * envelopes (Anthropic `billing_error`, OpenAI `insufficient_quota` /
  * "You exceeded your current quota") which don't appear in the bundled
@@ -225,8 +243,7 @@ function extractMissingCodexBinaryPath(msg: string): string | undefined {
  */
 export function isMissingBinaryError(msg: string): boolean {
   if (!msg) return false;
-  const hasMissingFileSignature =
-    /\bENOENT\b/i.test(msg) || /no such file or directory/i.test(msg);
+  const hasMissingFileSignature = /\bENOENT\b/i.test(msg) || /no such file or directory/i.test(msg);
   return hasMissingFileSignature && CODEX_VENDOR_BINARY_RE.test(msg);
 }
 
@@ -273,6 +290,41 @@ export function isUsingAiGateway(): boolean {
   if (a === GATEWAY_ANTHROPIC_BASE_URL) return true;
   if (o === GATEWAY_OPENAI_BASE_URL) return true;
   return false;
+}
+
+/**
+ * True when `url` targets Vercel AI Gateway (either the Anthropic adapter
+ * at the root or the OpenAI-compat adapter at /v1). Used to decide whether
+ * a request should carry the App Attribution headers — direct-provider
+ * endpoints get nothing.
+ */
+export function isGatewayBaseUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  const trimmed = url.replace(/\/+$/, "");
+  return trimmed === GATEWAY_ANTHROPIC_BASE_URL || trimmed === GATEWAY_OPENAI_BASE_URL;
+}
+
+// AI Gateway App Attribution (https://vercel.com/docs/ai-gateway/ecosystem/app-attribution):
+// the gateway reads `http-referer` + `x-title` to identify the app behind
+// a request; unknown to other endpoints, so only gateway-bound requests
+// carry them. The title embeds the CLI version so gateway-side logs can
+// segment traffic by release. The version lives in the deepsec package
+// (processor must not depend on it, and processor's own package version
+// is meaningless), so the CLI injects it at startup via
+// setAttributionVersion(); the bare "deepsec" fallback covers library
+// consumers that never call the setter.
+let attributionTitle = "deepsec";
+
+export function setAttributionVersion(version: string): void {
+  attributionTitle = `deepsec/${version}`;
+}
+
+/** Fresh object per call — call sites merge/mutate into header maps. */
+export function attributionHeaders(): Record<string, string> {
+  return {
+    "http-referer": "https://deepsec.sh",
+    "x-title": attributionTitle,
+  };
 }
 
 /**
@@ -520,7 +572,11 @@ Use this exact schema:
 \`severity\` must be one of \`CRITICAL\`, \`HIGH\`, \`MEDIUM\`, \`HIGH_BUG\`, or \`BUG\`. \`confidence\` must be one of \`high\`, \`medium\`, or \`low\`.`;
 }
 
-export function buildRevalidateJsonRepairPrompt(): string {
+export function buildRevalidateJsonRepairPrompt(expected?: ExpectedFinding[]): string {
+  const idList =
+    expected && expected.length > 0
+      ? `\nReturn exactly one verdict for every Finding ID below, copying each \`findingId\` exactly:\n\n${expected.map((e) => `- ${e.alias ?? e.findingId} — "${e.title}"`).join("\n")}\n`
+      : "";
   return `Your previous response was not valid JSON, so the scanner could not parse it.
 
 Do not redo the revalidation and do not use tools. Re-output the same verdicts and reasoning from your previous response as ONLY one valid JSON array. No prose before or after. No "Confirmed:" preface. A \`\`\`json fenced block is acceptable, but the content inside must be valid JSON.
@@ -532,17 +588,158 @@ Use this exact schema:
 \`\`\`json
 [
   {
-    "filePath": "exact/path/to/file.ts",
-    "title": "exact title from the finding",
+    "findingId": "the exact Finding ID from the finding, e.g. F3",
     "verdict": "true-positive",
     "adjustedSeverity": "HIGH",
-    "duplicateOf": "title of the primary finding (only when verdict is duplicate)",
+    "duplicateOf": "Finding ID of the primary finding (only when verdict is duplicate)",
     "reasoning": "Detailed explanation. Show your work."
   }
 ]
 \`\`\`
-
+${idList}
 \`verdict\` must be one of \`true-positive\`, \`false-positive\`, \`fixed\`, \`uncertain\`, or \`duplicate\`. \`adjustedSeverity\` is optional and must be one of \`CRITICAL\`, \`HIGH\`, \`MEDIUM\`, \`HIGH_BUG\`, or \`BUG\` when present. \`duplicateOf\` is required only when \`verdict\` is \`"duplicate"\`; omit it otherwise.`;
+}
+
+/**
+ * Follow-up prompt for the id-repair turn: the previous response parsed
+ * as JSON, but some requested findings got no reconcilable verdict. Ask
+ * only for the missing ones, show which returned identifiers didn't
+ * match, and echo the unmatched verdicts back so the model mostly just
+ * has to fix the ID rather than restate its analysis.
+ */
+function buildRevalidateIdRepairPrompt(params: {
+  appliedCount: number;
+  missing: ExpectedFinding[];
+  unmatchedVerdicts: RevalidateVerdict[];
+}): string {
+  const { appliedCount, missing, unmatchedVerdicts } = params;
+
+  const missingList = missing
+    .map((e) => `- ${e.alias ?? e.findingId} — ${e.filePath} — "${e.title}"`)
+    .join("\n");
+
+  const unknownIdentifiers = unmatchedVerdicts
+    .map((v) => v.findingId ?? v.title ?? "")
+    .filter(Boolean)
+    .map((s) => `- ${JSON.stringify(s)}`)
+    .join("\n");
+  const unknownBlock = unknownIdentifiers
+    ? `\nThe following identifiers from your response could not be matched to any requested finding:\n\n${unknownIdentifiers}\n`
+    : "";
+
+  const nearMissBlock =
+    unmatchedVerdicts.length > 0
+      ? `\nThese verdicts from your previous response could not be matched. If one of them corresponds to a missing finding ID above, re-emit it with the corrected \`findingId\` — keep the verdict and reasoning as they were:\n\n\`\`\`json\n${JSON.stringify(
+          unmatchedVerdicts.map((v) => ({
+            findingId: v.findingId,
+            title: v.title,
+            verdict: v.verdict,
+            adjustedSeverity: v.adjustedSeverity,
+            duplicateOf: v.duplicateOf,
+            reasoning: v.reasoning,
+          })),
+          null,
+          2,
+        )}\n\`\`\`\n`
+      : "";
+
+  return `Your previous response was parsed, and ${appliedCount} verdict(s) were successfully matched to findings.
+
+The following required finding IDs are still missing a verdict:
+
+${missingList}
+${unknownBlock}${nearMissBlock}
+Return ONLY a JSON array containing verdicts for the missing Finding IDs listed above. Copy each \`findingId\` exactly as shown — do not invent or modify IDs. Preserve your previous conclusions; do not repeat the investigation and do not use tools.
+
+\`\`\`json
+[
+  {
+    "findingId": "F3",
+    "verdict": "true-positive" | "false-positive" | "fixed" | "uncertain" | "duplicate",
+    "adjustedSeverity": "HIGH",
+    "duplicateOf": "Finding ID of the primary finding (only when verdict is duplicate)",
+    "reasoning": "Your reasoning from before, compact."
+  }
+]
+\`\`\``;
+}
+
+/**
+ * In-session id-repair loop, shared by every agent plugin. After the
+ * initial revalidation response parses, reconcile it against the
+ * requested findings; while any finding is still missing a verdict, ask
+ * the SAME session (tool-free) for just the missing ones — up to
+ * `maxRepairs` times. The session still holds the full investigation
+ * context, so this recovers verdicts the model produced under a mangled
+ * identifier without re-running any analysis.
+ *
+ * Returns the merged verdict list (initial + repair turns; the
+ * reconciler's first-match-wins ordering means repaired verdicts only
+ * fill gaps, never displace an already-matched verdict) plus the raw
+ * responses for artifact logging.
+ */
+export async function* runRevalidateIdRepairLoop(params: {
+  expected: ExpectedFinding[];
+  verdicts: RevalidateVerdict[];
+  initialRawText: string;
+  followUp: ((prompt: string) => Promise<string | undefined>) | undefined;
+  agentLabel: string;
+  maxRepairs?: number;
+}): AsyncGenerator<
+  AgentProgress,
+  { verdicts: RevalidateVerdict[]; rawResponses: RevalidateRawResponse[]; repairAttempts: number }
+> {
+  const { expected, initialRawText, followUp, agentLabel, maxRepairs = 2 } = params;
+  let verdicts = params.verdicts;
+  const rawResponses: RevalidateRawResponse[] = [
+    { kind: "initial", rawText: initialRawText, parsedCount: verdicts.length },
+  ];
+  let repairAttempts = 0;
+
+  while (repairAttempts < maxRepairs) {
+    const rec = reconcileVerdicts(expected, verdicts);
+    if (rec.missing.length === 0) break;
+    if (!followUp) break;
+
+    repairAttempts++;
+    yield {
+      type: "thinking",
+      message: `${agentLabel}: ${rec.missing.length}/${expected.length} verdict(s) missing after reconciliation; requesting id-repair (attempt ${repairAttempts}/${maxRepairs})`,
+    };
+
+    const prompt = buildRevalidateIdRepairPrompt({
+      appliedCount: rec.matches.length,
+      missing: rec.missing,
+      unmatchedVerdicts: [...rec.unknown, ...rec.ambiguous],
+    });
+    const repairText = await followUp(prompt);
+    if (repairText === undefined) {
+      rawResponses.push({ kind: "id-repair", prompt, rawText: "(follow-up failed)" });
+      break;
+    }
+
+    let repairVerdicts: RevalidateVerdict[];
+    try {
+      repairVerdicts = parseRevalidateVerdicts(repairText);
+    } catch {
+      rawResponses.push({ kind: "id-repair", prompt, rawText: repairText });
+      yield {
+        type: "thinking",
+        message: `${agentLabel}: id-repair response was not parseable JSON; stopping repair`,
+      };
+      break;
+    }
+    rawResponses.push({
+      kind: "id-repair",
+      prompt,
+      rawText: repairText,
+      parsedCount: repairVerdicts.length,
+    });
+    if (repairVerdicts.length === 0) break;
+    verdicts = [...verdicts, ...repairVerdicts];
+  }
+
+  return { verdicts, rawResponses, repairAttempts };
 }
 
 export function formatJsonRepairFailureDebugText(originalText: string, repairText: string): string {
@@ -625,10 +822,31 @@ function parseAgentJsonArray(params: {
   return parsed;
 }
 
+/**
+ * A finding the agent emitted inside valid JSON but with invalid fields
+ * (bad enum value, wrong type, missing required field). Carried out of
+ * `parseInvestigateResults` so the caller can request an in-session
+ * field-repair instead of the finding being written to disk unvalidated —
+ * where the strict read-side schema used to silently erase the whole
+ * file's findings.
+ */
+interface InvalidFindingEntry {
+  filePath: string;
+  /** The finding as the agent emitted it, verbatim. */
+  raw: unknown;
+  /** Compact zod issue summary, e.g. `severity: Invalid enum value ...`. */
+  issues: string;
+}
+
+export interface ParsedInvestigateResults {
+  results: InvestigateResult[];
+  invalid: InvalidFindingEntry[];
+}
+
 export function parseInvestigateResults(
   resultText: string,
   batch: FileRecord[],
-): InvestigateResult[] {
+): ParsedInvestigateResults {
   // Fail loud when neither strict JSON nor tolerant jsonrepair can produce
   // an array. A malformed response is otherwise indistinguishable from a
   // clean "found nothing" run, which would mask truncation, gateway splice,
@@ -640,16 +858,31 @@ export function parseInvestigateResults(
       `Agent produced JSON but not an array of file findings. Got: ${typeof parsed}`,
   });
 
-  const typedParsed = parsed as Array<{ filePath: string; findings: Finding[] }>;
+  const typedParsed = parsed as Array<{ filePath: string; findings: unknown[] }>;
   const results: InvestigateResult[] = [];
+  const invalid: InvalidFindingEntry[] = [];
   const batchPaths = new Set(batch.map((r) => r.filePath));
 
   for (const entry of typedParsed) {
     if (batchPaths.has(entry.filePath)) {
-      results.push({
-        filePath: entry.filePath,
-        findings: entry.findings || [],
-      });
+      // Field-validate each finding now, while the session that produced
+      // it is still alive and can repair it. Findings used to be written
+      // to disk as-emitted; the strict read-side schema then rejected the
+      // whole record over one bad field — silently.
+      const findings: Finding[] = [];
+      for (const raw of entry.findings || []) {
+        const parsedFinding = findingSchema.safeParse(raw);
+        if (parsedFinding.success) {
+          findings.push(parsedFinding.data);
+        } else {
+          invalid.push({
+            filePath: entry.filePath,
+            raw,
+            issues: formatSchemaIssues(parsedFinding.error),
+          });
+        }
+      }
+      results.push({ filePath: entry.filePath, findings });
       batchPaths.delete(entry.filePath);
     }
   }
@@ -658,7 +891,146 @@ export function parseInvestigateResults(
     results.push({ filePath, findings: [] });
   }
 
-  return results;
+  return { results, invalid };
+}
+
+/**
+ * Follow-up prompt for the field-repair turn: the response parsed as JSON
+ * and structurally valid findings were kept, but some findings had invalid
+ * or missing fields. Echo each invalid finding back with its validation
+ * errors so the model mostly just has to fix the offending field.
+ */
+export function buildInvestigateFieldRepairPrompt(invalid: InvalidFindingEntry[]): string {
+  const perFinding = invalid
+    .map(
+      (e, i) =>
+        `### Invalid finding ${i + 1} (filePath: ${JSON.stringify(e.filePath)})\n\n` +
+        `Validation errors: ${e.issues}\n\n` +
+        `As you emitted it:\n\`\`\`json\n${JSON.stringify(e.raw, null, 2)}\n\`\`\``,
+    )
+    .join("\n\n");
+
+  return `Your previous response parsed as JSON and its valid findings were accepted, but ${invalid.length} finding(s) had invalid or missing fields and were rejected.
+
+Do not redo the investigation and do not use tools. Re-emit ONLY the rejected findings listed below, corrected to satisfy the schema. Keep the substance (title, description, reasoning) unchanged — fix only the invalid fields.
+
+${perFinding}
+
+Return ONLY a JSON array in this exact shape, containing one entry per filePath with ONLY the corrected findings (do not repeat findings that were already accepted):
+
+\`\`\`json
+[
+  {
+    "filePath": "relative/path/to/file.ts",
+    "findings": [
+      {
+        "severity": "HIGH",
+        "vulnSlug": "the-vuln-slug-or-other",
+        "title": "Brief title of the issue",
+        "description": "Detailed description",
+        "lineNumbers": [10, 15],
+        "recommendation": "How to fix this vulnerability",
+        "confidence": "high"
+      }
+    ]
+  }
+]
+\`\`\`
+
+\`severity\` must be one of \`CRITICAL\`, \`HIGH\`, \`MEDIUM\`, \`HIGH_BUG\`, or \`BUG\`. \`confidence\` must be one of \`high\`, \`medium\`, or \`low\` (lowercase). \`lineNumbers\` must be an array of numbers. \`title\`, \`description\`, \`recommendation\`, and \`vulnSlug\` must be strings.`;
+}
+
+function investigateFindingSignature(f: Finding): string {
+  return `${f.vulnSlug}::${f.title.trim().toLowerCase()}`;
+}
+
+/**
+ * In-session field-repair loop, shared by every agent plugin. When the
+ * initial investigation response parses as JSON but some findings fail
+ * field validation, keep the valid ones and ask the SAME session
+ * (tool-free) to re-emit just the invalid ones, corrected — up to
+ * `maxRepairs` times. Repaired findings merge into the kept results by
+ * (vulnSlug, title) signature so a model that re-emits an already-accepted
+ * finding doesn't duplicate it.
+ *
+ * Findings still invalid when the loop ends are dropped — loudly: a
+ * progress message plus a `writeParseFailureDebug` dump of the offenders.
+ */
+export async function* runInvestigateFieldRepairLoop(params: {
+  results: InvestigateResult[];
+  invalid: InvalidFindingEntry[];
+  batch: FileRecord[];
+  followUp: ((prompt: string) => Promise<string | undefined>) | undefined;
+  agentLabel: string;
+  agentType: string;
+  projectId?: string;
+  maxRepairs?: number;
+}): AsyncGenerator<AgentProgress, { results: InvestigateResult[]; repairAttempts: number }> {
+  const { batch, followUp, agentLabel, agentType, projectId, maxRepairs = 2 } = params;
+  const results = params.results;
+  let invalid = params.invalid;
+  let repairAttempts = 0;
+
+  while (invalid.length > 0 && repairAttempts < maxRepairs && followUp) {
+    repairAttempts++;
+    yield {
+      type: "thinking",
+      message: `${agentLabel}: ${invalid.length} finding(s) failed field validation; requesting field-repair (attempt ${repairAttempts}/${maxRepairs})`,
+    };
+
+    const prompt = buildInvestigateFieldRepairPrompt(invalid);
+    const repairText = await followUp(prompt);
+    if (repairText === undefined) break;
+
+    let repaired: ParsedInvestigateResults;
+    try {
+      repaired = parseInvestigateResults(repairText, batch);
+    } catch {
+      yield {
+        type: "thinking",
+        message: `${agentLabel}: field-repair response was not parseable JSON; stopping repair`,
+      };
+      break;
+    }
+
+    for (const entry of repaired.results) {
+      if (entry.findings.length === 0) continue;
+      const target = results.find((r) => r.filePath === entry.filePath);
+      if (!target) continue;
+      const seen = new Set(target.findings.map(investigateFindingSignature));
+      for (const f of entry.findings) {
+        if (!seen.has(investigateFindingSignature(f))) {
+          seen.add(investigateFindingSignature(f));
+          target.findings.push(f);
+        }
+      }
+    }
+
+    invalid = repaired.invalid;
+  }
+
+  if (invalid.length > 0) {
+    const summary = invalid
+      .map((e) => `${e.filePath}: ${e.issues}`)
+      .slice(0, 5)
+      .join(" | ");
+    yield {
+      type: "thinking",
+      message: `${agentLabel}: dropping ${invalid.length} finding(s) that failed field validation after ${repairAttempts} repair attempt(s): ${summary}`,
+    };
+    writeParseFailureDebug({
+      projectId,
+      phase: "investigate",
+      agentType,
+      resultText: JSON.stringify(invalid, null, 2),
+      error: new Error(
+        `${invalid.length} finding(s) failed field validation after ${repairAttempts} field-repair attempt(s)`,
+      ),
+      batch,
+    });
+  }
+
+  return { results, repairAttempts };
 }
 
 // --- Revalidation prompt ---------------------------------------------------
@@ -668,18 +1040,29 @@ export function buildRevalidatePrompt(params: {
   projectRoot: string;
   projectInfo: string;
   force: boolean;
-}): { prompt: string; totalFindings: number } {
-  const { batch, projectRoot, projectInfo, force } = params;
+  /** See RevalidateParams.onlyFindingIds. */
+  onlyFindingIds?: ReadonlySet<string>;
+}): { prompt: string; totalFindings: number; expected: ExpectedFinding[] } {
+  const { batch, projectRoot, projectInfo, force, onlyFindingIds } = params;
+  const filterOpts = { force, onlyFindingIds };
+
+  // Single source of truth for identity AND aliases: the processor
+  // reconciles against expectedFindingsForBatch with the same inputs, so
+  // the short alias shown here ("F3") maps back to the same findingId on
+  // both sides.
+  const expected = expectedFindingsForBatch(batch, filterOpts);
+  const aliasById = new Map(expected.map((e) => [e.findingId, e.alias]));
 
   const fileSections: string[] = [];
 
   for (const file of batch) {
-    const findingsToCheck = file.findings.filter((f) => force || !f.revalidation);
+    const findingsToCheck = file.findings.filter((f) => shouldRevalidateFinding(f, filterOpts));
     if (findingsToCheck.length === 0) continue;
 
     const findingsList = findingsToCheck
       .map((f) => {
         return `### Finding: ${f.title}
+- **Finding ID:** ${aliasById.get(f.findingId!) ?? f.findingId}
 - **Severity:** ${f.severity}
 - **Slug:** ${f.vulnSlug}
 - **Lines:** ${f.lineNumbers.join(", ")}
@@ -713,10 +1096,7 @@ export function buildRevalidatePrompt(params: {
     fileSections.push(`## File: ${file.filePath}\n\n${findingsList}\n${gitContext}`);
   }
 
-  const totalFindings = batch.reduce(
-    (s, f) => s + f.findings.filter((ff) => force || !ff.revalidation).length,
-    0,
-  );
+  const totalFindings = expected.length;
 
   const prompt = `You are a world-class security researcher performing an adversarial review of vulnerability findings. Your goal is to determine, with high confidence, whether each finding is real and exploitable. You must be thorough — incorrect verdicts here directly impact security decisions.
 
@@ -746,14 +1126,14 @@ For EACH finding, perform ALL of these steps before rendering a verdict:
 - **false-positive** — Not exploitable. Name the specific mitigation.
 - **fixed** — Was real but has been patched. Cite the change.
 - **uncertain** — Can't determine. Explain what's ambiguous.
-- **duplicate** — This finding describes the **same underlying vulnerability** at the **same code location** as another finding in the **same file** (e.g., two matchers flagged the same line range from different angles, or the same auth bypass surfaced twice with different phrasing). Set \`duplicateOf\` to the exact \`title\` of the primary finding — the one that should keep the canonical verdict. Same vuln class in a different location is **not** a duplicate.
+- **duplicate** — This finding describes the **same underlying vulnerability** at the **same code location** as another finding in the **same file** (e.g., two matchers flagged the same line range from different angles, or the same auth bypass surfaced twice with different phrasing). Set \`duplicateOf\` to the Finding ID of the primary finding — the one that should keep the canonical verdict. Same vuln class in a different location is **not** a duplicate.
 
 If severity should change, set \`adjustedSeverity\`. Omit if correct.
 
 ### Duplicate rules (read carefully)
 
 - \`duplicate\` is only valid within a single file. Cross-file similarity does **not** count.
-- For any equivalence class of duplicates, **exactly one finding stays primary** with a real verdict (true-positive / false-positive / fixed / uncertain). The other(s) are \`duplicate\` with \`duplicateOf\` pointing at the primary's title.
+- For any equivalence class of duplicates, **exactly one finding stays primary** with a real verdict (true-positive / false-positive / fixed / uncertain). The other(s) are \`duplicate\` with \`duplicateOf\` pointing at the primary's Finding ID.
 - The primary you reference in \`duplicateOf\` **must itself have a non-duplicate verdict** in your output (or already in the file's prior revalidation). If you mark every member of a group as duplicate, all of them will be rejected.
 - Pick the primary as the most precise / highest-confidence statement of the issue. The duplicates should add context in their \`reasoning\`, not repeat the full analysis.
 
@@ -762,21 +1142,24 @@ If severity should change, set \`adjustedSeverity\`. Omit if correct.
 \`\`\`json
 [
   {
-    "filePath": "exact/path/to/file.ts",
-    "title": "exact title from the finding",
+    "findingId": "the exact Finding ID from the finding, e.g. F3",
     "verdict": "true-positive" | "false-positive" | "fixed" | "uncertain" | "duplicate",
     "adjustedSeverity": "CRITICAL" | "HIGH" | "MEDIUM" | "HIGH_BUG" | "BUG",
-    "duplicateOf": "title of the primary finding (only when verdict is duplicate)",
+    "duplicateOf": "Finding ID of the primary finding (only when verdict is duplicate)",
     "reasoning": "Detailed explanation (5-10 sentences). Show your work."
   }
 ]
 \`\`\`
 
-**Include \`filePath\` for every verdict** so we can match verdicts to the correct file. \`adjustedSeverity\` is optional. \`duplicateOf\` is required iff \`verdict === "duplicate"\` and is otherwise ignored.
+You must return exactly one verdict for every Finding ID below:
+
+${expected.map((e) => `- ${e.alias ?? e.findingId} — "${e.title}"`).join("\n")}
+
+**Copy each \`findingId\` exactly as shown. Do not invent or modify IDs.** The Finding ID — not the title — is how verdicts are matched back to findings. \`adjustedSeverity\` is optional. \`duplicateOf\` is required iff \`verdict === "duplicate"\` and is otherwise ignored; it must also be a Finding ID.
 
 **Your reasoning is the most important part.** A verdict without thorough reasoning is worthless.`;
 
-  return { prompt, totalFindings };
+  return { prompt, totalFindings, expected };
 }
 
 export function parseRevalidateVerdicts(resultText: string): RevalidateVerdict[] {

@@ -1,3 +1,4 @@
+import { attributionHeaders } from "@deepsec/processor";
 import type { NetworkPolicy, NetworkPolicyRule } from "@vercel/sandbox";
 import { describe, expect, it } from "vitest";
 import { buildWorkerNetworkPolicy } from "../sandbox/setup.js";
@@ -26,6 +27,20 @@ function bearerFor(p: NetworkPolicy, host: string): string | null {
 }
 
 describe("buildWorkerNetworkPolicy", () => {
+  it("injects an explicit provider header on only the selected host", () => {
+    const policy = buildWorkerNetworkPolicy({}, "pi", {
+      selected: {
+        host: "custom.example",
+        placeholderEnv: "CUSTOM_KEY",
+        header: { name: "x-api-key", value: "real-secret" },
+      },
+    });
+    expect(policy).toEqual({
+      allow: {
+        "custom.example": [{ transform: [{ headers: { "x-api-key": "real-secret" } }] }],
+      },
+    });
+  });
   it("uses ANTHROPIC_UPSTREAM_BASE_URL host on the claude path", () => {
     const policy = buildWorkerNetworkPolicy(
       { ANTHROPIC_UPSTREAM_BASE_URL: "https://ai-gateway.vercel.sh" },
@@ -126,13 +141,26 @@ describe("buildWorkerNetworkPolicy", () => {
       expect(bearerFor(policy, "api.withmartian.com")).toBe("Bearer martian-real");
     });
 
-    it("emits no transform when no matching credential is provided", () => {
+    it("emits an attribution-only transform when no matching credential is provided", () => {
       const policy = buildWorkerNetworkPolicy(
         { ANTHROPIC_UPSTREAM_BASE_URL: "https://ai-gateway.vercel.sh" },
         "claude-agent-sdk",
         {},
       );
-      expect(policyRecord(policy)["ai-gateway.vercel.sh"]).toEqual([]);
+      // No credential to broker, but gateway traffic still gets App
+      // Attribution headers.
+      expect(policyRecord(policy)["ai-gateway.vercel.sh"]).toEqual([
+        { transform: [{ headers: attributionHeaders() }] },
+      ]);
+    });
+
+    it("emits no transform on direct-provider hosts without credentials", () => {
+      const policy = buildWorkerNetworkPolicy(
+        { ANTHROPIC_UPSTREAM_BASE_URL: "https://api.anthropic.com" },
+        "claude-agent-sdk",
+        {},
+      );
+      expect(policyRecord(policy)["api.anthropic.com"]).toEqual([]);
     });
 
     it("does not inject the anthropic token when running codex without an openai token", () => {
@@ -155,6 +183,49 @@ describe("buildWorkerNetworkPolicy", () => {
       );
       expect(bearerFor(policy, "ai-gateway.vercel.sh")).toBe("Bearer vck_realtoken");
       expect(bearerFor(policy, "telemetry.example.com")).toBeNull();
+    });
+  });
+
+  describe("app attribution", () => {
+    function headersFor(p: NetworkPolicy, host: string): Record<string, string> | undefined {
+      return policyRecord(p)[host]?.[0]?.transform?.[0]?.headers;
+    }
+
+    it("merges attribution headers into the brokered-token transform on the gateway host", () => {
+      const policy = buildWorkerNetworkPolicy(
+        { ANTHROPIC_UPSTREAM_BASE_URL: "https://ai-gateway.vercel.sh" },
+        "claude-agent-sdk",
+        { anthropicToken: "vck_realtoken" },
+      );
+      expect(headersFor(policy, "ai-gateway.vercel.sh")).toEqual({
+        ...attributionHeaders(),
+        authorization: "Bearer vck_realtoken",
+      });
+    });
+
+    it("merges attribution headers into the selected-header transform on the gateway host", () => {
+      const policy = buildWorkerNetworkPolicy({}, "pi", {
+        selected: {
+          host: "ai-gateway.vercel.sh",
+          placeholderEnv: "AI_GATEWAY_API_KEY",
+          header: { name: "authorization", value: "Bearer vck_selected" },
+        },
+      });
+      expect(headersFor(policy, "ai-gateway.vercel.sh")).toEqual({
+        ...attributionHeaders(),
+        authorization: "Bearer vck_selected",
+      });
+    });
+
+    it("sends no attribution headers to direct-provider hosts", () => {
+      const policy = buildWorkerNetworkPolicy(
+        { ANTHROPIC_UPSTREAM_BASE_URL: "https://api.anthropic.com" },
+        "claude-agent-sdk",
+        { anthropicToken: "sk-ant-x" },
+      );
+      expect(headersFor(policy, "api.anthropic.com")).toEqual({
+        authorization: "Bearer sk-ant-x",
+      });
     });
   });
 });

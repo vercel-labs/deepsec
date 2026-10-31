@@ -29,6 +29,19 @@ export interface DeepsecConfig {
   /** Filter the matcher set used by `scan`. */
   matchers?: { only?: string[]; exclude?: string[] };
   defaultAgent?: string;
+  /** Default model selected during setup; CLI --model overrides it. */
+  defaultModel?: string;
+  /** Harness-neutral effort level selected with the default model. */
+  defaultThinkingLevel?: string;
+  /** Non-secret default model credential route. Secret values stay in env/.env.local. */
+  ai?: {
+    mode: "gateway" | "direct" | "custom" | "local";
+    provider: string;
+    apiKeyEnv?: string;
+    baseUrl?: string;
+    /** Custom providers may declare the secret-bearing request header without storing its value. */
+    credentialHeader?: { name: string; scheme: "bearer" | "raw" };
+  };
   /** Override the data directory (default: `./data`). */
   dataDir?: string;
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 import { dataDir } from "@deepsec/core";
 import type { Sandbox } from "@vercel/sandbox";
 import * as tar from "tar";
-import { mergeAfterExtract, snapshotFileRecords } from "./merge-records.js";
+import { isFileRecordPath, mergeAfterExtract, snapshotFileRecords } from "./merge-records.js";
 import { DATA_DIR } from "./setup.js";
 
 // Sandbox results are JSON file records, run metadata, reports, and
@@ -42,6 +42,12 @@ const ALLOWED_ENTRY_PATTERNS: RegExp[] = [
   // `-`), but the allowlist character class matches the same broad shape
   // as the files/ pattern so future debug filenames don't get rejected.
   /^\.?\/?debug\/[^/\\\0]+\.txt$/,
+  // Revalidation invocation artifacts: raw model responses +
+  // reconciliation diagnostics per agent call, one directory per run
+  // (`revalidation/<runId>/invocation-NNN.json`). Written by the
+  // processor's revalidate(); needed on the host to diagnose/rescore
+  // verdict mismatches from sandbox runs.
+  /^\.?\/?revalidation\/[^/\\\0]+\/[^/\\\0]+\.json$/,
 ];
 
 // Belt-and-suspenders caps on a sandbox-supplied tarball. The numbers err
@@ -51,7 +57,12 @@ const ALLOWED_ENTRY_PATTERNS: RegExp[] = [
 const MAX_TARBALL_BYTES = 256 * 1024 * 1024; // 256 MiB compressed
 const MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024; // 1 GiB total
 const MAX_ENTRIES = 50_000;
-const MAX_PER_FILE_BYTES = 32 * 1024 * 1024; // 32 MiB per record
+// Per-file size is a soft cap: oversized entries are skipped during
+// extraction (and reported) rather than failing the whole tarball, since a
+// single fat record — e.g. for a large compiled bundle — shouldn't discard
+// every other result from the run. The other caps stay hard/all-or-nothing:
+// they defend against decompression bombs and smuggled content.
+const MAX_PER_FILE_BYTES = 64 * 1024 * 1024; // 64 MiB per record
 
 const SETUP_MARKER = "/tmp/deepsec-setup-done";
 
@@ -156,7 +167,11 @@ export async function downloadResults(
   const localProjectDir = dataDir(projectId);
   fs.mkdirSync(localProjectDir, { recursive: true });
 
-  const count = await extractTarballLocally(localTarPath, localProjectDir);
+  const count = await extractTarballLocally(localTarPath, localProjectDir, (entryPath, bytes) => {
+    onLog(
+      `[sandbox-${sandboxIndex}] Skipped oversized result file "${entryPath}" (${(bytes / 1024 / 1024).toFixed(1)}MB > ${(MAX_PER_FILE_BYTES / 1024 / 1024).toFixed(0)}MB cap)`,
+    );
+  });
   try {
     fs.unlinkSync(localTarPath);
   } catch {}
@@ -171,7 +186,37 @@ export async function downloadResults(
   return count;
 }
 
-export async function extractTarballLocally(tarPath: string, destDir: string): Promise<number> {
+// Serializes snapshot → extract → merge per destination directory. All 30
+// sandbox download loops extract into the same data dir; overlapping
+// sequences would (a) stack pre-extract snapshots in memory and (b) race
+// each other's read-modify-write of shared records, resurrecting stale
+// versions. Extracts are cheap once snapshots are tarball-scoped, so a
+// plain promise-chain mutex costs nothing in throughput.
+const extractLocks = new Map<string, Promise<void>>();
+
+async function withExtractLock<T>(destDir: string, fn: () => Promise<T>): Promise<T> {
+  const key = path.resolve(destDir);
+  const prev = extractLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const tail = prev.then(() => gate);
+  extractLocks.set(key, tail);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (extractLocks.get(key) === tail) extractLocks.delete(key);
+  }
+}
+
+export async function extractTarballLocally(
+  tarPath: string,
+  destDir: string,
+  onSkip?: (entryPath: string, sizeBytes: number) => void,
+): Promise<number> {
   // Two-pass: list to validate, then extract. The list pass is hard
   // "all or nothing" — if any entry is disallowed (wrong type or
   // extension), we throw before a single byte hits disk, so callers
@@ -185,6 +230,8 @@ export async function extractTarballLocally(tarPath: string, destDir: string): P
   // log-and-skip. The extract pass runs with default safety; we know
   // the archive is clean by then.
   const violations: string[] = [];
+  const entryPaths: string[] = [];
+  const oversized = new Map<string, number>();
   let fileCount = 0;
   let totalUncompressed = 0;
   await tar.list({
@@ -214,18 +261,20 @@ export async function extractTarballLocally(tarPath: string, destDir: string): P
         return;
       }
       if (!ALLOWED_ENTRY_PATTERNS.some((re) => re.test(norm))) {
-        violations.push(`"${entry.path}" is outside files/, runs/, reports/`);
+        violations.push(`"${entry.path}" is outside files/, runs/, reports/, revalidation/`);
         return;
       }
       const sz = (entry as unknown as { size?: number }).size ?? 0;
+      // Count oversized entries toward the total-size bomb defense even
+      // though we skip them: the archive still streams through the
+      // extractor either way.
+      totalUncompressed += sz;
       if (sz > MAX_PER_FILE_BYTES) {
-        violations.push(
-          `"${entry.path}" is ${(sz / 1024 / 1024).toFixed(1)}MB > per-file cap ${(MAX_PER_FILE_BYTES / 1024 / 1024).toFixed(0)}MB`,
-        );
+        oversized.set(norm, sz);
         return;
       }
-      totalUncompressed += sz;
       fileCount++;
+      entryPaths.push(norm);
       if (fileCount > MAX_ENTRIES) {
         violations.push(`entry count exceeds cap of ${MAX_ENTRIES}`);
       }
@@ -240,17 +289,31 @@ export async function extractTarballLocally(tarPath: string, destDir: string): P
     const preview = violations.slice(0, 5).join("\n  ");
     const more = violations.length > 5 ? `\n  …and ${violations.length - 5} more` : "";
     throw new Error(
-      `Refusing sandbox results tarball: ${violations.length} disallowed entr${violations.length === 1 ? "y" : "ies"}:\n  ${preview}${more}\nAllowed: regular ${[...ALLOWED_EXTENSIONS].sort().join("/")} files under files/, runs/, or reports/; ≤${MAX_ENTRIES} entries, ≤${(MAX_UNCOMPRESSED_BYTES / 1024 / 1024).toFixed(0)}MB total.`,
+      `Refusing sandbox results tarball: ${violations.length} disallowed entr${violations.length === 1 ? "y" : "ies"}:\n  ${preview}${more}\nAllowed: regular ${[...ALLOWED_EXTENSIONS].sort().join("/")} files under files/, runs/, reports/, debug/, or revalidation/; ≤${MAX_ENTRIES} entries, ≤${(MAX_UNCOMPRESSED_BYTES / 1024 / 1024).toFixed(0)}MB total.`,
     );
   }
 
-  // Snapshot existing per-file records BEFORE extracting. The tarball
-  // extract is a blind overwrite, so without this any prior on-host
-  // analysisHistory / findings / revalidation / triage entries would
-  // disappear when a concurrently-running sandbox uploads its (older)
-  // view of the same file. We re-merge after extract.
-  const hostSnapshot = snapshotFileRecords(destDir);
-  await tar.extract({ file: tarPath, cwd: destDir });
-  mergeAfterExtract(destDir, hostSnapshot, path.basename(destDir));
+  // Snapshot the per-file records this tarball is about to overwrite
+  // BEFORE extracting. The tarball extract is a blind overwrite, so
+  // without this any prior on-host analysisHistory / findings /
+  // revalidation / triage entries would disappear when a
+  // concurrently-running sandbox uploads its (older) view of the same
+  // file. We re-merge after extract. Snapshot and merge are scoped to the
+  // tarball's own entry list, and the whole read-modify-write sequence is
+  // serialized per destDir — see withExtractLock.
+  for (const [entryPath, sizeBytes] of oversized) {
+    onSkip?.(entryPath, sizeBytes);
+  }
+
+  const recordPaths = entryPaths.filter(isFileRecordPath);
+  await withExtractLock(destDir, async () => {
+    const hostSnapshot = snapshotFileRecords(destDir, recordPaths);
+    await tar.extract({
+      file: tarPath,
+      cwd: destDir,
+      filter: (entryPath) => !oversized.has(entryPath.replace(/^\.\//, "")),
+    });
+    mergeAfterExtract(destDir, hostSnapshot, path.basename(destDir), recordPaths);
+  });
   return fileCount;
 }

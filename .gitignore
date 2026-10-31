@@ -12,3 +12,4 @@ next-env.d.ts
 linear-*
 plans/
 .pnpm-store/
+.env*

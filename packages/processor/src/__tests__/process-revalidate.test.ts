@@ -612,6 +612,40 @@ describe("processor with stub agent", () => {
     expect(sumCost).toBeCloseTo(4.0, 6);
   });
 
+  it("process() stops claiming new batches after the cost boundary", async () => {
+    const fx = setupProject({ files: ["a.ts", "b.ts", "c.ts"] });
+    for (const file of ["a.ts", "b.ts", "c.ts"]) {
+      fx.writeRecord(pendingRecord(fx.projectId, file));
+    }
+    const stub = new StubAgent({
+      async *investigateImpl(params) {
+        return {
+          results: params.batch.map((record) => ({ filePath: record.filePath, findings: [] })),
+          meta: { durationMs: 1, costUsd: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 1,
+      maxCostUsd: 1.5,
+    });
+
+    expect(result.costLimitReached).toEqual({ limitUsd: 1.5, actualUsd: 2 });
+    expect(result.totalCostUsd).toBe(2);
+    expect(stub.calls.investigateCalls).toHaveLength(2);
+    expect(fx.readRecord("c.ts").status).toBe("pending");
+  });
+
   it("revalidate() pushes a per-file analysisHistory entry tagged phase='revalidate' with divided cost", async () => {
     const fx = setupProject({ files: ["x.ts", "y.ts"] });
     for (const f of ["x.ts", "y.ts"]) {
@@ -788,17 +822,15 @@ describe("processor with stub agent", () => {
     expect(result.quotaExhausted?.source).toBe("claude-subscription");
     expect(result.quotaExhausted?.rawMessage).toMatch(/usage limit/);
 
-    // Failed batch's file is marked error (catch block); the unattempted
-    // files keep their claimed `processing` lock — the next run reclaims
-    // them via the dead-owner branch of `isReclaimableLock` once this
-    // run's RunMeta phase flips to "done".
+    // Failed batch's file is marked error; unattempted claims are released
+    // immediately so the next run can resume without stale-lock recovery.
     const aStatus = fx.readRecord("one/a.ts").status;
     const bStatus = fx.readRecord("two/b.ts").status;
     const cStatus = fx.readRecord("three/c.ts").status;
     expect(aStatus).toBe("error");
     // Order across the 3 batches is deterministic in concurrency=1 mode.
     // batches[0] failed, batches[1] and batches[2] never ran.
-    expect([bStatus, cStatus].every((s) => s === "processing")).toBe(true);
+    expect([bStatus, cStatus].every((s) => s === "pending")).toBe(true);
   });
 
   it("process() forwards a non-aborted AbortSignal to the agent and aborts it on quota", async () => {
@@ -1075,7 +1107,9 @@ describe("revalidate() duplicate verdict", () => {
     const dupe = rec.findings.find((f) => f.title === "dupe of primary");
     expect(primary?.revalidation?.verdict).toBe("true-positive");
     expect(dupe?.revalidation?.verdict).toBe("duplicate");
-    expect(dupe?.revalidation?.duplicateOf).toBe("primary issue");
+    // duplicateOf is persisted as the primary's stable findingId now.
+    expect(primary?.findingId).toBeTruthy();
+    expect(dupe?.revalidation?.duplicateOf).toBe(primary?.findingId);
     expect(result.truePositives).toBe(1);
     expect(result.duplicates).toBe(1);
     expect(result.duplicatesRejected).toBe(0);
@@ -1125,8 +1159,9 @@ describe("revalidate() duplicate verdict", () => {
 
     const after = fx.readRecord("app.ts");
     const dupe = after.findings.find((f) => f.title === "new dupe");
+    const primary = after.findings.find((f) => f.title === "primary issue");
     expect(dupe?.revalidation?.verdict).toBe("duplicate");
-    expect(dupe?.revalidation?.duplicateOf).toBe("primary issue");
+    expect(dupe?.revalidation?.duplicateOf).toBe(primary?.findingId);
     expect(result.duplicates).toBe(1);
     expect(result.duplicatesRejected).toBe(0);
   });
@@ -1316,5 +1351,408 @@ describe("revalidate() duplicate verdict", () => {
     expect(result.duplicates).toBe(2);
     expect(result.duplicatesRejected).toBe(0);
     expect(result.falsePositives).toBe(1);
+  });
+});
+
+describe("revalidate() reconciliation, repair, and adaptive splitting", () => {
+  let prevDataRoot: string | undefined;
+
+  beforeEach(() => {
+    prevDataRoot = process.env.DEEPSEC_DATA_ROOT;
+  });
+
+  afterEach(() => {
+    if (prevDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+    else process.env.DEEPSEC_DATA_ROOT = prevDataRoot;
+    setLoadedConfig(defineConfig({ projects: [] }));
+  });
+
+  function fileWithFindings(fx: Fixture, relPath: string, titles: string[]): FileRecord {
+    const rec = pendingRecord(fx.projectId, relPath);
+    rec.status = "analyzed";
+    rec.findings = titles.map((title) => ({
+      severity: "HIGH" as const,
+      vulnSlug: "auth-bypass",
+      title,
+      description: `desc for ${title}`,
+      lineNumbers: [1],
+      recommendation: "x",
+      confidence: "high" as const,
+    }));
+    rec.analysisHistory = [];
+    fx.writeRecord(rec);
+    return rec;
+  }
+
+  it("applies verdicts sent with findingId only (no filePath/title)", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    fileWithFindings(fx, "app.ts", ["finding one", "finding two"]);
+
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        return {
+          verdicts: params.batch.flatMap((rec) =>
+            rec.findings.map((f) => ({
+              findingId: f.findingId,
+              verdict: "false-positive" as const,
+              reasoning: "id-based",
+            })),
+          ),
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+
+    expect(result.requested).toBe(2);
+    expect(result.revalidated).toBe(2);
+    expect(result.unresolved).toHaveLength(0);
+    const after = fx.readRecord("app.ts");
+    expect(after.findings.every((f) => f.revalidation?.verdict === "false-positive")).toBe(true);
+  });
+
+  it("regression: six verdicts with correct paths but altered titles all apply in one call", async () => {
+    // The observed 2.2.4 failure: batches reported success, file paths
+    // matched, yet zero findings got a revalidation because every title
+    // was reworded/mangled. All six must now apply without re-running
+    // the investigation (exactly one agent call).
+    const fx = setupProject({ files: ["srv/a.ts", "srv/b.ts"] });
+    fileWithFindings(fx, "srv/a.ts", [
+      "Missing auth on /admin endpoint",
+      "SQL injection in search query",
+      "Path traversal in file download",
+    ]);
+    fileWithFindings(fx, "srv/b.ts", [
+      "CSV domain permission bypass",
+      "Open redirect via next param",
+      "XSS in error page rendering",
+    ]);
+
+    const mangle = (t: string) => `  \`${t.toUpperCase()}\`.  `;
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        return {
+          verdicts: params.batch.flatMap((rec) =>
+            rec.findings.map((f) => ({
+              filePath: `./${rec.filePath}`,
+              title: mangle(f.title),
+              verdict: "true-positive" as const,
+              reasoning: "still there",
+            })),
+          ),
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 5,
+    });
+
+    expect(stub.calls.revalidateCalls).toHaveLength(1);
+    expect(result.requested).toBe(6);
+    expect(result.revalidated).toBe(6);
+    expect(result.unresolved).toHaveLength(0);
+    for (const p of ["srv/a.ts", "srv/b.ts"]) {
+      const rec = fx.readRecord(p);
+      expect(rec.findings.every((f) => f.revalidation?.verdict === "true-positive")).toBe(true);
+    }
+  });
+
+  it("persists partial results, then recovers the rest via per-file and per-finding retries", async () => {
+    const fx = setupProject({ files: ["ok.ts", "bad.ts"] });
+    fileWithFindings(fx, "ok.ts", ["good one"]);
+    fileWithFindings(fx, "bad.ts", ["tricky one", "tricky two"]);
+
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        const wanted = params.onlyFindingIds ? new Set(params.onlyFindingIds) : undefined;
+        const targets = params.batch.flatMap((rec) =>
+          rec.findings
+            .filter((f) => (wanted ? wanted.has(f.findingId!) : !f.revalidation))
+            .map((f) => ({ rec, f })),
+        );
+        // Full batch: return good verdicts only for ok.ts, garbage for bad.ts.
+        // Per-file retry of bad.ts (2 findings): still garbage.
+        // Per-finding retry (single finding): correct verdict.
+        const isFullBatch = params.batch.length > 1;
+        const isSingleFinding = targets.length === 1 && params.onlyFindingIds?.length === 1;
+        return {
+          verdicts: targets.map(({ rec, f }) => {
+            const good = rec.filePath === "ok.ts" || isSingleFinding;
+            return good
+              ? { findingId: f.findingId, verdict: "true-positive" as const, reasoning: "ok" }
+              : {
+                  findingId: `item_${Math.abs(isFullBatch ? 1 : 2)}garbled`,
+                  title: "unrecognizable rewrite",
+                  verdict: "true-positive" as const,
+                  reasoning: "mangled",
+                };
+          }),
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 5,
+    });
+
+    // initial (both files) + per-file retry (bad.ts) + 2 per-finding retries
+    expect(stub.calls.revalidateCalls).toHaveLength(4);
+    expect(stub.calls.revalidateCalls[1].onlyFindingIds).toHaveLength(2);
+    expect(stub.calls.revalidateCalls[2].onlyFindingIds).toHaveLength(1);
+    expect(stub.calls.revalidateCalls[3].onlyFindingIds).toHaveLength(1);
+    expect(result.requested).toBe(3);
+    expect(result.revalidated).toBe(3);
+    expect(result.unresolved).toHaveLength(0);
+    expect(fx.readRecord("ok.ts").findings[0].revalidation?.verdict).toBe("true-positive");
+    expect(fx.readRecord("bad.ts").findings.every((f) => f.revalidation)).toBe(true);
+  });
+
+  it("surfaces unresolved findings and writes reconciliation artifacts when recovery fails", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    fileWithFindings(fx, "app.ts", ["never matched"]);
+
+    // Two bogus verdicts so not even the unique-remainder rule can
+    // recover — with a single expected finding, one lone verdict would
+    // (deliberately) match 1:1.
+    const stub = new StubAgent({
+      async *revalidateImpl() {
+        return {
+          verdicts: [
+            { findingId: "item_bogus", verdict: "true-positive" as const, reasoning: "x" },
+            { findingId: "item_bogus2", verdict: "false-positive" as const, reasoning: "y" },
+          ],
+          meta: { durationMs: 1 },
+          rawResponses: [{ kind: "initial" as const, rawText: "raw model text" }],
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+
+    expect(result.revalidated).toBe(0);
+    expect(result.unresolved).toHaveLength(1);
+    expect(result.unresolved[0].filePath).toBe("app.ts");
+    expect(result.unresolved[0].findingId).toMatch(/^finding_/);
+    expect(fx.readRecord("app.ts").findings[0].revalidation).toBeUndefined();
+
+    // Artifacts landed in the run's revalidation dir with raw output +
+    // reconciliation diagnostics.
+    const artDir = path.join(fx.dataRoot, fx.projectId, "revalidation", result.runId);
+    const artifacts = fs.readdirSync(artDir);
+    expect(artifacts.length).toBeGreaterThanOrEqual(1);
+    const first = JSON.parse(fs.readFileSync(path.join(artDir, artifacts[0]), "utf-8"));
+    expect(first.rawResponses[0].rawText).toBe("raw model text");
+    expect(first.reconciliation.unknownVerdicts).toHaveLength(2);
+    expect(first.unresolvedFindingIds).toHaveLength(1);
+  });
+
+  it("applies verdicts echoed with short aliases, including duplicateOf", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    fileWithFindings(fx, "app.ts", ["first thing", "second thing", "third thing"]);
+
+    // The agent echoes the per-invocation aliases (F1..F3) instead of
+    // full findingIds — including an alias duplicateOf reference.
+    const stub = new StubAgent({
+      async *revalidateImpl() {
+        return {
+          verdicts: [
+            { findingId: "F1", verdict: "true-positive" as const, reasoning: "p" },
+            { findingId: "#2", verdict: "false-positive" as const, reasoning: "fp" },
+            {
+              findingId: "f3",
+              verdict: "duplicate" as const,
+              duplicateOf: "F1",
+              reasoning: "same as first",
+            },
+          ],
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+
+    expect(result.revalidated).toBe(3);
+    expect(result.duplicates).toBe(1);
+    expect(result.unresolved).toHaveLength(0);
+    expect(stub.calls.revalidateCalls).toHaveLength(1);
+    const after = fx.readRecord("app.ts");
+    const first = after.findings.find((f) => f.title === "first thing");
+    const second = after.findings.find((f) => f.title === "second thing");
+    const third = after.findings.find((f) => f.title === "third thing");
+    expect(first?.revalidation?.verdict).toBe("true-positive");
+    expect(second?.revalidation?.verdict).toBe("false-positive");
+    expect(third?.revalidation?.verdict).toBe("duplicate");
+    // Persisted as the primary's stable findingId, not the alias.
+    expect(third?.revalidation?.duplicateOf).toBe(first?.findingId);
+  });
+
+  it("accepts duplicateOf references by findingId", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    fileWithFindings(fx, "app.ts", ["the primary", "the dupe"]);
+
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        const [primary, dupe] = params.batch[0].findings;
+        return {
+          verdicts: [
+            { findingId: primary.findingId, verdict: "true-positive" as const, reasoning: "p" },
+            {
+              findingId: dupe.findingId,
+              verdict: "duplicate" as const,
+              duplicateOf: primary.findingId,
+              reasoning: "same",
+            },
+          ],
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+
+    expect(result.duplicates).toBe(1);
+    expect(result.unresolved).toHaveLength(0);
+    const after = fx.readRecord("app.ts");
+    const primary = after.findings.find((f) => f.title === "the primary");
+    const dupe = after.findings.find((f) => f.title === "the dupe");
+    expect(dupe?.revalidation?.duplicateOf).toBe(primary?.findingId);
+  });
+
+  it("is idempotent across a restart: a second run re-requests nothing and appends no history", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    fileWithFindings(fx, "app.ts", ["a", "b"]);
+
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        return {
+          verdicts: params.batch.flatMap((rec) =>
+            rec.findings
+              .filter((f) => !f.revalidation)
+              .map((f) => ({
+                findingId: f.findingId,
+                verdict: "true-positive" as const,
+                reasoning: "x",
+              })),
+          ),
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const first = await revalidate({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+    expect(first.revalidated).toBe(2);
+    const afterFirst = fx.readRecord("app.ts");
+    const firstRevalidatedAt = afterFirst.findings.map((f) => f.revalidation?.revalidatedAt);
+    const historyLen = afterFirst.analysisHistory.length;
+
+    const second = await revalidate({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+    expect(second.requested).toBe(0);
+    expect(second.revalidated).toBe(0);
+    expect(second.unresolved).toHaveLength(0);
+    expect(stub.calls.revalidateCalls).toHaveLength(1); // second run never invoked the agent
+    const afterSecond = fx.readRecord("app.ts");
+    expect(afterSecond.analysisHistory.length).toBe(historyLen);
+    expect(afterSecond.findings.map((f) => f.revalidation?.revalidatedAt)).toEqual(
+      firstRevalidatedAt,
+    );
+  });
+
+  it("never overwrites a manual accepted-risk verdict, even with --force", async () => {
+    const fx = setupProject({ files: ["app.ts"] });
+    const rec = fileWithFindings(fx, "app.ts", ["accepted thing"]);
+    rec.findings[0].revalidation = {
+      verdict: "accepted-risk",
+      reasoning: "team decision",
+      revalidatedAt: new Date().toISOString(),
+      runId: "manual",
+      model: "human",
+    };
+    fx.writeRecord(rec);
+
+    const stub = new StubAgent({
+      async *revalidateImpl(params) {
+        return {
+          verdicts: params.batch.flatMap((r) =>
+            r.findings.map((f) => ({
+              findingId: f.findingId,
+              verdict: "false-positive" as const,
+              reasoning: "agent disagrees",
+            })),
+          ),
+          meta: { durationMs: 1 },
+        };
+      },
+    });
+    setLoadedConfig(
+      defineConfig({
+        projects: [{ id: fx.projectId, root: fx.targetRoot }],
+        plugins: [{ name: "stub", agents: [stub] }],
+      }),
+    );
+
+    const result = await revalidate({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      force: true,
+    });
+
+    expect(result.unresolved).toHaveLength(0);
+    const after = fx.readRecord("app.ts");
+    expect(after.findings[0].revalidation?.verdict).toBe("accepted-risk");
+    expect(after.findings[0].revalidation?.reasoning).toBe("team decision");
   });
 });

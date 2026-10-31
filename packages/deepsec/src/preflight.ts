@@ -11,7 +11,15 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getConfig } from "@deepsec/core";
 import { getVercelOidcToken } from "@vercel/oidc";
+import {
+  applyResolvedModelRoute,
+  type ModelRoute,
+  modelRouteCompatibilityError,
+  type ResolvedModelRoute,
+  resolveModelRoute,
+} from "./auth/model-route.js";
 
 // Linkable URL — printed in error messages so users can paste the
 // URL into a browser instead of hunting through the repo. Points at
@@ -30,6 +38,17 @@ const GATEWAY_OPENAI_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 // and long process/revalidate runs routinely take longer than a few minutes,
 // and the gateway will 401 the moment the JWT lapses.
 const OIDC_EXPIRATION_BUFFER_MS = 60 * 60 * 1000;
+
+// Keep provenance for values synthesized during CLI startup. A later local
+// subscription selection needs to undo only this ambient Gateway expansion,
+// never values the user supplied or changed themselves.
+const injectedAiGatewayDefaults = new Map<string, string>();
+
+function injectAiGatewayDefault(name: string, value: string): void {
+  if (process.env[name]) return;
+  process.env[name] = value;
+  injectedAiGatewayDefaults.set(name, value);
+}
 
 /**
  * If the user set `AI_GATEWAY_API_KEY`, expand it into the four env vars
@@ -57,11 +76,15 @@ const OIDC_EXPIRATION_BUFFER_MS = 60 * 60 * 1000;
  * any module reads these vars.
  */
 export async function applyAiGatewayDefaults(): Promise<void> {
+  for (const [name, injectedValue] of injectedAiGatewayDefaults) {
+    if (process.env[name] !== injectedValue) injectedAiGatewayDefaults.delete(name);
+  }
   if (!process.env.AI_GATEWAY_API_KEY && process.env.VERCEL_OIDC_TOKEN) {
     try {
-      process.env.AI_GATEWAY_API_KEY = await getVercelOidcToken({
+      const key = await getVercelOidcToken({
         expirationBufferMs: OIDC_EXPIRATION_BUFFER_MS,
       });
+      injectAiGatewayDefault("AI_GATEWAY_API_KEY", key);
     } catch {
       // Refresh failed (token unparseable, network, or the linked project
       // it would refresh against is gone). Fall through — assertAgentCredential
@@ -71,10 +94,71 @@ export async function applyAiGatewayDefaults(): Promise<void> {
   }
   const key = process.env.AI_GATEWAY_API_KEY;
   if (!key) return;
-  if (!process.env.ANTHROPIC_AUTH_TOKEN) process.env.ANTHROPIC_AUTH_TOKEN = key;
-  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
-  if (!process.env.ANTHROPIC_BASE_URL) process.env.ANTHROPIC_BASE_URL = GATEWAY_ANTHROPIC_BASE_URL;
-  if (!process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = GATEWAY_OPENAI_BASE_URL;
+  injectAiGatewayDefault("ANTHROPIC_AUTH_TOKEN", key);
+  injectAiGatewayDefault("OPENAI_API_KEY", key);
+  injectAiGatewayDefault("ANTHROPIC_BASE_URL", GATEWAY_ANTHROPIC_BASE_URL);
+  injectAiGatewayDefault("OPENAI_BASE_URL", GATEWAY_OPENAI_BASE_URL);
+}
+
+/**
+ * Stop ambient OIDC from overriding an explicit local-subscription route.
+ * Sandbox commands are intentionally exempt: local machine credentials are
+ * unavailable in the worker, so the startup-expanded token must be brokered.
+ */
+export function reconcileAiGatewayDefaultsForRoute(
+  route: ModelRoute,
+  options: { env?: NodeJS.ProcessEnv; inSandbox?: boolean } = {},
+): void {
+  if (route.mode !== "local" || options.inSandbox) return;
+  const env = options.env ?? process.env;
+  for (const [name, injectedValue] of injectedAiGatewayDefaults) {
+    // A value changed since startup belongs to the user or selected route.
+    if (env[name] === injectedValue) delete env[name];
+  }
+}
+
+/**
+ * Expand only the explicitly selected model route. Unlike the legacy gateway
+ * helper, this never lets ambient OIDC redirect a direct/custom provider.
+ */
+export async function applySelectedModelRoute(
+  route: ModelRoute,
+  agentType: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ResolvedModelRoute> {
+  const resolved = await resolveModelRoute(route, { agentType, env });
+  applyResolvedModelRoute(resolved, env);
+  return resolved;
+}
+
+/** Rehydrate the non-secret model route persisted by one-shot setup. */
+export async function applyConfiguredModelRoute(
+  agentType: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { inSandbox?: boolean } = {},
+): Promise<ResolvedModelRoute | undefined> {
+  const route = getConfig()?.ai as ModelRoute | undefined;
+  if (!route) return undefined;
+  // A persisted route is a default, not an explicit command-line request.
+  // Preserve the pre-onboarding behavior for cross-agent invocations by
+  // falling back to that harness's normal credential discovery.
+  if (modelRouteCompatibilityError(route, agentType)) return undefined;
+  // Local model auth comes from the machine-wide claude/codex/pi login. Undo
+  // ambient Gateway values synthesized from OIDC, except in sandboxes where
+  // the token still has to be brokered into the remote worker.
+  if (route.mode === "local") {
+    reconcileAiGatewayDefaultsForRoute(route, { env, inSandbox: options.inSandbox });
+    return undefined;
+  }
+  // Older scaffold-only workspaces persisted Gateway as a default even when
+  // the user intended to rely on a logged-in Codex/Claude/Pi subscription.
+  // With no explicit Gateway credential, leave env untouched and let the
+  // normal subscription-aware credential check decide whether the command can
+  // proceed.
+  if (route.mode === "gateway" && !env.AI_GATEWAY_API_KEY && !env.VERCEL_OIDC_TOKEN) {
+    return undefined;
+  }
+  return applySelectedModelRoute(route, agentType, env);
 }
 
 function isCodex(agentType: string | undefined): boolean {
@@ -166,15 +250,39 @@ const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi"]);
  */
 export function assertAgentCredential(
   agentType: string | undefined,
-  options: { inSandbox?: boolean; aiApiKeyEnv?: string } = {},
+  options: { inSandbox?: boolean; aiApiKeyEnv?: string; modelRoute?: ModelRoute } = {},
 ): void {
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
+
+  // A local-subscription route is the user saying "claude/codex are set up
+  // machine-wide" — skip the env-var checks entirely and let the agent SDK
+  // error clearly at first call if the login is actually missing. Sandboxes
+  // are the exception: they must broker a real token through the firewall,
+  // so fall through to the normal checks (an ambient AI_GATEWAY_API_KEY
+  // still works there, and the standard actionable error fires otherwise).
+  const selectedRoute = options.modelRoute ?? (getConfig()?.ai as ModelRoute | undefined);
+  if (selectedRoute?.mode === "local" && !options.inSandbox) return;
 
   const gateway = process.env.AI_GATEWAY_API_KEY;
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;
   const anthropicApi = process.env.ANTHROPIC_API_KEY;
   const openai = process.env.OPENAI_API_KEY;
   const custom = options.aiApiKeyEnv ? process.env[options.aiApiKeyEnv] : undefined;
+
+  // A selected route has already made precedence explicit. In particular,
+  // direct Anthropic uses ANTHROPIC_API_KEY and its x-api-key broker contract;
+  // ambient Gateway/OIDC must not be considered as a fallback.
+  if (options.modelRoute && options.modelRoute.mode !== "local") {
+    const keyEnv =
+      options.modelRoute.apiKeyEnv ??
+      (options.modelRoute.mode === "gateway"
+        ? "AI_GATEWAY_API_KEY"
+        : options.modelRoute.provider === "anthropic"
+          ? "ANTHROPIC_API_KEY"
+          : "OPENAI_API_KEY");
+    if (process.env[keyEnv]) return;
+    throw new Error(`Selected ${options.modelRoute.provider} model route requires ${keyEnv}`);
+  }
 
   if (isCodex(agentType)) {
     // Codex prefers OPENAI_API_KEY; AI Gateway issues a single token that
@@ -203,7 +311,7 @@ export function assertAgentCredential(
     );
   }
 
-  if (anthropic) return;
+  if (anthropic || anthropicApi) return;
   if (!options.inSandbox && hasLocalClaudeAgent()) return;
   const displayAgent =
     agentType === "claude-agent-sdk" || agentType === undefined ? "claude" : agentType;
@@ -221,13 +329,14 @@ export function assertAgentCredential(
  * `vercel env pull` to land VERCEL_OIDC_TOKEN in .env.local, OR sets the
  * three explicit access-token env vars.
  */
-export function assertSandboxCredential(): void {
-  const oidc = process.env.VERCEL_OIDC_TOKEN;
+export function assertSandboxCredential(options: { env?: NodeJS.ProcessEnv } = {}): void {
+  const env = options.env ?? process.env;
+  const oidc = env.VERCEL_OIDC_TOKEN;
   if (oidc) return;
 
-  const token = process.env.VERCEL_TOKEN;
-  const teamId = process.env.VERCEL_TEAM_ID;
-  const projectId = process.env.VERCEL_PROJECT_ID;
+  const token = env.VERCEL_TOKEN;
+  const teamId = env.VERCEL_TEAM_ID;
+  const projectId = env.VERCEL_PROJECT_ID;
   if (token && teamId && projectId) return;
 
   const missing: string[] = [];

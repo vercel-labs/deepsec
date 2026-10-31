@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileRecordSchema, runMetaSchema } from "../schemas.js";
+import { fileRecordSchema, runMetaSchema, salvageFileRecord } from "../schemas.js";
 
 describe("fileRecordSchema", () => {
   it("accepts valid file record", () => {
@@ -72,6 +72,73 @@ describe("fileRecordSchema", () => {
       status: "invalid",
     };
     expect(() => fileRecordSchema.parse(invalid)).toThrow();
+  });
+});
+
+describe("salvageFileRecord", () => {
+  const validFinding = {
+    severity: "HIGH",
+    vulnSlug: "xss",
+    title: "XSS via innerHTML",
+    description: "desc",
+    lineNumbers: [10],
+    recommendation: "fix",
+    confidence: "high",
+  };
+
+  function rawRecord(findings: unknown[]): Record<string, unknown> {
+    return {
+      filePath: "src/api/users.ts",
+      projectId: "test",
+      candidates: [],
+      lastScannedAt: "2026-04-01T14:30:52.000Z",
+      lastScannedRunId: "run1",
+      fileHash: "abc",
+      findings,
+      analysisHistory: [],
+      status: "analyzed",
+    };
+  }
+
+  it("returns the record untouched when fully valid", () => {
+    const out = salvageFileRecord(rawRecord([validFinding]));
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.record.findings).toHaveLength(1);
+      expect(out.droppedFindings).toEqual([]);
+    }
+  });
+
+  it("keeps valid findings and reports the malformed ones", () => {
+    // One bad finding used to fail the whole record's parse, and the
+    // callers' silent catch made the file's valid findings vanish too.
+    const out = salvageFileRecord(
+      rawRecord([
+        validFinding,
+        { ...validFinding, title: "bad severity", severity: "INFORMATIONAL" },
+        { ...validFinding, title: "bad lines", lineNumbers: ["10"] },
+      ]),
+    );
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.record.findings.map((f) => f.title)).toEqual(["XSS via innerHTML"]);
+      expect(out.droppedFindings).toHaveLength(2);
+      expect(out.droppedFindings[0].index).toBe(1);
+      expect(out.droppedFindings[0].issues).toContain("severity");
+      expect(out.droppedFindings[1].index).toBe(2);
+      expect(out.droppedFindings[1].issues).toContain("lineNumbers");
+    }
+  });
+
+  it("rejects the record when the envelope itself is invalid", () => {
+    const out = salvageFileRecord({ ...rawRecord([validFinding]), status: "nope" });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.error).toContain("status");
+  });
+
+  it("rejects non-object input", () => {
+    expect(salvageFileRecord("nope").ok).toBe(false);
+    expect(salvageFileRecord(null).ok).toBe(false);
   });
 });
 

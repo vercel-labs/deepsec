@@ -1,20 +1,66 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ensureProject } from "@deepsec/core";
+import {
+  type ModelProfile,
+  parseModelProfile,
+  promptForModelSelection,
+  resolveModelProfile,
+} from "../auth/model-picker.js";
+import type { ModelRoute } from "../auth/model-route.js";
+import { promptForModelRoute } from "../auth/model-route-prompt.js";
+import { ensureVercelLink, readWorkspaceLink } from "../auth/vercel-link.js";
 import { BOLD, CYAN, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { requireExistingDir } from "../require-dir.js";
-import { getDeepsecVersion } from "../version.js";
+import { validateProjectId } from "../resolve-project-id.js";
+import { runSetupWorkflow, type SetupThrough } from "../setup/coordinator.js";
+import type { SupportedPackageManager } from "../setup/install.js";
+import { shouldUseHeadlessMode } from "../setup/interaction.js";
+import { acquireSetupLock } from "../setup/lock.js";
+import { persistedModelRoute, recordInitialModelRoute } from "../setup/persisted-route.js";
+import { buildSetupPlan } from "../setup/plan.js";
+import { deterministicVercelProjectName } from "../setup/project-name.js";
+import {
+  parseSetupOutputMode,
+  type SetupOutputMode,
+  SetupProtocolError,
+  setSetupDocumentationWorkspace,
+} from "../setup/protocol.js";
+import { createSetupReporter, printSetupSummary } from "../setup/reporter.js";
+import { getDeepsecWorkspaceDependency } from "../version.js";
 import { PROJECTS_INSERT_MARKER, registerProject } from "./init-project.js";
 
 const IGNORED_WORKSPACE_ENTRIES = new Set([".git", ".DS_Store"]);
 
-interface InitOpts {
+export interface InitOpts {
   workspace?: string;
   targetRoot?: string;
   id?: string;
   force?: boolean;
+  scaffoldOnly?: boolean;
+  skipInstall?: boolean;
+  packageManager?: SupportedPackageManager;
+  agent?: string;
+  model?: string;
+  modelProfile?: ModelProfile | string;
+  thinkingLevel?: string;
+  modelRoute?: ModelRoute;
+  headless?: boolean;
+  nonInteractive?: boolean;
+  yes?: boolean;
+  teamId?: string;
+  vercelProjectId?: string;
+  vercelProjectName?: string;
+  concurrency?: number;
+  noTui?: boolean;
+  output?: SetupOutputMode | string;
+  plan?: boolean;
+  through?: SetupThrough;
+  maxCostUsd?: number;
+  maxDurationMs?: number;
 }
 
-export function initCommand(opts: InitOpts) {
+export async function initCommand(opts: InitOpts) {
   // Defaults: scaffold `.deepsec/` inside the current codebase, with the
   // codebase itself as the first project. Override either by passing
   // explicit positional args.
@@ -22,30 +68,104 @@ export function initCommand(opts: InitOpts) {
   const targetArg = opts.targetRoot ?? ".";
 
   const workspaceDir = path.resolve(process.cwd(), workspaceArg);
+  setSetupDocumentationWorkspace(workspaceDir);
+  const deepsecDependency = getDeepsecWorkspaceDependency();
+  const headless = shouldUseHeadlessMode(opts);
+  const outputMode = parseSetupOutputMode(opts.output);
   let targetAbs: string;
-  try {
-    targetAbs = requireExistingDir(targetArg, "<target-root>");
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+  targetAbs = requireExistingDir(targetArg, "<target-root>");
+
+  if (opts.plan) {
+    const projectId = validateProjectId(opts.id ?? path.basename(targetAbs));
+    const plan = await buildSetupPlan({
+      workspaceDir,
+      projectRoot: targetAbs,
+      projectId,
+      packageManager: opts.packageManager,
+      modelRoute: opts.modelRoute,
+      modelProfile: parseModelProfile(opts.modelProfile),
+      model: opts.model,
+      agent: opts.agent,
+      thinkingLevel: opts.thinkingLevel,
+      yes: opts.yes,
+      teamId: opts.teamId,
+      vercelProjectId: opts.vercelProjectId,
+      deterministicProjectName:
+        opts.vercelProjectName ?? deterministicVercelProjectName(projectId, targetAbs),
+    });
+    console.log(JSON.stringify(plan, null, outputMode === "jsonl" ? undefined : 2));
+    return;
   }
 
+  let resuming = false;
   if (fs.existsSync(workspaceDir)) {
     const meaningful = fs
       .readdirSync(workspaceDir)
       .filter((e) => !IGNORED_WORKSPACE_ENTRIES.has(e));
-    if (meaningful.length > 0 && !opts.force) {
-      console.error(
-        `Workspace directory is not empty: ${workspaceDir}\n` +
-          `Use --force to write into a non-empty directory.`,
-      );
-      process.exit(1);
+    if (meaningful.length > 0) {
+      const resumeId = validateProjectId(opts.id ?? path.basename(targetAbs));
+      const projectPath = path.join(workspaceDir, "data", resumeId, "project.json");
+      resuming =
+        fs.existsSync(path.join(workspaceDir, "deepsec.config.ts")) && fs.existsSync(projectPath);
+      if (resuming) {
+        let registeredRoot: unknown;
+        try {
+          registeredRoot = JSON.parse(fs.readFileSync(projectPath, "utf8"))?.rootPath;
+        } catch {
+          if (!opts.force) {
+            throw new Error(
+              `Project registration is corrupt: ${projectPath}\n` +
+                `Rerun with --force to repair this generated file.`,
+            );
+          }
+        }
+        if (typeof registeredRoot !== "string" || !registeredRoot) {
+          if (!opts.force) {
+            throw new Error(
+              `Project registration is missing rootPath: ${projectPath}\n` +
+                `Rerun with --force to repair this generated file.`,
+            );
+          }
+          const originalCwd = process.cwd();
+          try {
+            process.chdir(workspaceDir);
+            registeredRoot = ensureProject(resumeId, targetAbs).rootPath;
+          } finally {
+            process.chdir(originalCwd);
+          }
+        }
+        if (typeof registeredRoot !== "string" || !registeredRoot) {
+          throw new Error(`Could not repair project registration: ${projectPath}`);
+        }
+        const canonicalRegisteredRoot = fs.existsSync(registeredRoot)
+          ? fs.realpathSync(registeredRoot)
+          : path.resolve(registeredRoot);
+        if (canonicalRegisteredRoot !== targetAbs) {
+          throw new Error(
+            `Cannot resume project "${resumeId}" with a different target root.\n` +
+              `  Registered: ${canonicalRegisteredRoot}\n` +
+              `  Requested:  ${targetAbs}\n` +
+              `Use a different workspace or project id for the other checkout.`,
+          );
+        }
+      }
+      if (!resuming && !opts.force) {
+        throw new Error(
+          `Workspace directory is not empty: ${workspaceDir}\n` +
+            `Use --force to write into a non-empty directory.`,
+        );
+      }
     }
   }
 
   // Workspace skeleton: empty config (with marker), README, AGENTS, env.
   fs.mkdirSync(workspaceDir, { recursive: true });
-  writeFile(workspaceDir, "package.json", packageJson(workspacePackageName(workspaceDir)));
+  writeFile(
+    workspaceDir,
+    "package.json",
+    packageJson(workspacePackageName(workspaceDir), deepsecDependency),
+  );
+  reconcileLocalDeepsecDependency(workspaceDir, deepsecDependency);
   // Sever .deepsec/ from any ancestor monorepo. npm and yarn walk up looking
   // for a `package.json` with `workspaces` defined; pnpm walks up looking
   // for a `pnpm-workspace.yaml`. Both stop at the first hit, so dropping a
@@ -55,6 +175,7 @@ export function initCommand(opts: InitOpts) {
   // manage only this directory's deps.
   writeFile(workspaceDir, "pnpm-workspace.yaml", pnpmWorkspaceYaml());
   writeFile(workspaceDir, "deepsec.config.ts", emptyConfigTs());
+  writeFile(workspaceDir, "generated-matchers.ts", generatedMatchersTs());
   writeFile(workspaceDir, "AGENTS.md", workspaceAgentsMd());
   writeFile(workspaceDir, ".gitignore", gitignore());
 
@@ -62,27 +183,182 @@ export function initCommand(opts: InitOpts) {
   // `init-project` would do: data/<id>/{project.json,INFO.md,SETUP.md}
   // and append to projects[].
   let registered: ReturnType<typeof registerProject>;
-  try {
+  if (resuming) {
+    const id = validateProjectId(opts.id ?? path.basename(targetAbs));
+    registered = {
+      id,
+      targetRel: path.relative(workspaceDir, targetAbs).split(path.sep).join("/"),
+      targetAbs,
+      configPath: path.join(workspaceDir, "deepsec.config.ts"),
+      setupMdPath: path.join(workspaceDir, "data", id, "SETUP.md"),
+      infoMdPath: path.join(workspaceDir, "data", id, "INFO.md"),
+    };
+  } else {
     registered = registerProject({
       workspaceDir,
       targetRoot: targetAbs,
       id: opts.id,
       force: opts.force,
     });
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
   }
 
   // README references the project, so write it AFTER registration.
   writeFile(workspaceDir, "README.md", readmeMd(registered.id, registered.targetRel));
 
   const wsRel = path.relative(process.cwd(), workspaceDir) || ".";
-  console.log(`${GREEN}✓${RESET} Created ${BOLD}${workspaceDir}${RESET}`);
+  if (!opts.scaffoldOnly) {
+    let modelRoute = opts.modelRoute;
+    let agent = opts.agent;
+    let model = opts.model;
+    let thinkingLevel = opts.thinkingLevel;
+    if (!modelRoute && !resuming && !headless && process.stdin.isTTY && process.stdout.isTTY) {
+      const choice = await promptForModelRoute();
+      modelRoute = choice.route;
+      agent ??= choice.defaultAgent;
+    }
+    recordInitialModelRoute(workspaceDir, modelRoute);
+    if (!model && !resuming && !headless && process.stdin.isTTY && process.stdout.isTTY) {
+      const choice = await promptForModelSelection({
+        route: modelRoute ?? { mode: "gateway", provider: "vercel" },
+        agent,
+      });
+      agent = choice.agent;
+      model = choice.model;
+      thinkingLevel = choice.thinkingLevel;
+    }
+    if (!model && !resuming && headless) {
+      const profile = parseModelProfile(opts.modelProfile);
+      if (!profile && !opts.yes) {
+        throw new SetupProtocolError({
+          code: "MODEL_SELECTION_REQUIRED",
+          message:
+            "Choose a model profile for the first headless setup, or pass --yes to accept best.",
+          missingInputs: ["model.profile"],
+          choices: [
+            { value: "best", label: "Best benchmark score", recommended: true },
+            { value: "value", label: "Best score within 2.5× relative benchmark cost" },
+            { value: "budget", label: "Lowest-cost recommended combination" },
+          ],
+          actions: [
+            {
+              id: "select-model-profile",
+              description: "Resume with a benchmark-backed model profile.",
+              resumeArgs: ["--model-profile", "<choice>"],
+            },
+            {
+              id: "accept-defaults",
+              description: "Accept the best profile and deterministic project defaults.",
+              resumeArgs: ["--yes"],
+            },
+          ],
+        });
+      }
+      const choice = await resolveModelProfile({
+        profile: profile ?? "best",
+        route: modelRoute ?? { mode: "gateway", provider: "vercel" },
+        agent,
+      });
+      agent = choice.agent;
+      model = choice.model;
+      thinkingLevel = choice.thinkingLevel;
+    }
+    // Complete interactive project selection before Ink ever takes ownership
+    // of the terminal. Besides producing a cleaner onboarding sequence, this
+    // avoids transferring stdin between two independent prompt runtimes.
+    //
+    // A local-subscription route needs no platform link, so skip it rather
+    // than prompt for the Vercel login the user just declined. On resume the
+    // route comes from the login checkpoint, or from the generated config when
+    // setup was interrupted before login; the prompt above is first-run only.
+    const linkRoute = modelRoute ?? persistedModelRoute(workspaceDir, registered.id);
+    if (
+      linkRoute?.mode !== "local" &&
+      !headless &&
+      process.stdin.isTTY &&
+      process.stdout.isTTY &&
+      !(await readWorkspaceLink(workspaceDir))
+    ) {
+      await ensureVercelLink({
+        workspaceDir,
+        interactive: true,
+        env: process.env,
+        teamId: opts.teamId,
+        projectId: opts.vercelProjectId,
+        onLog: (message) => console.log(message),
+      });
+    }
+    const releaseSetupLock = acquireSetupLock(workspaceDir);
+    const abortController = new AbortController();
+    let reporter: Awaited<ReturnType<typeof createSetupReporter>> | undefined;
+    try {
+      reporter = await createSetupReporter({
+        workspaceDir,
+        projectId: registered.id,
+        noTui: opts.noTui,
+        outputMode,
+        onCancel: () => abortController.abort(),
+      });
+      if (!reporter.interactive && outputMode === "human") {
+        console.log(
+          `${GREEN}✓${RESET} ${resuming ? "Resuming" : "Created"} ${BOLD}${workspaceDir}${RESET}`,
+        );
+        console.log(
+          `  ${DIM}First project:${RESET} ${BOLD}${registered.id}${RESET} → ${registered.targetRel}\n`,
+        );
+        if (deepsecDependency.startsWith("file:")) {
+          console.log(`  ${DIM}Local package:${RESET} ${deepsecDependency}\n`);
+        }
+      }
+      const result = await runSetupWorkflow({
+        workspaceDir,
+        projectId: registered.id,
+        projectRoot: registered.targetAbs,
+        agent,
+        model,
+        thinkingLevel,
+        modelRoute,
+        packageManager: opts.packageManager,
+        skipInstall: opts.skipInstall,
+        nonInteractive: headless,
+        teamId: opts.teamId,
+        vercelProjectId: opts.vercelProjectId,
+        allowProjectCreate: opts.yes,
+        vercelProjectName:
+          opts.vercelProjectName ?? deterministicVercelProjectName(registered.id, targetAbs),
+        concurrency: opts.concurrency,
+        through: opts.through,
+        maxCostUsd: opts.maxCostUsd,
+        maxDurationMs: opts.maxDurationMs,
+        signal: abortController.signal,
+        reporter,
+      });
+      await reporter.close("success");
+      printSetupSummary(result, {
+        workspaceDir,
+        projectId: registered.id,
+        logPath: reporter.logPath,
+        outputMode,
+      });
+    } catch (error) {
+      await reporter?.close(abortController.signal.aborted ? "cancelled" : "error");
+      if (reporter?.logPath && outputMode === "human") {
+        console.error(`Full setup log: ${reporter.logPath}`);
+      }
+      throw error;
+    } finally {
+      releaseSetupLock();
+    }
+    return;
+  }
+
+  console.log(
+    `${GREEN}✓${RESET} ${resuming ? "Resuming" : "Created"} ${BOLD}${workspaceDir}${RESET}`,
+  );
   console.log(
     `  ${DIM}First project:${RESET} ${BOLD}${registered.id}${RESET} → ${registered.targetRel}\n`,
   );
-  console.log("Next:\n");
+
+  console.log("Scaffold-only setup complete. Next:\n");
   if (wsRel !== ".") console.log(`  cd ${wsRel}`);
   console.log(`  pnpm install                          ${DIM}# installs deepsec${RESET}`);
   console.log(
@@ -135,13 +411,11 @@ function workspacePackageName(workspaceDir: string): string {
   return base.startsWith(".") ? "deepsec-workspace" : base;
 }
 
-function packageJson(name: string): string {
-  // Pin the scaffolded dep to the version of deepsec running this
-  // `init`. Hardcoding a semver caret here silently rots every time
-  // we publish — the scaffolded dep would resolve against npm to
-  // whatever happens to match the literal string, which is not what
-  // a user typing `npx deepsec@latest init` expects.
-  const deepsecVersion = `^${getDeepsecVersion()}`;
+function packageJson(name: string, deepsecDependency: string): string {
+  // Published CLIs pin their exact package version. A bundle launched from a
+  // source checkout points at that checkout instead, so one-command local
+  // onboarding cannot accidentally install an older npm artifact that happens
+  // to carry the same version number.
   return `${JSON.stringify(
     {
       name,
@@ -161,11 +435,25 @@ function packageJson(name: string): string {
       // `.deepsec/` refuse to run. Setting it here stops the walk at the
       // workspace root.
       packageManager: detectPackageManager(),
-      dependencies: { deepsec: deepsecVersion },
+      dependencies: { deepsec: deepsecDependency },
     },
     null,
     2,
   )}\n`;
+}
+
+/**
+ * A failed local run may already have installed the registry package before a
+ * newer checkout learned to self-reference. Repair only local-checkout runs;
+ * published CLIs must preserve intentional user dependency overrides.
+ */
+function reconcileLocalDeepsecDependency(workspaceDir: string, dependency: string): void {
+  if (!dependency.startsWith("file:")) return;
+  const pkgPath = path.join(workspaceDir, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+  if (pkg.dependencies?.deepsec === dependency) return;
+  pkg.dependencies = { ...(pkg.dependencies ?? {}), deepsec: dependency };
+  fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 
 /**
@@ -201,12 +489,24 @@ function pnpmWorkspaceYaml(): string {
  */
 function emptyConfigTs(): string {
   return `import { defineConfig } from "deepsec/config";
+import { generatedMatchersPlugin } from "./generated-matchers.js";
 
 export default defineConfig({
   projects: [
     ${PROJECTS_INSERT_MARKER}
   ],
+  plugins: [generatedMatchersPlugin],
 });
+`;
+}
+
+function generatedMatchersTs(): string {
+  return `import { compileDeclarativeMatchers, type DeepsecPlugin } from "deepsec/config";
+
+export const generatedMatchersPlugin: DeepsecPlugin = {
+  name: "deepsec-generated-matchers",
+  matchers: compileDeclarativeMatchers([]),
+};
 `;
 }
 
@@ -222,16 +522,19 @@ Currently configured project: \`${id}\` (target: \`${targetRel}\`).
 
 ## Setup
 
-1. \`pnpm install\` — installs deepsec.
-2. Add an AI Gateway / Anthropic / OpenAI token to \`.env.local\`. If
-   you already have \`claude\` or \`codex\` CLI logged in on this
-   machine, you can skip the token for non-sandbox runs (\`process\` /
-   \`revalidate\` / \`triage\`); deepsec auto-detects and reuses the
-   subscription. See
-   \`node_modules/deepsec/dist/docs/vercel-setup.md\` after install.
-3. Open the parent repo in your coding agent (Claude Code, Cursor, …)
-   and have it follow \`data/${id}/SETUP.md\` to fill in
-   \`data/${id}/INFO.md\`.
+\`npx deepsec init\` created this workspace and normally completes its
+install, exact Vercel project link, Sandbox/model probes, threat model,
+coverage-guided scans, custom matchers, and first AI processing run.
+
+If setup was interrupted, run \`pnpm deepsec setup\` here or re-run the
+original init command. Checkpoints in \`data/${id}/setup/setup-state.json\`
+skip completed work. The linked Vercel project is always in Sandbox scope.
+
+Use \`--model-auth direct --ai-provider <provider>
+--ai-api-key-env <ENV_NAME>\` to use a user-owned model credential; secret
+values remain in the environment or \`.env.local\`. Use \`--model-auth local\`
+to rely on a machine-wide \`claude\`/\`codex\` login instead — no API key or
+env vars needed.
 
 ## Daily commands
 
@@ -302,9 +605,8 @@ asked to set a project up.
 
 ## Common tasks
 
-- **Set up a project for scanning**: read \`data/<id>/SETUP.md\` and
-  follow it (read \`node_modules/deepsec/SKILL.md\`, then fill
-  \`data/<id>/INFO.md\` from the target codebase).
+- **Set up or resume a project**: run \`pnpm deepsec setup\`. For a
+  scaffold-only/manual setup, read \`data/<id>/SETUP.md\` and follow it.
 - **Add a new project**: run \`deepsec init-project <root>\` — it
   scaffolds \`data/<id>/\` and prints/writes the setup prompt for the
   new project.
@@ -325,6 +627,8 @@ function gitignore(): string {
   // project context. Ignore the regenerable / heavy / sensitive bits.
   return `node_modules/
 .env*.local
+.vercel/
+.deepsec-setup.lock
 
 # Scan output — regenerated by \`deepsec scan\` / \`process\`. INFO.md
 # and SETUP.md (manually edited) stay tracked.
@@ -332,5 +636,6 @@ data/*/files/
 data/*/runs/
 data/*/reports/
 data/*/project.json
+data/*/setup/
 `;
 }

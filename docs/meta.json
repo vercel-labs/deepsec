@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "getting-started",
+    "reviewing-changes",
+    "supported-tech",
+    "writing-matchers",
+    "models",
+    "vercel-setup",
+    "configuration",
+    "architecture",
+    "data-layout",
+    "plugins",
+    "faq"
+  ]
+}
