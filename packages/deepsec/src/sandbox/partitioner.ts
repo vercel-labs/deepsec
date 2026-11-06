@@ -1,17 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { FileRecord } from "@deepsec/core";
-import { dataDir, loadAllFileRecords } from "@deepsec/core";
+import { dataDir, loadAllFileRecords, SEVERITY_ORDER } from "@deepsec/core";
 import { noiseScore } from "@deepsec/scanner";
 import type { PartitionResult, SandboxSubcommand } from "./types.js";
 
-const SEVERITY_ORDER: Record<string, number> = {
-  CRITICAL: 0,
-  HIGH: 1,
-  MEDIUM: 2,
-  HIGH_BUG: 3,
-  BUG: 4,
-};
+function severityRank(severity: string): number {
+  return SEVERITY_ORDER[severity as keyof typeof SEVERITY_ORDER] ?? 99;
+}
 
 /**
  * Load eligible files for the given command and split into N disjoint partitions.
@@ -68,7 +64,7 @@ export function partitionFiles(
         if (r.findings.length === 0) return false;
         const unrevalidated = r.findings.filter((f) => {
           if (!opts.force && f.revalidation) return false;
-          if (opts.minSeverity && SEVERITY_ORDER[f.severity] > SEVERITY_ORDER[opts.minSeverity])
+          if (opts.minSeverity && severityRank(f.severity) > severityRank(opts.minSeverity))
             return false;
           return true;
         });
@@ -95,8 +91,8 @@ export function partitionFiles(
   eligible.sort((a, b) => {
     if (command === "revalidate") {
       // Sort by severity (CRITICAL first)
-      const aBest = Math.min(...a.findings.map((f) => SEVERITY_ORDER[f.severity] ?? 99));
-      const bBest = Math.min(...b.findings.map((f) => SEVERITY_ORDER[f.severity] ?? 99));
+      const aBest = Math.min(...a.findings.map((f) => severityRank(f.severity)));
+      const bBest = Math.min(...b.findings.map((f) => severityRank(f.severity)));
       if (aBest !== bBest) return aBest - bBest;
     }
 
