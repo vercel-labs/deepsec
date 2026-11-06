@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, unlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -57,7 +58,9 @@ export function vercelAuthRecoveryActions(
     {
       id: "vercel-login",
       description: "Ask the user to authenticate in a terminal, then continue setup.",
-      commands: [`cd ${shellArg(workspaceDir)}`, "npx vercel login"],
+      commands: existsSync(join(workspaceDir, "package.json"))
+        ? [`cd ${shellArg(workspaceDir)}`, "npx vercel login"]
+        : ["npx vercel login"],
     },
     ...(!alreadyLinked
       ? [

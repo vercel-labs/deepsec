@@ -60,6 +60,7 @@ describe("Vercel project link", () => {
 
   it("returns structured login instructions when headless Vercel auth is missing", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "deepsec-headless-login-"));
+    await writeFile(join(workspace, "package.json"), "{}\n");
     const runCli = vi.fn(async () => ({ exitCode: 1, stdout: "", stderr: "not logged in" }));
 
     const error = await ensureVercelLink({
