@@ -1,9 +1,10 @@
 import type { MatcherPlugin } from "../types.js";
+import { isLaravelSkippablePath } from "./laravel-utils.js";
 import { regexMatcher } from "./utils.js";
 
 /**
  * Laravel route registrations and controller actions. Sentinel-gated on
- * `composer.json` containing a `laravel/*` dep, or the presence of the
+ * `composer.json` requiring `laravel/framework`, or the presence of the
  * `artisan` script — avoids firing on random PHP repos.
  */
 export const phpLaravelRouteMatcher: MatcherPlugin = {
@@ -14,16 +15,8 @@ export const phpLaravelRouteMatcher: MatcherPlugin = {
   requires: {
     tech: ["laravel"],
     sentinelFiles: ["composer.json", "artisan"],
-    sentinelContains: (path, content) => {
-      if (path === "artisan") return true;
-      try {
-        const pkg = JSON.parse(content) as Record<string, Record<string, string>>;
-        const deps = { ...pkg.require, ...pkg["require-dev"] };
-        return Object.keys(deps ?? {}).some((k) => k.startsWith("laravel/"));
-      } catch {
-        return false;
-      }
-    },
+    sentinelContains: (path, content) =>
+      path === "artisan" || /"laravel\/framework"\s*:/.test(content),
   },
   examples: [
     `Route::get('/users', [UsersController::class, 'index']);`,
@@ -33,12 +26,9 @@ export const phpLaravelRouteMatcher: MatcherPlugin = {
     `Route::group(['middleware' => 'auth'], function () { /* ... */ });`,
     `class UsersController extends Controller { public function show($id) {} }`,
     `Route::get('/me', fn () => auth()->user())->middleware('auth:sanctum');`,
-    `$data = $request->all();`,
-    `DB::raw("COUNT(*) as total")`,
-    `User::whereRaw('LOWER(email) = ?', [$email])->orderByRaw('created_at DESC')->selectRaw('id, name');`,
   ],
   match(content, filePath) {
-    if (/\/(tests|vendor)\//.test(filePath)) return [];
+    if (isLaravelSkippablePath(filePath)) return [];
 
     return regexMatcher(
       "php-laravel-route",
@@ -54,15 +44,6 @@ export const phpLaravelRouteMatcher: MatcherPlugin = {
           label: "Controller class",
         },
         { regex: /->middleware\s*\(\s*['"]auth/, label: "Auth middleware (verify scope)" },
-        {
-          regex: /\$request->all\s*\(\s*\)/,
-          label: "$request->all() — mass-assignment surface",
-        },
-        { regex: /DB::raw\s*\(/, label: "DB::raw (SQL injection if interpolated)" },
-        {
-          regex: /\b(?:whereRaw|selectRaw|orderByRaw)\s*\(/,
-          label: "*Raw query helper",
-        },
       ],
       content,
     );

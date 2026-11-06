@@ -105,6 +105,20 @@ const SLUG_NOTES: Record<string, string> = {
     "Weak entry-point candidate — confirm no `@login_required` / `before_request` auth hook before flagging.",
   "rb-rails-controller":
     "Weak entry-point candidate — confirm `skip_before_action :authenticate_user!` is intentional or that no auth callback is in scope.",
+  "laravel-mass-assignment":
+    "Check the model's `$fillable`/`$guarded` and whether the input reaches `create`/`update`/`fill` unfiltered; `$request->validated()` and `->only([...])` are the safe forms.",
+  "laravel-sql-raw":
+    "Flag only when the interpolated value comes from the request or another untrusted source; static strings and `?` bindings are safe, but bindings can't parameterize column names.",
+  "laravel-blade-xss":
+    "Trace the `{!! !!}` or `HtmlString` value back to user input; trusted helpers and server-built markup are fine.",
+  "laravel-missing-authorization":
+    "Noisy lead: the matcher reads one file. Check route middleware groups, `authorizeResource`, and the `FormRequest::authorize()` before flagging.",
+  "laravel-unsafe-sinks":
+    "Confirm the request value reaches the sink without an allowlist, `basename()`, or `URL::isValidUrl` style check.",
+  "laravel-config-exposure":
+    "Flag only values that ship to production: `.env.example`, local-only config, and env-driven defaults aren't findings.",
+  "laravel-livewire-filament":
+    "Check for `#[Locked]` and a policy or `authorize()` call in each action; for Resources, confirm a matching policy class exists.",
   "php-laravel-route":
     "Weak entry-point candidate — confirm the route is outside the `auth` middleware group AND user input reaches a sink before flagging.",
   "go-gin-route":

@@ -113,22 +113,40 @@ const detectors: Detector[] = [
 
   // --- PHP ---
   (root, cache) => {
-    if (!exists(root, "composer.json")) return [];
     const composer = readSafe(root, "composer.json", cache);
+    const lock = readSafe(root, "composer.lock", cache);
+    if (!composer && !lock && !exists(root, "artisan") && !exists(root, "wp-config.php")) return [];
     const tags: string[] = ["php"];
-    if (!composer) return tags;
     let parsed: Record<string, unknown> | null = null;
     try {
-      parsed = JSON.parse(composer) as Record<string, unknown>;
+      parsed = composer ? (JSON.parse(composer) as Record<string, unknown>) : null;
     } catch {
-      return tags;
+      // fall through — lockfile and artisan still apply
     }
     const deps = {
-      ...((parsed.require as Record<string, string>) ?? {}),
-      ...((parsed["require-dev"] as Record<string, string>) ?? {}),
+      ...((parsed?.require as Record<string, string>) ?? {}),
+      ...((parsed?.["require-dev"] as Record<string, string>) ?? {}),
     };
     const keys = Object.keys(deps);
-    if (keys.some((k) => k.startsWith("laravel/")) || exists(root, "artisan")) tags.push("laravel");
+    // Runtime packages only: `packages-dev` holds testbench's laravel/framework
+    // in every Laravel package repo.
+    let locked: string[] = [];
+    try {
+      const packages = lock
+        ? (JSON.parse(lock) as { packages?: { name?: string }[] }).packages
+        : [];
+      locked = (packages ?? []).flatMap((p) => (p.name ? [p.name] : []));
+    } catch {
+      // ignore malformed lockfile
+    }
+    const has = (name: string) => keys.includes(name) || locked.includes(name);
+
+    if (has("laravel/framework") || exists(root, "artisan")) {
+      tags.push("laravel");
+      if (has("livewire/livewire")) tags.push("livewire");
+      if (has("laravel/nova")) tags.push("nova");
+    }
+
     if (keys.some((k) => k.startsWith("symfony/"))) tags.push("symfony");
     if (keys.includes("slim/slim")) tags.push("slim");
     if (keys.some((k) => k === "yiisoft/yii2" || k.startsWith("yiisoft/"))) tags.push("yii");
@@ -393,6 +411,7 @@ export function detectTech(rootPath: string): DetectedTech {
   const COMMON_SENTINELS = [
     "package.json",
     "composer.json",
+    "composer.lock",
     "artisan",
     "pyproject.toml",
     "requirements.txt",
