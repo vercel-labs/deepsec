@@ -21,6 +21,11 @@ export class MatcherRegistry {
       .filter((m): m is MatcherPlugin => m !== undefined);
   }
 
+  /** Returns slug strings from `requested` that don't exist in the registry. */
+  unknownSlugs(requested: string[]): string[] {
+    return requested.filter((s) => !this.matchers.has(s));
+  }
+
   slugs(): string[] {
     return Array.from(this.matchers.keys());
   }

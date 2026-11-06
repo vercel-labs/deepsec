@@ -103,4 +103,16 @@ describe("scanFiles()", () => {
     const after = readFileRecord(projectId, "src/x.ts")!;
     expect(after.candidates.length).toBe(candCountBefore);
   });
+
+  it("throws on unknown matcher slugs", async () => {
+    const { root, projectId } = makeProject({ "a.ts": "x\n" });
+    await expect(
+      scanFiles({
+        projectId,
+        root,
+        filePaths: ["a.ts"],
+        matcherSlugs: ["xss", "does-not-exist", "also-fake"],
+      }),
+    ).rejects.toThrow(/Unknown matcher slugs: does-not-exist, also-fake/);
+  });
 });
