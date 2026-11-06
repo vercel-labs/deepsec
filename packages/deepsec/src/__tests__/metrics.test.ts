@@ -33,6 +33,11 @@ describe("formatTokens", () => {
     expect(formatTokens(950)).toBe("950");
   });
 
+  it("rounds floats under 1K to whole numbers", () => {
+    expect(formatTokens(12.7)).toBe("13");
+    expect(formatTokens(12.3)).toBe("12");
+  });
+
   it("uses K/M/B suffixes", () => {
     expect(formatTokens(1500)).toBe("1.5K");
     expect(formatTokens(2_500_000)).toBe("2.5M");

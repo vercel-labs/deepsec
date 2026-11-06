@@ -160,7 +160,7 @@ export function formatCost(n: number): string {
 
 export function formatTokens(n: number): string {
   if (n === 0) return "0";
-  if (n < 1000) return String(n);
+  if (n < 1000) return String(Math.round(n));
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
   if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   return `${(n / 1_000_000_000).toFixed(1)}B`;
@@ -409,8 +409,8 @@ export function metricsCommand(opts: { projectId?: string; minSeverity?: string 
             m.projectId,
             String(m.analysisCount),
             formatCost(m.cost),
-            formatTokens(m.tokens.input),
-            formatTokens(m.tokens.output),
+              formatTokens(Math.round(m.tokens.input)),
+              formatTokens(Math.round(m.tokens.output)),
             cacheHit,
             formatCost(perAnalysis),
           ],
@@ -430,8 +430,8 @@ export function metricsCommand(opts: { projectId?: string; minSeverity?: string 
             `${BOLD}TOTAL${RESET}`,
             `${BOLD}${totals.analysisCount}${RESET}`,
             `${BOLD}${formatCost(totals.cost)}${RESET}`,
-            `${BOLD}${formatTokens(totals.tokens.input)}${RESET}`,
-            `${BOLD}${formatTokens(totals.tokens.output)}${RESET}`,
+              `${BOLD}${formatTokens(Math.round(totals.tokens.input))}${RESET}`,
+              `${BOLD}${formatTokens(Math.round(totals.tokens.output))}${RESET}`,
             `${BOLD}${cacheHit}${RESET}`,
             `${BOLD}${formatCost(perAnalysis)}${RESET}`,
           ],
