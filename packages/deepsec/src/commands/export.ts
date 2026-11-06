@@ -351,9 +351,6 @@ export async function exportCommand(opts: {
 
   const minSeverity = opts.minSeverity as Severity | undefined;
   const onlySeverity = opts.onlySeverity as Severity | undefined;
-  if (onlySeverity && !(onlySeverity in SEVERITY_ORDER)) {
-    throw new Error(`--only-severity: not a valid severity: ${opts.onlySeverity}`);
-  }
 
   let sinceMs: number | undefined;
   let untilMs = Number.POSITIVE_INFINITY;
