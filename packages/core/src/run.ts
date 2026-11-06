@@ -422,7 +422,15 @@ export async function acquireProcessLock(
   }
 }
 
-export function loadAllFileRecords(projectId: string): FileRecord[] {
+/**
+ * With `strict`, a record that can't be read or validated throws instead of
+ * being skipped. Records are written in place, so one that a concurrent
+ * `process` is writing can read as truncated JSON.
+ */
+export function loadAllFileRecords(
+  projectId: string,
+  opts: { strict?: boolean } = {},
+): FileRecord[] {
   const dir = filesDir(projectId);
   if (!fs.existsSync(dir)) return [];
 
@@ -437,13 +445,16 @@ export function loadAllFileRecords(projectId: string): FileRecord[] {
         try {
           raw = JSON.parse(fs.readFileSync(full, "utf-8"));
         } catch (err) {
-          console.warn(
-            `[deepsec] skipping unreadable file record ${full}: ${err instanceof Error ? err.message : err}`,
-          );
+          const reason = err instanceof Error ? err.message : err;
+          if (opts.strict) throw new Error(`unreadable file record ${full}: ${reason}`);
+          console.warn(`[deepsec] skipping unreadable file record ${full}: ${reason}`);
           continue;
         }
         const record = parseFileRecordSalvaging(raw, full);
-        if (!record) continue;
+        if (!record) {
+          if (opts.strict) throw new Error(`invalid file record ${full}`);
+          continue;
+        }
         ensureFindingIds(record); // see readFileRecord
         records.push(record);
       }

@@ -175,6 +175,21 @@ describe("readFileRecord / loadAllFileRecords — per-finding salvage", () => {
     expect(a?.findings.map((f) => f.title)).toEqual(["Valid finding"]);
     expect(warnSpy.mock.calls.join("\n")).toContain("malformed finding");
   });
+
+  it("loadAllFileRecords throws on a truncated or invalid record when strict", () => {
+    writeRawRecord("src/a.ts", [validFinding]);
+    const p = fileRecordPath(projectId, "src/b.ts");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, '{"filePath": "src/b.ts", "find');
+
+    expect(loadAllFileRecords(projectId)).toHaveLength(1);
+    expect(() => loadAllFileRecords(projectId, { strict: true })).toThrow(
+      /unreadable file record .*b\.ts\.json/,
+    );
+
+    writeRawRecord("src/b.ts", [validFinding], { status: "nope" });
+    expect(() => loadAllFileRecords(projectId, { strict: true })).toThrow(/invalid file record/);
+  });
 });
 
 describe("ensureProject", () => {
