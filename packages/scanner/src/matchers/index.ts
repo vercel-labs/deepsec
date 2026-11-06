@@ -158,7 +158,10 @@ import { pySqlRawMatcher } from "./py-sql-raw.js";
 import { pyStarletteRouteMatcher } from "./py-starlette-route.js";
 import { pyTornadoHandlerMatcher } from "./py-tornado-handler.js";
 import { rateLimitBypassMatcher } from "./rate-limit-bypass.js";
+import { rbAsyncWebSocketHandlerMatcher } from "./rb-async-websocket-handler.js";
+import { rbFalconRackAppMatcher } from "./rb-falcon-rack-app.js";
 import { rbGrapeEndpointMatcher } from "./rb-grape-endpoint.js";
+import { rbGrpcServiceMatcher } from "./rb-grpc-service.js";
 import { rbHanamiActionMatcher } from "./rb-hanami-action.js";
 import { rbRailsControllerMatcher } from "./rb-rails-controller.js";
 import { rbRodaRouteMatcher } from "./rb-roda-route.js";
@@ -407,6 +410,9 @@ export function createDefaultRegistry(): MatcherRegistry {
   registry.register(rbGrapeEndpointMatcher);
   registry.register(rbHanamiActionMatcher);
   registry.register(rbRodaRouteMatcher);
+  registry.register(rbGrpcServiceMatcher);
+  registry.register(rbAsyncWebSocketHandlerMatcher);
+  registry.register(rbFalconRackAppMatcher);
   // Go
   registry.register(goGinRouteMatcher);
   registry.register(goEchoRouteMatcher);
