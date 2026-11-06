@@ -343,7 +343,6 @@ export class RegexScannerDriver implements ScannerDriver {
           }
         }
 
-        const _stat = fs.statSync(path.join(root, relPath));
         const hash = crypto.createHash("sha256").update(content).digest("hex");
 
         record.lastScannedAt = new Date().toISOString();
