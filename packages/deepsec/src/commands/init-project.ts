@@ -57,11 +57,8 @@ export function registerProject(opts: {
   const workspaceDir = fs.realpathSync(path.resolve(opts.workspaceDir));
   const targetAbs = requireExistingDir(opts.targetRoot, "<target-root>");
   const id = validateProjectId(opts.id ?? path.basename(targetAbs));
-  // Normalize to POSIX separators: `targetRel` gets written into
-  // deepsec.config.ts (committed to VCS) and SETUP.md, so a Windows
-  // contributor adding a project would otherwise produce `..\foo\bar`
-  // that's ugly cross-platform and noisy in diffs. Both Node path APIs
-  // accept "/" on Windows.
+  // Always POSIX `root:` in deepsec.config.ts so scaffolds match across OS
+  // and tools that consume the file see a single separator convention.
   const targetRel = path.relative(workspaceDir, targetAbs).split(path.sep).join("/");
 
   const configPath = findConfigInWorkspace(workspaceDir);
