@@ -47,4 +47,32 @@ describe("headless setup plan", () => {
     });
     expect(fs.existsSync(workspace)).toBe(false);
   });
+
+  it("checks Vercel authentication outside the target repository", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-plan-"));
+    fs.writeFileSync(path.join(root, "index.ts"), "export const value = 1;\n");
+    const workspace = path.join(root, ".deepsec");
+    const cwds: string[] = [];
+    const buildPlan = () =>
+      buildSetupPlan({
+        workspaceDir: workspace,
+        projectRoot: root,
+        projectId: "app",
+        model: "gpt-5.6-sol",
+        agent: "codex",
+        deterministicProjectName: "deepsec-app-abcd1234",
+        env: {},
+        runCli: async (_args, cwd) => {
+          cwds.push(cwd);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+
+    const plan = await buildPlan();
+    fs.mkdirSync(workspace);
+    await buildPlan();
+
+    expect(plan.missingInputs).not.toContain("vercel.authentication");
+    expect(cwds).toEqual([os.tmpdir(), workspace]);
+  });
 });
