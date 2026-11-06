@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { ModelProfile } from "../auth/model-picker.js";
 import { resolveModelProfile } from "../auth/model-picker.js";
@@ -87,10 +88,15 @@ export async function buildSetupPlan(options: {
   const linkCredential = Boolean(link && (env.VERCEL_OIDC_TOKEN || env.VERCEL_TOKEN));
   let cliAuthenticated = false;
   if (!linkCredential && !tokenTriple) {
+    // `npx` fails in a target repo whose `devEngines.packageManager` is not npm.
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-vercel-"));
     try {
       cliAuthenticated =
-        (await (options.runCli ?? runPinnedVercelCli)(["whoami"], projectRoot)).exitCode === 0;
-    } catch {}
+        (await (options.runCli ?? runPinnedVercelCli)(["whoami"], cwd)).exitCode === 0;
+    } catch {
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   }
   const missingInputs: string[] = [];
   const suggestedArgs: string[] = [];
