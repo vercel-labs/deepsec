@@ -159,6 +159,7 @@ export function formatCost(n: number): string {
 }
 
 export function formatTokens(n: number): string {
+  n = Math.round(n);
   if (n === 0) return "0";
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
