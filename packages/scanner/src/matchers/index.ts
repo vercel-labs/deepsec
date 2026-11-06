@@ -202,6 +202,7 @@ import { tfIamWildcardMatcher } from "./tf-iam-wildcard.js";
 import { tfModuleUnpinnedMatcher } from "./tf-module-unpinned.js";
 import { tfPublicIngressMatcher } from "./tf-public-ingress.js";
 import { tfSecretInDataMatcher } from "./tf-secret-in-data.js";
+import { tlsVerificationDisabledMatcher } from "./tls-verification-disabled.js";
 import { trpcPublicProcedureMatcher } from "./trpc-public-procedure.js";
 import { unixSocketListenerMatcher } from "./unix-socket-listener.js";
 import { unsafeDeserializationMatcher } from "./unsafe-deserialization.js";
@@ -312,6 +313,7 @@ export function createDefaultRegistry(): MatcherRegistry {
   registry.register(dockerfileCurlPipeUnverifiedMatcher);
   registry.register(dockerfileRunAsRootMatcher);
   registry.register(cryptoUsageMatcher);
+  registry.register(tlsVerificationDisabledMatcher);
 
   // Secrets management
   registry.register(secretsPlaintextExposureMatcher);
