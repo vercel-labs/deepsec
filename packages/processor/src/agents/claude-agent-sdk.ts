@@ -85,6 +85,10 @@ const CLAUDE_ENV_ALLOWLIST = new Set<string>([
   "DEBUG_CLAUDE_AGENT_SDK",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_DEBUG_LOGS_DIR",
+  // Windows: Google ADC lives under %APPDATA%\gcloud; forward so default
+  // credential discovery works there (HOME covers the POSIX well-known path).
+  "APPDATA",
+  "LOCALAPPDATA",
 ]);
 
 /**
@@ -143,6 +147,33 @@ export function buildClaudeEnv(): Record<string, string> {
   ]) {
     const v = process.env[k];
     if (typeof v === "string") env[k] = v;
+  }
+  // Vertex routing: only when the operator opted in with CLAUDE_CODE_USE_VERTEX.
+  // Forward just the routing vars (project, region, beta flag). Authentication
+  // uses GCP Application Default Credentials discovered from the well-known path
+  // under HOME (or APPDATA on Windows); no credential-file pointer like
+  // GOOGLE_APPLICATION_CREDENTIALS is forwarded into the agent env, so an
+  // untrusted repo can't be pointed at a long-lived key file. A non-local model
+  // route clears CLAUDE_CODE_USE_VERTEX (see applyResolvedModelRoute), so an
+  // explicit gateway/direct selection always wins over an ambient Vertex setup.
+  // CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS is required on Vertex, which rejects
+  // the Anthropic beta headers the SDK adds by default.
+  if (process.env.CLAUDE_CODE_USE_VERTEX) {
+    for (const k of [
+      "CLAUDE_CODE_USE_VERTEX",
+      "ANTHROPIC_VERTEX_PROJECT_ID",
+      "GOOGLE_CLOUD_PROJECT",
+      "GCLOUD_PROJECT",
+      "CLOUD_ML_REGION",
+      "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+    ]) {
+      const v = process.env[k];
+      if (typeof v === "string") env[k] = v;
+    }
+    // Per-model Vertex region overrides have dynamic names (VERTEX_REGION_CLAUDE_*).
+    for (const [k, v] of Object.entries(process.env)) {
+      if (typeof v === "string" && k.startsWith("VERTEX_REGION_CLAUDE_")) env[k] = v;
+    }
   }
   // Gateway-bound runs carry the App Attribution headers via the CLI's
   // ANTHROPIC_CUSTOM_HEADERS (newline-separated `Name: Value` pairs).

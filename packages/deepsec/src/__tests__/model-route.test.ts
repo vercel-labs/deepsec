@@ -84,6 +84,19 @@ describe("resolveModelRoute", () => {
     expect(env.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
   });
 
+  it("clears an ambient Vertex switch when a non-local route is applied", async () => {
+    const env: NodeJS.ProcessEnv = {
+      AI_GATEWAY_API_KEY: "gw-key",
+      CLAUDE_CODE_USE_VERTEX: "1",
+    };
+    const resolved = await resolveModelRoute(
+      { mode: "gateway", provider: "vercel" },
+      { agentType: "claude-agent-sdk", env },
+    );
+    applyResolvedModelRoute(resolved, env);
+    expect(env.CLAUDE_CODE_USE_VERTEX).toBeUndefined();
+  });
+
   it("preserves the in-sandbox Claude proxy when reapplying a route", async () => {
     const env = {
       AI_GATEWAY_API_KEY: "brokered-placeholder",
