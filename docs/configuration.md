@@ -79,6 +79,7 @@ instead of hand-editing it.
 | `infoMarkdown` | `string` | no | Repo context injected into AI prompts. Overrides `data/<id>/INFO.md` if both are present. |
 | `promptAppend` | `string` | no | Free-form text appended to the system prompt for this project. |
 | `priorityPaths` | `string[]` | no | Path prefixes to process first. |
+| `osv` | `boolean` | no | Enable dependency-CVE enrichment during setup (default off). Equivalent to the `--osv` flag. See [dependency CVEs](dependency-cves.md). |
 
 ## INFO.md
 

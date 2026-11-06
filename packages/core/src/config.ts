@@ -21,6 +21,13 @@ export interface ProjectDeclaration {
   promptAppend?: string;
   /** Path prefixes that should be processed before others. */
   priorityPaths?: string[];
+  /**
+   * Opt in to dependency-CVE enrichment (osv-scanner, plus uv/syft resolution of
+   * range-only manifests). Off by default because it runs external tools that
+   * reach the network during setup. When true and the tools are on PATH, known-
+   * vulnerable dependencies are surfaced into the threat model and matchers.
+   */
+  osv?: boolean;
 }
 
 export interface DeepsecConfig {

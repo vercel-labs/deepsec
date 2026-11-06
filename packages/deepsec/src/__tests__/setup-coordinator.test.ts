@@ -13,6 +13,19 @@ import {
   setupErrorExitCode,
 } from "../setup/protocol.js";
 
+// Stub the osv enrichment so the coordinator path can be exercised without the
+// external osv-scanner/uv/syft toolchain. `runOsvEnrich` returns a sentinel
+// "directive" context (what buildContext now produces); mergeInfoWithOsvContext
+// stays real so the non-osv preserve path still behaves exactly as in production.
+const OSV_DIRECTIVE_SENTINEL = "### Dependency reachability (required) — DIRECTIVE SENTINEL";
+vi.mock("../setup/osv-enrich.js", async (importActual) => {
+  const actual = await importActual<typeof import("../setup/osv-enrich.js")>();
+  return {
+    ...actual,
+    runOsvEnrich: vi.fn(() => ({ context: OSV_DIRECTIVE_SENTINEL, hits: [] })),
+  };
+});
+
 const originalCwd = process.cwd();
 afterEach(() => process.chdir(originalCwd));
 
@@ -245,6 +258,86 @@ describe("one-shot setup coordinator", () => {
     expect(fs.readFileSync(path.join(workspace, "data", "app", "INFO.md"), "utf8")).toBe(
       curatedInfo,
     );
+
+    // Enabling osv on a project with a curated INFO.md keeps the curation and
+    // splices in only the fresh "### Dependency reachability" verdicts the new
+    // analysis produced; the raw grading directive is never persisted.
+    fs.writeFileSync(path.join(workspace, "data", "app", "INFO.md"), curatedInfo);
+    analyze.mockImplementationOnce(async () => ({
+      infoMarkdown:
+        "# app\n\n## What this codebase does\nFresh.\n\n## Auth shape\nNone.\n\n## Threat model\nFresh threats.\n\n### Dependency reachability\n- starlette@0.46.0 — HIGH reachability — src/route.ts:1 — multipart DoS\n\n## Project-specific patterns to flag\nRoutes.\n\n## Known false-positives\nNone.",
+      surfaces: [
+        {
+          id: "http-routes",
+          kind: "http" as const,
+          description: "HTTP routes",
+          fileGlobs: ["src/**/*.ts"],
+          representativeFiles: ["src/route.ts"],
+          exposure: "public" as const,
+        },
+      ],
+      inspectedPaths: ["src/route.ts"],
+    }));
+    await runSetupWorkflow({
+      workspaceDir: workspace,
+      projectId: "app",
+      projectRoot: project,
+      through: "threat-model",
+      osv: true,
+      services,
+      onLog: () => undefined,
+    });
+    const infoAfterOsv = fs.readFileSync(path.join(workspace, "data", "app", "INFO.md"), "utf8");
+    expect(analyze).toHaveBeenCalledTimes(3); // enabling osv invalidated the info checkpoint
+    expect(infoAfterOsv).toContain("Reject <script> input."); // curated threat model kept
+    expect(infoAfterOsv).not.toContain("Fresh threats."); // fresh prose not swapped in
+    expect(infoAfterOsv).toContain("starlette@0.46.0 — HIGH reachability"); // fresh verdicts spliced
+    expect(infoAfterOsv).not.toContain(OSV_DIRECTIVE_SENTINEL); // directive never persisted
+    // the verdicts land inside the Threat model section, before the next section
+    expect(infoAfterOsv.indexOf("### Dependency reachability")).toBeLessThan(
+      infoAfterOsv.indexOf("## Project-specific patterns to flag"),
+    );
+
+    // A plain resume without --osv (the printed resume command carries no flags)
+    // must keep osv on: same digest, so no silent re-analysis without it.
+    await runSetupWorkflow({
+      workspaceDir: workspace,
+      projectId: "app",
+      projectRoot: project,
+      through: "threat-model",
+      services,
+      onLog: () => undefined,
+    });
+    expect(analyze).toHaveBeenCalledTimes(3);
+    const savedState = JSON.parse(
+      fs.readFileSync(path.join(workspace, "data", "app", "setup", "setup-state.json"), "utf8"),
+    );
+    expect(savedState.osvEnabled).toBe(true);
+
+    // --no-osv turns it off: re-analysis without dependency context, stale
+    // verdicts dropped from the curated INFO.md, and the choice is remembered.
+    await runSetupWorkflow({
+      workspaceDir: workspace,
+      projectId: "app",
+      projectRoot: project,
+      through: "threat-model",
+      osv: false,
+      services,
+      onLog: () => undefined,
+    });
+    expect(analyze).toHaveBeenCalledTimes(4);
+    const infoAfterOff = fs.readFileSync(path.join(workspace, "data", "app", "INFO.md"), "utf8");
+    expect(infoAfterOff).toContain("Reject <script> input."); // curation still kept
+    expect(infoAfterOff).not.toContain("Dependency reachability"); // stale verdicts gone
+    await runSetupWorkflow({
+      workspaceDir: workspace,
+      projectId: "app",
+      projectRoot: project,
+      through: "threat-model",
+      services,
+      onLog: () => undefined,
+    });
+    expect(analyze).toHaveBeenCalledTimes(4); // bare re-run keeps it off, no re-analysis
   });
 
   it("uses the new harness default model instead of a previous harness model", async () => {

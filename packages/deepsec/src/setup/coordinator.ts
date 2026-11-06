@@ -47,6 +47,12 @@ import {
   writeGeneratedMatchers,
 } from "./generated-matchers.js";
 import { ensureWorkspaceInstall, type SupportedPackageManager } from "./install.js";
+import {
+  extractReachabilityBlock,
+  mergeInfoWithOsvContext,
+  runOsvEnrich,
+  spliceReachabilityBlock,
+} from "./osv-enrich.js";
 import { SetupProtocolError } from "./protocol.js";
 import { phaseLabel, type SetupReporter } from "./reporter.js";
 import {
@@ -85,6 +91,8 @@ export interface SetupWorkflowOptions {
   modelRoute?: ModelRoute;
   packageManager?: SupportedPackageManager;
   skipInstall?: boolean;
+  /** Enable dependency-CVE enrichment for this run (same as `osv: true` in config). */
+  osv?: boolean;
   nonInteractive?: boolean;
   teamId?: string;
   vercelProjectId?: string;
@@ -278,6 +286,28 @@ function previousConnection(state: SetupState): Record<string, unknown> | undefi
   return state.connection && typeof state.connection === "object" ? state.connection : undefined;
 }
 
+/** The known-vulnerable dependencies the osv step persisted: their count, and a
+ * digest of the set (so the matcher pass can tell when it changed). */
+function readOsvFindings(projectDataDir: string): { count: number; digest: string } {
+  try {
+    const raw = fs.readFileSync(path.join(projectDataDir, "setup", "osv-findings.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return { count: 0, digest: "" };
+    const keys = parsed
+      .map(
+        (hit: { name?: string; version?: string; vulns?: Array<{ id?: string }> }) =>
+          `${hit.name}@${hit.version}:${(hit.vulns ?? [])
+            .map((v) => v.id)
+            .sort()
+            .join(",")}`,
+      )
+      .sort();
+    return { count: parsed.length, digest: digest(keys) };
+  } catch {
+    return { count: 0, digest: "" };
+  }
+}
+
 function installFingerprint(workspaceDir: string): string {
   const manifest = fs.readFileSync(path.join(workspaceDir, "package.json"), "utf8");
   let localArtifacts: string | undefined;
@@ -451,6 +481,22 @@ export async function runSetupWorkflow(
     const loaded = await loadConfig(workspaceDir);
     if (!loaded) throw new Error(`Could not load ${path.join(workspaceDir, "deepsec.config.ts")}`);
 
+    // Dependency-CVE enrichment is opt-in (it runs external, network-reaching tools):
+    // enabled per-project with `osv: true` in deepsec.config.ts, or with `--osv`.
+    // An explicit `--osv` / `--no-osv` wins for that run and is remembered in setup
+    // state, so a later bare `deepsec init` / `setup` (or the printed resume
+    // command, which carries no flags) keeps the last choice instead of silently
+    // flipping it and re-running the analysis. With no flag ever passed, the
+    // config decides. Off by default.
+    if (options.osv !== undefined && state.osvEnabled !== options.osv) {
+      state.osvEnabled = options.osv;
+      writeSetupState(state);
+    }
+    const osvEnabled =
+      options.osv ??
+      state.osvEnabled ??
+      loaded.config.projects.find((p) => p.id === options.projectId)?.osv === true;
+
     const loginInput = digest({
       route,
       agentType,
@@ -496,6 +542,10 @@ export async function runSetupWorkflow(
       model,
       thinkingLevel,
       rubricVersion: 2,
+      // Only enabling osv invalidates the info checkpoint (forcing one re-run to
+      // adopt the enrichment). Projects that never enable it keep the prior digest
+      // and are not re-run unnecessarily.
+      ...(osvEnabled ? { osv: true } : {}),
     });
     if (
       !analysis ||
@@ -505,6 +555,11 @@ export async function runSetupWorkflow(
       )
     ) {
       const preserveInfo = infoIsComplete(infoPath) ? fs.readFileSync(infoPath, "utf8") : undefined;
+      // Run osv-scanner first (when enabled) so the threat model is written with
+      // known dependency CVEs in view (persisted as the osv-findings.json artifact).
+      const osvEnrichment = osvEnabled
+        ? runOsvEnrich(projectRoot, projectDataDir)
+        : { context: "", hits: [] };
       analysis = await runPhase(state, reporter, "info", infoInput, () =>
         services.analyze({
           projectId: options.projectId,
@@ -513,10 +568,31 @@ export async function runSetupWorkflow(
           agentConfig,
           signal: workflowSignal,
           onProgress: (progress) => reportAgentProgress(reporter, "info", progress),
+          dependencyContext: osvEnrichment.context,
         }),
       );
       writeRepositoryAnalysis(projectDataDir, analysis);
-      if (preserveInfo) atomicWriteFileSync(infoPath, preserveInfo);
+      // Preserve a prior complete (possibly hand-edited) INFO.md so curated content
+      // isn't lost. Any stale osv advisory section is stripped (its directive is a
+      // prompt input, not threat-model content). The only part refreshed from the
+      // new analysis is the agent's "### Dependency reachability" verdicts, which
+      // must track the current dependency set:
+      // - osv on, fresh verdicts produced → splice them into the curated copy;
+      // - osv on, none produced (scanner missing/failed, or nothing found) →
+      //   keep the curated copy as-is, including its previous verdicts;
+      // - osv off → drop stale verdicts so they don't keep steering the scan.
+      if (preserveInfo) {
+        const curated = mergeInfoWithOsvContext(preserveInfo, "");
+        const freshBlock = osvEnabled
+          ? extractReachabilityBlock(fs.readFileSync(infoPath, "utf8"))
+          : undefined;
+        const merged = osvEnabled
+          ? freshBlock
+            ? spliceReachabilityBlock(curated, freshBlock)
+            : curated
+          : spliceReachabilityBlock(curated, undefined);
+        atomicWriteFileSync(infoPath, merged);
+      }
       state.infoDigest = digest(fs.readFileSync(infoPath, "utf8"));
       state.inventoryDigest = digest(analysis.surfaces);
       writeSetupState(state);
@@ -616,8 +692,29 @@ export async function runSetupWorkflow(
     state.coverageReport = coverage;
     writeSetupState(state);
 
+    // Known-vulnerable dependencies (from the osv step) steer matcher generation
+    // toward the reachable advisories' call sites. When every surface is already
+    // covered, matcher generation would normally be skipped — but a dependency CVE
+    // whose code isn't an uncovered surface still needs a matcher, so run one pass.
+    const threatModel = fs.existsSync(infoPath) ? fs.readFileSync(infoPath, "utf8") : undefined;
+    // Only trust osv-findings.json while osv is enabled: a leftover artifact from
+    // an earlier osv run must not keep steering matchers after it's turned off.
+    const osvFindings = osvEnabled ? readOsvFindings(projectDataDir) : { count: 0, digest: "" };
+    const dependencyCveCount = osvFindings.count;
+    const hasDepCves = dependencyCveCount > 0;
+
+    // Run the dependency-CVE matcher pass once per distinct set of vulnerable
+    // dependencies, tracked by its own digest (not the append-only matcherAttempts
+    // history). The digest is recorded only after the pass completes, so a pass
+    // that fails is retried on resume, and a new vulnerable dependency later gets
+    // its own pass even while surface coverage keeps passing.
+    const depCveFirstPass = hasDepCves && state.osvMatcherPassDigest !== osvFindings.digest;
     const maxAttempts = 2;
-    for (let attempt = 0; !coverage.passed && attempt < maxAttempts; attempt++) {
+    for (
+      let attempt = 0;
+      attempt < maxAttempts && (!coverage.passed || (depCveFirstPass && attempt === 0));
+      attempt++
+    ) {
       reporter.emit({
         type: "progress",
         phase: "matchers",
@@ -648,10 +745,16 @@ export async function runSetupWorkflow(
             inventory: expanded.items,
             coverage,
             existingSlugs: [...new Set(existingSlugs)],
+            threatModel,
+            dependencyCveCount,
             signal: workflowSignal,
             onProgress: (progress) => reportAgentProgress(reporter, "matchers", progress),
           }),
       );
+      if (depCveFirstPass && state.osvMatcherPassDigest !== osvFindings.digest) {
+        state.osvMatcherPassDigest = osvFindings.digest;
+        writeSetupState(state);
+      }
       if (proposal.plugins.length === 0) {
         state.matcherAttempts.push({
           proposedSlugs: [],
@@ -773,10 +876,11 @@ export async function runSetupWorkflow(
       const setupLogFile = state.setupLogPath
         ? path.resolve(workspaceDir, state.setupLogPath)
         : undefined;
+      const osvFlag = osvEnabled ? " --osv" : "";
       const setupInvocation =
         installResult.packageManager === "npm"
-          ? `npm run deepsec -- setup --project-id ${shellQuote(options.projectId)}`
-          : `pnpm deepsec setup --project-id ${shellQuote(options.projectId)}`;
+          ? `npm run deepsec -- setup --project-id ${shellQuote(options.projectId)}${osvFlag}`
+          : `pnpm deepsec setup --project-id ${shellQuote(options.projectId)}${osvFlag}`;
       const resumeCommand = `cd ${shellQuote(workspaceDir)} && ${setupInvocation}`;
       const code = noCandidates ? "NO_SCAN_CANDIDATES" : "SCAN_COVERAGE_INSUFFICIENT";
       const error = new SetupProtocolError({

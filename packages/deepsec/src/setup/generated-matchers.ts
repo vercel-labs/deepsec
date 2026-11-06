@@ -16,6 +16,10 @@ export interface ProposeMatchersOptions {
   inventory: ExpandedSurfaceInventoryItem[];
   coverage: CoverageReport;
   existingSlugs: string[];
+  /** Project threat model (INFO.md). Lets matchers target reachable dependency advisories. */
+  threatModel?: string;
+  /** Known-vulnerable dependency count; when > 0, matchers are proposed even if every surface is already covered. */
+  dependencyCveCount?: number;
   signal?: AbortSignal;
   onProgress?: (progress: AgentProgress) => void;
   runTask?: typeof runSetupTask;
@@ -33,9 +37,23 @@ export async function proposeGeneratedMatchers(
   options: ProposeMatchersOptions,
 ): Promise<{ specs: DeclarativeMatcherSpec[]; plugins: DeclarativeMatcherPlugin[] }> {
   const uncovered = options.coverage.surfaces.filter((surface) => !surface.passed);
-  if (uncovered.length === 0 && options.coverage.languageWarnings.length === 0) {
+  const hasDepCves = (options.dependencyCveCount ?? 0) > 0;
+  if (uncovered.length === 0 && options.coverage.languageWarnings.length === 0 && !hasDepCves) {
     return { specs: [], plugins: [] };
   }
+  // When the project has known-vulnerable dependencies, point the agent at the
+  // reachable advisories from the threat model so the vulnerable call sites get a
+  // matcher — otherwise matcher generation only ever fills surface-coverage gaps,
+  // and a dependency CVE whose code isn't an uncovered surface never gets flagged.
+  const advisoryBlock =
+    hasDepCves && options.threatModel?.trim()
+      ? `
+
+This project has known-vulnerable dependencies. In addition to the surface gaps above, propose matchers that flag the *reachable* dependency advisories described in the threat model below. Anchor each to the specific vulnerable call site or condition (for example a form-parsing call made with no size/field limit), so those spots become scan candidates. Skip advisories the threat model marks not-reachable. Set closesSurfaceIds to the surface(s) from the inventory where the vulnerable call occurs (the matcher schema requires at least one); use the closest ingress surface that reaches the call.
+
+Threat model (INFO.md):
+${options.threatModel.trim()}`
+      : "";
   const prompt = `Design narrow, data-only deepsec coverage matchers for the repository. Read files only; do not execute code, use the network, read env files, or install packages.
 
 Return ONLY a JSON array. Each item must have exactly: version:1, slug (kebab-case), description, noiseTier (precise|normal|noisy), filePatterns, optional requires {tech and/or sentinelFiles}, patterns [{source, optional flags i|m|im, label}], optional excludeFilePatterns, examples (each must match a pattern), and closesSurfaceIds.
@@ -43,7 +61,7 @@ Return ONLY a JSON array. Each item must have exactly: version:1, slug (kebab-ca
 Only close a surface when the matcher targets its concrete framework/registration primitive. Prefer anchored, framework-specific patterns. Never emit a broad catch-all. Existing slugs must not be reused: ${JSON.stringify(options.existingSlugs)}.
 
 Inventory: ${JSON.stringify(options.inventory)}
-Coverage gaps: ${JSON.stringify({ surfaces: uncovered, languages: options.coverage.languageWarnings })}`;
+Coverage gaps: ${JSON.stringify({ surfaces: uncovered, languages: options.coverage.languageWarnings })}${advisoryBlock}`;
   const runTask = options.runTask ?? runSetupTask;
   let raw = await runTask({
     agentType: options.agentType,
