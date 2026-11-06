@@ -113,7 +113,7 @@ selected egress host.
 
 ## Security model of deepsec itself
 
-Treat `deepsec` like a coding agent with full shell access on the enviroment that it is
+Treat `deepsec` like a coding agent with full shell access on the environment that it is
 running on. It is designed to run on trusted inputs (your source code) but you may still
 be concerned about prompt injection due to external dependencies or vendored code.
 
