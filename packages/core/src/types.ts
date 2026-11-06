@@ -74,6 +74,15 @@ export interface RunMeta {
     fixed?: number;
     uncertain?: number;
     duplicates?: number;
+    /**
+     * Coverage of the run rather than its verdicts. A truncated run still
+     * writes the counts above, so these four are the only fields that
+     * distinguish a full sweep from a partial one.
+     */
+    findingsRequested?: number;
+    findingsUnresolved?: number;
+    batchesTotal?: number;
+    batchesCompleted?: number;
   };
 }
 
