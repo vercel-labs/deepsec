@@ -11,6 +11,7 @@ import { phpLaravelRouteMatcher } from "../matchers/php-laravel-route.js";
 import { pyDjangoViewMatcher } from "../matchers/py-django-view.js";
 import { pyFastapiRouteMatcher } from "../matchers/py-fastapi-route.js";
 import { pyFlaskRouteMatcher } from "../matchers/py-flask-route.js";
+import { pyLitestarRouteMatcher } from "../matchers/py-litestar-route.js";
 import { rbRailsControllerMatcher } from "../matchers/rb-rails-controller.js";
 
 describe("framework entry-point matchers", () => {
@@ -117,6 +118,63 @@ def users():
 `;
     const matches = pyFlaskRouteMatcher.match(src, "app/__init__.py");
     expect(matches.length).toBeGreaterThan(0);
+  });
+
+  it("py-litestar-route detects @get / Router / guards", () => {
+    const src = `
+from litestar import Litestar, get, post, websocket, Router, HTTPRouteHandler
+
+@get("/users")
+async def list_users() -> list[dict]:
+    return []
+
+@post(path="/items")
+async def create_item(data: dict) -> dict:
+    return data
+
+@get("/admin", guards=[admin_guard])
+async def admin_only() -> dict:
+    return {}
+
+@websocket("/ws")
+async def ws_handler(socket) -> None: ...
+
+api = Router(path="/v1", route_handlers=[list_users, create_item])
+handler = HTTPRouteHandler("/health", health)
+app = Litestar(route_handlers=[api, handler, admin_only, ws_handler])
+`;
+    const matches = pyLitestarRouteMatcher.match(src, "app/main.py");
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches.map((m) => m.matchedPattern).join(" ")).toMatch(
+      /decorator|Router|guard|HTTPRouteHandler/,
+    );
+  });
+
+  it("py-litestar-route matches WebsocketRouteHandler but not WebSocketRoute", () => {
+    // Litestar spells the WebSocket handler class `WebsocketRouteHandler`
+    // (lowercase `s`). `WebSocketRoute` (capital `S`) is the *route* object,
+    // not a handler, and shares no substring-only trap: assert both the
+    // positive and the negative so a future "tidy up the casing" edit to
+    // either direction fails here.
+    const positive = `ws = WebsocketRouteHandler("/ws", ws_handler)\n`;
+    const positiveMatches = pyLitestarRouteMatcher.match(positive, "app/ws.py");
+    expect(positiveMatches.map((m) => m.matchedPattern)).toContain(
+      "HTTPRouteHandler/WebsocketRouteHandler",
+    );
+
+    // The route object class must NOT be picked up by this branch.
+    const negative = `from litestar.routes import WebSocketRoute\nroute = WebSocketRoute("/ws", ws_handler)\n`;
+    const negativeMatches = pyLitestarRouteMatcher.match(negative, "app/ws.py");
+    expect(negativeMatches.map((m) => m.matchedPattern)).not.toContain(
+      "HTTPRouteHandler/WebsocketRouteHandler",
+    );
+
+    // The old, incorrect capital-S handler spelling matched nothing real, so
+    // it stays unmatched — no alias is claimed for it.
+    const bogus = `handler = WebSocketRouteHandler("/ws", ws_handler)\n`;
+    expect(
+      pyLitestarRouteMatcher.match(bogus, "app/ws.py").map((m) => m.matchedPattern),
+    ).not.toContain("HTTPRouteHandler/WebsocketRouteHandler");
   });
 
   it("rb-rails-controller detects controller class + before_action", () => {

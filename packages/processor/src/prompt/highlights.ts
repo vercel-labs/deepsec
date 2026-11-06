@@ -136,6 +136,18 @@ export const TECH_HIGHLIGHTS: TechHighlight[] = [
     ],
   },
   {
+    tag: "litestar",
+    title: "Litestar",
+    languages: ["python"],
+    bullets: [
+      "Authentication and authorization are separate: the `Auth` middleware attaches `connection.user` but does not itself authorize, while `guards=[...]` is what authorizes a handler — a handler with no guard carries no authorization check, so any identity the middleware resolves reaches it (unauthenticated requests may still be rejected by the middleware before the handler runs)",
+      "Guards are cumulative across app / `Router` / `Controller` / handler layers and never override each other; a handler registered directly on `Litestar(route_handlers=[...])` never receives its `Router`'s guards, and `Controller`- or app-level guards also run on `OPTIONS` requests (litestar-org/litestar#2314)",
+      "`exclude=[...]` on the security config is regex matched against the full path and is NOT anchored — `exclude=[r'/']` disables authentication for every route, and `r'/schema'` also matches `/api/schema/users`",
+      "`exclude_from_auth=True` (renameable via `exclude_opt_key`) opts a single handler out of the auth flow — confirm it is intentional on state-changing routes",
+      "`Router(path=..., route_handlers=[...])` claims every branch that uses it is guarded; verify each `route_handlers` entry against the declarations actually in this file",
+    ],
+  },
+  {
     tag: "flask",
     title: "Flask",
     languages: ["python"],

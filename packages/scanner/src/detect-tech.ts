@@ -146,13 +146,27 @@ const detectors: Detector[] = [
     const pyproject = readSafe(root, "pyproject.toml", cache);
     const requirements = readSafe(root, "requirements.txt", cache);
     const setupPy = readSafe(root, "setup.py", cache);
+    // Pipfile is TOML, but the scanner has no TOML parser and the other
+    // Python manifests are scanned as raw text too — keep it consistent and
+    // treat it as one more haystack source rather than parsing it.
+    const pipfile = readSafe(root, "Pipfile", cache);
     const tags: string[] = [];
+    // `Pipfile` counts as a Python sentinel even when empty (a Pipfile with
+    // no `[packages]` table still marks the repo as Python), which is why
+    // the `exists()` check stays alongside the content read.
     const haveAny =
-      pyproject || requirements || setupPy || exists(root, "manage.py") || exists(root, "Pipfile");
+      pyproject ||
+      requirements ||
+      setupPy ||
+      pipfile !== null ||
+      exists(root, "manage.py") ||
+      exists(root, "Pipfile");
     if (!haveAny) return [];
     tags.push("python");
 
-    const haystack = [pyproject ?? "", requirements ?? "", setupPy ?? ""].join("\n").toLowerCase();
+    const haystack = [pyproject ?? "", requirements ?? "", setupPy ?? "", pipfile ?? ""]
+      .join("\n")
+      .toLowerCase();
     const hasDep = (re: RegExp) => re.test(haystack);
 
     if (exists(root, "manage.py") || hasDep(/\bdjango\b/)) tags.push("django");
@@ -165,6 +179,7 @@ const detectors: Detector[] = [
     if (hasDep(/\bsanic\b/)) tags.push("sanic");
     if (hasDep(/\bbottle\b/)) tags.push("bottle");
     if (hasDep(/\bfalcon\b/)) tags.push("falcon");
+    if (hasDep(/\blitestar\b/)) tags.push("litestar");
     if (hasDep(/\bcelery\b/)) tags.push("celery");
     if (hasDep(/\bairflow\b|\bapache-airflow\b/)) tags.push("airflow");
     return tags;
