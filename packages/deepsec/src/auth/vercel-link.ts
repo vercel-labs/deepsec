@@ -57,7 +57,7 @@ export function vercelAuthRecoveryActions(
     {
       id: "vercel-login",
       description: "Ask the user to authenticate in a terminal, then continue setup.",
-      commands: ["npx vercel login"],
+      commands: [`cd ${shellArg(workspaceDir)}`, "npx vercel login"],
     },
     ...(!alreadyLinked
       ? [
@@ -116,7 +116,10 @@ async function writeWorkspaceLink(workspaceDir: string, link: VercelProjectLink)
 export const runPinnedVercelCli: RunVercelCli = async (args, cwd) =>
   await new Promise((resolvePromise, reject) => {
     const capture = args.includes("--format=json");
-    const child = spawn("npx", ["--yes", `vercel@${TESTED_VERCEL_CLI_VERSION}`, ...args], {
+    // `--prefix` keeps npm from reading `.npmrc`, workspaces, or `devEngines`
+    // from directories above `cwd`.
+    const npxArgs = ["--prefix", cwd, "--yes", `vercel@${TESTED_VERCEL_CLI_VERSION}`, ...args];
+    const child = spawn("npx", npxArgs, {
       cwd,
       env: process.env,
       stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",

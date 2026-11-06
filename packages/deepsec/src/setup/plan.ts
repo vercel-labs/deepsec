@@ -89,11 +89,14 @@ export async function buildSetupPlan(options: {
   let cliAuthenticated = false;
   if (!linkCredential && !tokenTriple) {
     // `npx` fails in a target repo whose `devEngines.packageManager` is not npm.
-    const cwd = fs.existsSync(workspaceDir) ? workspaceDir : os.tmpdir();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-vercel-"));
     try {
       cliAuthenticated =
         (await (options.runCli ?? runPinnedVercelCli)(["whoami"], cwd)).exitCode === 0;
-    } catch {}
+    } catch {
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   }
   const missingInputs: string[] = [];
   const suggestedArgs: string[] = [];

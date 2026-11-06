@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { installArgs, selectPackageManager } from "../setup/install.js";
+import { reconcilePnpmWorkspace, selectPackageManager } from "../setup/install.js";
 
 describe("setup package-manager selection", () => {
   it("falls back to npm when a preferred pnpm is unavailable", () => {
@@ -22,18 +22,23 @@ describe("setup package-manager selection", () => {
   });
 });
 
-describe("setup install arguments", () => {
-  it("disables pnpm strict dependency builds", () => {
-    expect(installArgs("pnpm", false)).toEqual(["install", "--config.strict-dep-builds=false"]);
-    expect(installArgs("pnpm", true)).toEqual([
-      "install",
-      "--force",
-      "--config.strict-dep-builds=false",
-    ]);
+describe("pnpm workspace reconciliation", () => {
+  it("disables strict dependency builds in an existing workspace", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-install-"));
+    const file = path.join(workspace, "pnpm-workspace.yaml");
+    fs.writeFileSync(file, "packages: []\nallowBuilds:\n  protobufjs: set this to true or false");
+    reconcilePnpmWorkspace(workspace);
+    reconcilePnpmWorkspace(workspace);
+    expect(fs.readFileSync(file, "utf8")).toBe(
+      "packages: []\nallowBuilds:\n  protobufjs: set this to true or false\nstrictDepBuilds: false\n",
+    );
   });
 
-  it("leaves npm install arguments unchanged", () => {
-    expect(installArgs("npm", false)).toEqual(["install"]);
-    expect(installArgs("npm", true)).toEqual(["install", "--force"]);
+  it("keeps an explicit strictDepBuilds setting", () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-install-"));
+    const file = path.join(workspace, "pnpm-workspace.yaml");
+    fs.writeFileSync(file, "packages: []\nstrictDepBuilds: true\n");
+    reconcilePnpmWorkspace(workspace);
+    expect(fs.readFileSync(file, "utf8")).toBe("packages: []\nstrictDepBuilds: true\n");
   });
 });

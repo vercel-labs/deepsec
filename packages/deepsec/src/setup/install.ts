@@ -42,12 +42,17 @@ export function selectPackageManager(
   throw new Error("Deepsec requires pnpm or npm, but neither command is available on PATH");
 }
 
-export function installArgs(packageManager: SupportedPackageManager, force: boolean): string[] {
-  const args = ["install"];
-  if (force) args.push("--force");
-  // Covers workspaces whose pnpm-workspace.yaml lacks `strictDepBuilds: false`.
-  if (packageManager === "pnpm") args.push("--config.strict-dep-builds=false");
-  return args;
+export function reconcilePnpmWorkspace(workspaceDir: string): void {
+  const file = path.join(workspaceDir, "pnpm-workspace.yaml");
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+  if (/^strictDepBuilds:/m.test(content)) return;
+  const separator = content === "" || content.endsWith("\n") ? "" : "\n";
+  fs.writeFileSync(file, `${content}${separator}strictDepBuilds: false\n`);
 }
 
 export function probeWorkspaceInstall(workspaceDir: string): {
@@ -80,6 +85,7 @@ export async function ensureWorkspaceInstall(params: {
   onProgress?: (progress: { message: string; current?: number; total?: number }) => void;
 }): Promise<{ packageManager: SupportedPackageManager; version: string; installed: boolean }> {
   const workspaceDir = path.resolve(params.workspaceDir);
+  reconcilePnpmWorkspace(workspaceDir);
   const packageManager = selectPackageManager(workspaceDir, params.packageManager);
   const before = probeWorkspaceInstall(workspaceDir);
   if (before.ok && !params.force) {
@@ -94,9 +100,11 @@ export async function ensureWorkspaceInstall(params: {
         `Run: cd ${workspaceDir} && ${packageManager} install`,
     );
   }
+  const installArgs = ["install"];
+  if (params.force && before.ok) installArgs.push("--force");
   params.onProgress?.({ message: `Installing dependencies with ${packageManager}` });
   const result = await new Promise<{ status: number | null }>((resolve, reject) => {
-    const child = spawn(packageManager, installArgs(packageManager, !!params.force && before.ok), {
+    const child = spawn(packageManager, installArgs, {
       cwd: workspaceDir,
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
