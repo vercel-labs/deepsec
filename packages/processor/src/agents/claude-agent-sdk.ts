@@ -1,6 +1,7 @@
 import { query, type SandboxSettings } from "@anthropic-ai/claude-agent-sdk";
 import type { RefusalReport } from "@deepsec/core";
 import {
+  AgentPolicyRefusalError,
   attributionHeaders,
   backoff,
   buildInvestigateJsonRepairPrompt,
@@ -493,6 +494,17 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
     try {
       parsed = parseInvestigateResults(resultText, batch);
     } catch (err) {
+      if (err instanceof AgentPolicyRefusalError) {
+        writeParseFailureDebug({
+          projectId,
+          phase: "investigate",
+          agentType: this.type,
+          resultText,
+          error: err,
+          batch,
+        });
+        throw err;
+      }
       yield {
         type: "thinking" as const,
         message: "Claude returned non-JSON investigation output; requesting JSON-only repair",
@@ -727,6 +739,17 @@ export class ClaudeAgentSdkPlugin implements AgentPlugin {
     try {
       verdicts = parseRevalidateVerdicts(resultText);
     } catch (err) {
+      if (err instanceof AgentPolicyRefusalError) {
+        writeParseFailureDebug({
+          projectId,
+          phase: "revalidate",
+          agentType: this.type,
+          resultText,
+          error: err,
+          batch,
+        });
+        throw err;
+      }
       yield {
         type: "thinking" as const,
         message: "Claude returned non-JSON revalidation output; requesting JSON-only repair",

@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AgentPolicyRefusalError,
   attributionHeaders,
   buildInvestigateFieldRepairPrompt,
   buildInvestigateJsonRepairPrompt,
   buildRevalidateJsonRepairPrompt,
+  classifyPolicyRefusal,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
   isGatewayBaseUrl,
@@ -197,6 +199,50 @@ describe("QuotaExhaustedError", () => {
     expect(e.rawMessage).toContain("credit balance");
     expect(e.message).toContain("anthropic-credits");
     expect(e.name).toBe("QuotaExhaustedError");
+    expect(e instanceof Error).toBe(true);
+  });
+});
+
+describe("classifyPolicyRefusal", () => {
+  it("recognizes the Claude Code usage-policy refusal (issue #92)", () => {
+    const text =
+      "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup). Try rephrasing the request or attempting a different approach. Request ID: req_123";
+    expect(classifyPolicyRefusal(text)).toBe("anthropic-usage-policy");
+  });
+
+  it("recognizes OpenAI safety-system rejections", () => {
+    expect(classifyPolicyRefusal('{"error":{"code":"invalid_prompt"}}')).toBe(
+      "openai-safety-system",
+    );
+    expect(classifyPolicyRefusal("The prompt was rejected as a result of our safety system.")).toBe(
+      "openai-safety-system",
+    );
+  });
+
+  it("recognizes generic content-policy envelopes", () => {
+    expect(classifyPolicyRefusal('{"error":{"type":"content_policy_violation"}}')).toBe(
+      "content-policy",
+    );
+  });
+
+  it("returns undefined for ordinary malformed output and prose", () => {
+    // Strict on purpose: relabeling broken JSON as a refusal would report
+    // zero coverage where the real problem is formatting — worse than the
+    // status quo. Misses degrade to the existing fail-loud parse error.
+    expect(classifyPolicyRefusal("not JSON at all")).toBeUndefined();
+    expect(classifyPolicyRefusal('```json\n[{"filePath":')).toBeUndefined();
+    expect(classifyPolicyRefusal("")).toBeUndefined();
+    expect(classifyPolicyRefusal("You've hit your usage limit.")).toBeUndefined();
+  });
+});
+
+describe("AgentPolicyRefusalError", () => {
+  it("carries source + raw, and the message includes both", () => {
+    const e = new AgentPolicyRefusalError("anthropic-usage-policy", "API Error: Claude Code…");
+    expect(e.source).toBe("anthropic-usage-policy");
+    expect(e.rawMessage).toContain("API Error");
+    expect(e.message).toContain("anthropic-usage-policy");
+    expect(e.name).toBe("AgentPolicyRefusalError");
     expect(e instanceof Error).toBe(true);
   });
 });
@@ -403,6 +449,28 @@ describe("parseInvestigateResults", () => {
     );
   });
 
+  it("throws AgentPolicyRefusalError (not a parse error) on a provider policy refusal", () => {
+    // A refusal must never reach jsonrepair or surface as a formatting
+    // problem: the batch has zero coverage, and the repair follow-up would
+    // accept an empty findings array as a valid answer.
+    const refusal =
+      "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup). Try rephrasing the request or attempting a different approach.";
+    expect(() => parseInvestigateResults(refusal, batch)).toThrow(AgentPolicyRefusalError);
+  });
+
+  it("does NOT flag valid findings JSON that quotes refusal text as evidence", () => {
+    // Classification runs only inside the JSON.parse catch, so a finding
+    // citing a refusal string parses like any other.
+    const finding = validFinding({
+      description:
+        "Endpoint relays the upstream string 'unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup)' verbatim to clients.",
+    });
+    const text = `\`\`\`json\n[{"filePath":"a.ts","findings":[${JSON.stringify(finding)}]}]\n\`\`\``;
+    const out = parseInvestigateResults(text, batch);
+    expect(out.results.find((r) => r.filePath === "a.ts")?.findings).toHaveLength(1);
+    expect(out.invalid).toEqual([]);
+  });
+
   it("salvages valid findings and reports invalid ones instead of dropping the file", () => {
     // One bad enum used to poison the whole file record downstream: the
     // read-side schema rejected the record and every valid finding in it
@@ -578,6 +646,12 @@ describe("parseRevalidateVerdicts", () => {
 
   it("throws on parse failure", () => {
     expect(() => parseRevalidateVerdicts("garbage")).toThrow(/wasn't parseable JSON/);
+  });
+
+  it("throws AgentPolicyRefusalError on a provider policy refusal", () => {
+    const refusal =
+      "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup).";
+    expect(() => parseRevalidateVerdicts(refusal)).toThrow(AgentPolicyRefusalError);
   });
 });
 
