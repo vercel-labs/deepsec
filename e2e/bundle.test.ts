@@ -34,6 +34,18 @@ function makeWorkspace(): string {
   return dir;
 }
 
+function removeSymlinkIfPresent(linkPath: string): void {
+  try {
+    if (fs.lstatSync(linkPath).isSymbolicLink()) {
+      fs.unlinkSync(linkPath);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+}
+
 describe("bundle e2e", () => {
   beforeAll(() => {
     if (!fs.existsSync(BUNDLE)) {
@@ -186,7 +198,7 @@ export default defineConfig({
       expect(stdout).toContain("webapp-debug-flag");
       expect(stdout).toContain("webapp-route-no-rate-limit");
     } finally {
-      fs.rmSync(link, { force: true });
+      removeSymlinkIfPresent(link);
       fs.rmSync(path.join(sampleDir, "data"), { recursive: true, force: true });
     }
   });
