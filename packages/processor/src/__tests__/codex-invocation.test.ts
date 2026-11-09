@@ -13,9 +13,12 @@ const KEYS = [
   "ANTHROPIC_BASE_URL",
   "CODEX_HOME",
   "DEEPSEC_INSIDE_SANDBOX",
+  "HOME",
+  "USERPROFILE",
 ] as const;
 const saved: Record<string, string | undefined> = {};
 const tempDirs: string[] = [];
+let fakeHome = "";
 
 function tempCodexHome(withLogin: boolean): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-route-test-"));
@@ -29,6 +32,11 @@ beforeEach(() => {
     saved[key] = process.env[key];
     delete process.env[key];
   }
+  // findCodexSubscriptionAuth falls back to os.homedir()/.codex. Point HOME
+  // at an empty directory so the no-login case does not depend on the host.
+  fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-home-test-"));
+  process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
 });
 
 afterEach(() => {
@@ -36,6 +44,7 @@ afterEach(() => {
     if (saved[key] === undefined) delete process.env[key];
     else process.env[key] = saved[key];
   }
+  fs.rmSync(fakeHome, { recursive: true, force: true });
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 

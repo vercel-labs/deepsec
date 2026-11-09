@@ -58,6 +58,17 @@ describe("buildAgentConfig", () => {
     ).toMatchObject({ modelAuth: "direct" });
   });
 
+  it("does not inherit the saved local mode when --ai-* overrides are present", () => {
+    setLoadedConfig(defineConfig({ projects: [], ai: { mode: "local", provider: "local" } }));
+    expect(
+      buildAgentConfig({ model: "openai/gpt-5.5", aiApiKeyEnv: "MY_MODEL_KEY" }),
+    ).not.toHaveProperty("modelAuth");
+    expect(
+      buildAgentConfig({ model: "openai/gpt-5.5", aiBaseUrl: "https://my-gateway.test/v1" }),
+    ).not.toHaveProperty("modelAuth");
+    expect(buildAgentConfig({ model: "gpt-5.5" })).toMatchObject({ modelAuth: "local" });
+  });
+
   it("maps --thinking-level to both harness config keys", () => {
     expect(
       buildAgentConfig({
