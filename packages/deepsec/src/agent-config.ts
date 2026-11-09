@@ -85,5 +85,9 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
     config.aiCredentialHeader = credentialHeader;
   }
   if (aiHeaders) config.aiHeaders = aiHeaders;
+  // The saved route mode travels with the run so backends can keep a
+  // local-subscription choice ahead of ambient provider API keys.
+  const modelAuth = opts.modelRoute?.mode ?? getConfig()?.ai?.mode;
+  if (modelAuth) config.modelAuth = modelAuth;
   return config;
 }

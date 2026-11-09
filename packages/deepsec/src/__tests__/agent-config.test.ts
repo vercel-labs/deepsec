@@ -47,6 +47,17 @@ describe("buildAgentConfig", () => {
     });
   });
 
+  it("records the saved model-auth mode for agent backends", () => {
+    setLoadedConfig(defineConfig({ projects: [], ai: { mode: "local", provider: "local" } }));
+    expect(buildAgentConfig({ model: "gpt-5.5" })).toMatchObject({ modelAuth: "local" });
+    expect(
+      buildAgentConfig({
+        model: "gpt-5.5",
+        modelRoute: { mode: "direct", provider: "openai", apiKeyEnv: "OPENAI_API_KEY" },
+      }),
+    ).toMatchObject({ modelAuth: "direct" });
+  });
+
   it("maps --thinking-level to both harness config keys", () => {
     expect(
       buildAgentConfig({

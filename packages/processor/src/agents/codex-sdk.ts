@@ -312,15 +312,29 @@ export function buildGatewayProviderConfig(
   return providerConfig;
 }
 
-function buildCodexInvocation(): CodexInvocation {
+export function buildCodexInvocation(agentConfig: Record<string, unknown> = {}): CodexInvocation {
   // Decide between gateway mode (orchestrator has an API token, we route
   // through Vercel AI Gateway via a custom provider) and subscription mode
   // (no token but the user has run `codex login` on this machine — let
   // codex use its default openai provider against their session). Sandbox
   // workers always go gateway; the preflight ensures a token is present
   // before we ever get here in that path.
-  const haveApiToken = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  //
+  // A saved local-subscription route is an explicit choice, so it outranks
+  // ambient OPENAI_API_KEY / ANTHROPIC_AUTH_TOKEN values, such as the ones a
+  // direnv setup exports for other tools. Sandbox workers are exempt: they
+  // have no machine-wide login and receive a brokered key instead.
+  const localRoute =
+    process.env.DEEPSEC_INSIDE_SANDBOX !== "1" && agentConfig.modelAuth === "local";
+  const haveApiToken = localRoute
+    ? false
+    : !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
   const subscriptionHome = haveApiToken ? null : findCodexSubscriptionAuth();
+  if (localRoute && !subscriptionHome) {
+    throw new Error(
+      "Local-subscription model route selected, but no Codex login was found (expected auth.json in CODEX_HOME or ~/.codex). Run `codex login`, or choose a credential route during setup.",
+    );
+  }
 
   const codexHome = makeCodexHome();
   if (subscriptionHome) {
@@ -685,7 +699,7 @@ async function runToollessFollowUp(
 export async function runCodexSetupTask(params: SetupTaskParams): Promise<string> {
   const model = (params.config.model as string) ?? DEFAULT_MODEL;
   const effort = (params.config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
-  const invocation = buildCodexInvocation();
+  const invocation = buildCodexInvocation(params.config);
   const codex = new Codex(invocation.options);
   const messages: string[] = [];
   let failure = "";
@@ -754,7 +768,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
 
     const basePrompt = buildInvestigatePrompt({ promptTemplate, projectInfo, batch });
     const prompt = `${codexEnvironmentPreamble(projectRoot)}\n\n${basePrompt}`;
-    const invocation = buildCodexInvocation();
+    const invocation = buildCodexInvocation(config);
     // Idempotent cleanup the finally block runs whether we exit via return,
     // throw, or generator close. Each helper swallows missing-target errors,
     // so calling them twice is safe.
@@ -1074,7 +1088,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       message: `Revalidating ${totalFindings} finding(s) across ${batch.length} file(s) with Codex SDK (${model})`,
     };
 
-    const invocation = buildCodexInvocation();
+    const invocation = buildCodexInvocation(config);
     let cleanedUp = false;
     const cleanup = (): void => {
       if (cleanedUp) return;
