@@ -141,6 +141,7 @@ export const IGNORE_DIRS = [
   "**/test/**",
   "**/tests/**",
   "**/fixtures/**",
+  "**/vendor/**",
   "**/testserver/**",
   "**/*.d.ts",
   "**/jest-setup.*",
