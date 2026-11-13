@@ -41,6 +41,14 @@ function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
 }
 
+export function rejectCyberAccessProgram(args: string[]): void {
+  if (args.some((a) => a === "--cyber-access-program" || a.startsWith("--cyber-access-program="))) {
+    throw new Error(
+      "--cyber-access-program needs Codex subscription auth, which sandbox workers don't have. Run process or revalidate locally instead.",
+    );
+  }
+}
+
 /**
  * Extract `--reinvestigate` in its optional-arg form. Returns:
  *   undefined — flag not present
@@ -146,6 +154,7 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   }
 
   const projectId = resolveProjectId(opts.projectId);
+  rejectCyberAccessProgram(opts.args ?? []);
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
 
   if (!config.aiApiKeyEnv && !config.aiBaseUrl) {
