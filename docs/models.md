@@ -117,6 +117,36 @@ Like other subcommand flags, it passes through sandbox mode unchanged:
 pnpm deepsec sandbox process --project-id my-app --sandboxes 30 --thinking-level high
 ```
 
+## Cyber access programs
+
+If your ChatGPT account is enrolled in an OpenAI Cyber access program such as
+Daybreak, pass `--cyber-access-program` to `process` or `revalidate` so that
+every Codex turn requests it:
+
+```bash
+pnpm deepsec process --project-id my-app --agent codex --model gpt-5.6-sol --cyber-access-program daybreak_blue
+```
+
+Accepted values are `standard`, `daybreak_blue`, and `daybreak_red`. To set
+the program for every run, add it to `deepsec.config.ts`:
+
+```ts
+export default defineConfig({
+  projects: [/* ... */],
+  codex: { cyberAccessProgram: "daybreak_blue" },
+});
+```
+
+The flag requires the Codex backend and a logged-in `codex` CLI (the `local`
+route). Deepsec rejects the flag with `--agent claude` or `--agent pi`, and
+it ignores the config value when another backend runs. Codex only accepts
+the program on OpenAI's built-in provider, so deepsec also rejects it when
+`OPENAI_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is set, because those route Codex
+through AI Gateway. For the same reason, sandbox runs can't use it.
+
+Deepsec runs Codex with a temporary `CODEX_HOME`, so the Daybreak toggle in
+the Codex desktop app doesn't carry over. Set the program explicitly.
+
 ## Why these defaults
 
 ### `claude-opus-4-8` for `process` and `revalidate`

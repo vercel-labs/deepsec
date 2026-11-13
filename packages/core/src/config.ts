@@ -33,6 +33,11 @@ export interface DeepsecConfig {
   defaultModel?: string;
   /** Harness-neutral effort level selected with the default model. */
   defaultThinkingLevel?: string;
+  /** Codex-only settings; ignored when another agent runs. */
+  codex?: {
+    /** OpenAI Cyber access program requested on every turn. Needs Codex subscription auth. */
+    cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
+  };
   /** Non-secret default model credential route. Secret values stay in env/.env.local. */
   ai?: {
     mode: "gateway" | "direct" | "custom" | "local";

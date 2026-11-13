@@ -1,9 +1,12 @@
 import { getConfig } from "@deepsec/core";
+import { findCodexSubscriptionHome } from "@deepsec/processor";
 import { defaultCredentialHeaderScheme, type ModelRoute } from "./auth/model-route.js";
 
 const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+const CYBER_ACCESS_PROGRAMS = ["standard", "daybreak_blue", "daybreak_red"] as const;
 
 interface AgentRuntimeOpts {
+  agentType: string;
   model?: string;
   maxTurns?: number;
   thinkingLevel?: string;
@@ -11,6 +14,7 @@ interface AgentRuntimeOpts {
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
   aiHeader?: string[];
+  cyberAccessProgram?: string;
   modelRoute?: ModelRoute;
 }
 
@@ -85,5 +89,27 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
     config.aiCredentialHeader = credentialHeader;
   }
   if (aiHeaders) config.aiHeaders = aiHeaders;
+  const cyberAccessProgram = resolveCyberAccessProgram(opts);
+  if (cyberAccessProgram) config.cyberAccessProgram = cyberAccessProgram;
   return config;
+}
+
+function resolveCyberAccessProgram(opts: AgentRuntimeOpts): string | undefined {
+  if (opts.agentType !== "codex") {
+    if (opts.cyberAccessProgram) throw new Error("--cyber-access-program requires --agent codex");
+    return undefined;
+  }
+  const program = opts.cyberAccessProgram ?? getConfig()?.codex?.cyberAccessProgram;
+  if (!program) return undefined;
+  if (!(CYBER_ACCESS_PROGRAMS as readonly string[]).includes(program)) {
+    throw new Error(
+      `--cyber-access-program must be one of ${CYBER_ACCESS_PROGRAMS.join(", ")}, got "${program}"`,
+    );
+  }
+  if (!findCodexSubscriptionHome()) {
+    throw new Error(
+      `--cyber-access-program only works with Codex subscription auth. Run \`codex login\` and unset OPENAI_API_KEY and ANTHROPIC_AUTH_TOKEN.`,
+    );
+  }
+  return program;
 }

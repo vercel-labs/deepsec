@@ -8,6 +8,7 @@ import type { RefusalReport } from "@deepsec/core";
 import {
   Codex,
   type CodexOptions,
+  type CyberAccessProgram,
   type ModelReasoningEffort,
   type ThreadEvent,
   type ThreadItem,
@@ -312,15 +313,21 @@ export function buildGatewayProviderConfig(
   return providerConfig;
 }
 
-function buildCodexInvocation(): CodexInvocation {
-  // Decide between gateway mode (orchestrator has an API token, we route
-  // through Vercel AI Gateway via a custom provider) and subscription mode
-  // (no token but the user has run `codex login` on this machine — let
-  // codex use its default openai provider against their session). Sandbox
-  // workers always go gateway; the preflight ensures a token is present
-  // before we ever get here in that path.
+/**
+ * Decide between gateway mode (orchestrator has an API token, we route
+ * through Vercel AI Gateway via a custom provider) and subscription mode
+ * (no token but the user has run `codex login` on this machine — let
+ * codex use its default openai provider against their session). Sandbox
+ * workers always go gateway; the preflight ensures a token is present
+ * before we ever get here in that path.
+ */
+export function findCodexSubscriptionHome(): string | null {
   const haveApiToken = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  const subscriptionHome = haveApiToken ? null : findCodexSubscriptionAuth();
+  return haveApiToken ? null : findCodexSubscriptionAuth();
+}
+
+function buildCodexInvocation(): CodexInvocation {
+  const subscriptionHome = findCodexSubscriptionHome();
 
   const codexHome = makeCodexHome();
   if (subscriptionHome) {
@@ -641,6 +648,7 @@ async function runRefusalFollowUp(
   threadId: string | undefined,
   projectRoot: string,
   model: string,
+  cyberAccessProgram: CyberAccessProgram | undefined,
 ): Promise<RefusalReport | undefined> {
   const raw = await runToollessFollowUp(
     codex,
@@ -648,6 +656,7 @@ async function runRefusalFollowUp(
     projectRoot,
     model,
     REFUSAL_FOLLOWUP_PROMPT,
+    cyberAccessProgram,
   );
   if (raw === undefined) return undefined;
   return parseRefusalReport(raw);
@@ -659,6 +668,7 @@ async function runToollessFollowUp(
   projectRoot: string,
   model: string,
   prompt: string,
+  cyberAccessProgram: CyberAccessProgram | undefined,
 ): Promise<string | undefined> {
   if (!threadId) return undefined;
 
@@ -673,7 +683,7 @@ async function runToollessFollowUp(
       networkAccessEnabled: false,
       modelReasoningEffort: "low",
     });
-    const turn = await thread.run(prompt);
+    const turn = await thread.run(prompt, { cyberAccessProgram });
     raw = turn.finalResponse ?? "";
   } catch {
     return undefined;
@@ -685,6 +695,7 @@ async function runToollessFollowUp(
 export async function runCodexSetupTask(params: SetupTaskParams): Promise<string> {
   const model = (params.config.model as string) ?? DEFAULT_MODEL;
   const effort = (params.config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
+  const cyberAccessProgram = params.config.cyberAccessProgram as CyberAccessProgram | undefined;
   const invocation = buildCodexInvocation();
   const codex = new Codex(invocation.options);
   const messages: string[] = [];
@@ -705,7 +716,10 @@ export async function runCodexSetupTask(params: SetupTaskParams): Promise<string
       webSearchEnabled: false,
     });
     const prompt = `${codexEnvironmentPreamble(params.projectRoot)}\n\n${params.prompt}`;
-    const { events } = await thread.runStreamed(prompt, { signal: params.signal });
+    const { events } = await thread.runStreamed(prompt, {
+      signal: params.signal,
+      cyberAccessProgram,
+    });
     for await (const event of events as AsyncGenerator<ThreadEvent>) {
       if (event.type === "item.completed") {
         const progress = itemToProgress(event.item);
@@ -746,6 +760,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     const { batch, projectRoot, promptTemplate, projectInfo, config, signal, projectId } = params;
     const model = (config.model as string) ?? DEFAULT_MODEL;
     const effort = (config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
+    const cyberAccessProgram = config.cyberAccessProgram as CyberAccessProgram | undefined;
 
     yield {
       type: "started",
@@ -806,7 +821,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
             modelReasoningEffort: effort,
             webSearchEnabled: false,
           });
-          const { events } = await thread.runStreamed(prompt, { signal });
+          const { events } = await thread.runStreamed(prompt, { signal, cyberAccessProgram });
 
           for await (const event of events as AsyncGenerator<ThreadEvent>) {
             switch (event.type) {
@@ -965,6 +980,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           projectRoot,
           model,
           buildInvestigateJsonRepairPrompt(batch),
+          cyberAccessProgram,
         );
         if (repairText === undefined) {
           writeParseFailureDebug({
@@ -999,7 +1015,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           results: parsed,
           invalid: parsedOutcome.invalid,
           batch,
-          followUp: (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p),
+          followUp: (p) =>
+            runToollessFollowUp(codex, threadId, projectRoot, model, p, cyberAccessProgram),
           agentLabel: "Codex",
           agentType: this.type,
           projectId,
@@ -1016,7 +1033,13 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         };
       }
 
-      const refusal = await runRefusalFollowUp(codex, threadId, projectRoot, model);
+      const refusal = await runRefusalFollowUp(
+        codex,
+        threadId,
+        projectRoot,
+        model,
+        cyberAccessProgram,
+      );
       if (refusal?.refused) {
         yield {
           type: "thinking" as const,
@@ -1057,6 +1080,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     } = params;
     const model = (config.model as string) ?? DEFAULT_MODEL;
     const effort = (config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
+    const cyberAccessProgram = config.cyberAccessProgram as CyberAccessProgram | undefined;
 
     const built = buildRevalidatePrompt({
       batch,
@@ -1117,7 +1141,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
             modelReasoningEffort: effort,
             webSearchEnabled: false,
           });
-          const { events } = await thread.runStreamed(prompt, { signal });
+          const { events } = await thread.runStreamed(prompt, { signal, cyberAccessProgram });
 
           for await (const event of events as AsyncGenerator<ThreadEvent>) {
             switch (event.type) {
@@ -1251,6 +1275,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           projectRoot,
           model,
           jsonRepairPrompt,
+          cyberAccessProgram,
         );
         if (repairText === undefined) {
           writeParseFailureDebug({
@@ -1295,13 +1320,19 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         verdicts,
         initialRawText: parsedText,
         followUp: threadId
-          ? (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p)
+          ? (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p, cyberAccessProgram)
           : undefined,
         agentLabel: "Codex",
       });
       verdicts = repair.verdicts;
 
-      const refusal = await runRefusalFollowUp(codex, threadId, projectRoot, model);
+      const refusal = await runRefusalFollowUp(
+        codex,
+        threadId,
+        projectRoot,
+        model,
+        cyberAccessProgram,
+      );
       if (refusal?.refused) {
         yield {
           type: "thinking" as const,
