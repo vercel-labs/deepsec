@@ -107,9 +107,15 @@ function resolveCyberAccessProgram(opts: AgentRuntimeOpts): string | undefined {
     );
   }
   if (!findCodexSubscriptionHome()) {
-    throw new Error(
-      `--cyber-access-program only works with Codex subscription auth. Run \`codex login\` and unset OPENAI_API_KEY and ANTHROPIC_AUTH_TOKEN.`,
+    if (opts.cyberAccessProgram) {
+      throw new Error(
+        `--cyber-access-program only works with Codex subscription auth. Run \`codex login\` and unset OPENAI_API_KEY and ANTHROPIC_AUTH_TOKEN.`,
+      );
+    }
+    console.warn(
+      "Ignoring codex.cyberAccessProgram from deepsec.config.ts: this run doesn't use Codex subscription auth.",
     );
+    return undefined;
   }
   return program;
 }

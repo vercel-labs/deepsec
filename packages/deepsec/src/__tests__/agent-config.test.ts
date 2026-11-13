@@ -137,6 +137,17 @@ describe("buildAgentConfig cyberAccessProgram", () => {
     ).toThrow(/must be one of standard, daybreak_blue, daybreak_red/);
   });
 
+  it("ignores the config value in gateway mode", () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-test");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setLoadedConfig(defineConfig({ projects: [], codex: { cyberAccessProgram: "daybreak_blue" } }));
+    expect(buildAgentConfig({ agentType: "codex" })).not.toHaveProperty("cyberAccessProgram");
+    expect(warn).toHaveBeenCalledWith(
+      "Ignoring codex.cyberAccessProgram from deepsec.config.ts: this run doesn't use Codex subscription auth.",
+    );
+    warn.mockRestore();
+  });
+
   it("rejects gateway mode, whose custom provider cannot carry the program", () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-test");
     expect(() =>

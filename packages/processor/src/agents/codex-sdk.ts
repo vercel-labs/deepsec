@@ -283,6 +283,7 @@ interface CodexInvocation {
   stderrLog: string | null;
   /** Tempdir under /tmp that was created for this invocation; cleanup on exit */
   codexHome: string;
+  cyberAccessProgram: CyberAccessProgram | undefined;
 }
 
 /**
@@ -326,7 +327,9 @@ export function findCodexSubscriptionHome(): string | null {
   return haveApiToken ? null : findCodexSubscriptionAuth();
 }
 
-function buildCodexInvocation(): CodexInvocation {
+export function buildCodexInvocation(
+  requestedCyberAccessProgram: CyberAccessProgram | undefined,
+): CodexInvocation {
   const subscriptionHome = findCodexSubscriptionHome();
 
   const codexHome = makeCodexHome();
@@ -370,7 +373,7 @@ function buildCodexInvocation(): CodexInvocation {
     const env = buildCodexEnv(extras);
     const options: CodexOptions = { env, config: pluginLockdown };
     if (codexPathOverride) options.codexPathOverride = codexPathOverride;
-    return { options, stderrLog, codexHome };
+    return { options, stderrLog, codexHome, cyberAccessProgram: requestedCyberAccessProgram };
   }
 
   // Gateway mode (default): AI Gateway exposes an OpenAI-compatible
@@ -405,7 +408,7 @@ function buildCodexInvocation(): CodexInvocation {
     env: buildCodexEnv(extras),
   };
   if (codexPathOverride) options.codexPathOverride = codexPathOverride;
-  return { options, stderrLog, codexHome };
+  return { options, stderrLog, codexHome, cyberAccessProgram: undefined };
 }
 
 /**
@@ -695,8 +698,10 @@ async function runToollessFollowUp(
 export async function runCodexSetupTask(params: SetupTaskParams): Promise<string> {
   const model = (params.config.model as string) ?? DEFAULT_MODEL;
   const effort = (params.config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
-  const cyberAccessProgram = params.config.cyberAccessProgram as CyberAccessProgram | undefined;
-  const invocation = buildCodexInvocation();
+  const invocation = buildCodexInvocation(
+    params.config.cyberAccessProgram as CyberAccessProgram | undefined,
+  );
+  const { cyberAccessProgram } = invocation;
   const codex = new Codex(invocation.options);
   const messages: string[] = [];
   let failure = "";
@@ -760,7 +765,6 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     const { batch, projectRoot, promptTemplate, projectInfo, config, signal, projectId } = params;
     const model = (config.model as string) ?? DEFAULT_MODEL;
     const effort = (config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
-    const cyberAccessProgram = config.cyberAccessProgram as CyberAccessProgram | undefined;
 
     yield {
       type: "started",
@@ -769,7 +773,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
 
     const basePrompt = buildInvestigatePrompt({ promptTemplate, projectInfo, batch });
     const prompt = `${codexEnvironmentPreamble(projectRoot)}\n\n${basePrompt}`;
-    const invocation = buildCodexInvocation();
+    const invocation = buildCodexInvocation(
+      config.cyberAccessProgram as CyberAccessProgram | undefined,
+    );
+    const { cyberAccessProgram } = invocation;
     // Idempotent cleanup the finally block runs whether we exit via return,
     // throw, or generator close. Each helper swallows missing-target errors,
     // so calling them twice is safe.
@@ -1080,7 +1087,6 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     } = params;
     const model = (config.model as string) ?? DEFAULT_MODEL;
     const effort = (config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
-    const cyberAccessProgram = config.cyberAccessProgram as CyberAccessProgram | undefined;
 
     const built = buildRevalidatePrompt({
       batch,
@@ -1098,7 +1104,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       message: `Revalidating ${totalFindings} finding(s) across ${batch.length} file(s) with Codex SDK (${model})`,
     };
 
-    const invocation = buildCodexInvocation();
+    const invocation = buildCodexInvocation(
+      config.cyberAccessProgram as CyberAccessProgram | undefined,
+    );
+    const { cyberAccessProgram } = invocation;
     let cleanedUp = false;
     const cleanup = (): void => {
       if (cleanedUp) return;
