@@ -240,26 +240,51 @@ type RefusalSource = "anthropic-usage-policy" | "openai-safety-system" | "conten
  */
 export function classifyPolicyRefusal(msg: string): RefusalSource | undefined {
   if (!msg) return undefined;
+  const payload = extractAgentJsonPayload(msg).replace(
+    /^(?:API )?Error:\s*(?:\d{3}\s+)?(?=\{)/i,
+    "",
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    // Finding evidence is data; classify only prose outside JSON candidates.
+    if (payload.startsWith("{")) return undefined;
+    const candidate = extractArrayCandidateForRepair(payload);
+    const prose = candidate.startsWith("[") ? payload.slice(0, payload.indexOf(candidate)) : msg;
+    return classifyPolicyRefusalMessage(prose);
+  }
+
+  if (typeof parsed === "string") return classifyPolicyRefusalMessage(parsed);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !("error" in parsed)) {
+    return undefined;
+  }
+  const error = parsed.error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return undefined;
+  const fields = error as Record<string, unknown>;
+  if (fields.code === "invalid_prompt" || fields.type === "invalid_prompt") {
+    return "openai-safety-system";
+  }
+  if (fields.code === "content_policy_violation" || fields.type === "content_policy_violation") {
+    return "content-policy";
+  }
+  return typeof fields.message === "string"
+    ? classifyPolicyRefusalMessage(fields.message)
+    : undefined;
+}
+
+function classifyPolicyRefusalMessage(msg: string): RefusalSource | undefined {
   const m = msg.toLowerCase();
 
   // Claude Code usage-policy block:
   //   "API Error: Claude Code is unable to respond to this request, which
   //   appears to violate our Usage Policy (https://www.anthropic.com/legal/aup)."
-  if (
-    /anthropic\.com\/legal\/aup/.test(m) ||
-    (/unable to respond to this request/.test(m) && /usage polic/.test(m))
-  ) {
+  if (/unable to respond to this request/.test(m) && /usage polic/.test(m)) {
     return "anthropic-usage-policy";
   }
 
-  // OpenAI safety-system rejection: the `invalid_prompt` error code, or the
-  // prose form that accompanies it.
-  if (/\binvalid_prompt\b/.test(m) || /rejected as a result of our safety system/.test(m)) {
+  if (/rejected as a result of our safety system/.test(m)) {
     return "openai-safety-system";
-  }
-
-  if (/\bcontent_policy_violation\b/.test(m)) {
-    return "content-policy";
   }
 
   return undefined;
@@ -813,10 +838,6 @@ function parseAgentJsonArray(params: {
   try {
     parsed = JSON.parse(jsonPayload);
   } catch (strictErr) {
-    // Classify before attempting repair, so a refusal is never "repaired"
-    // into a valid-but-empty findings array. Doing it inside the catch —
-    // rather than before JSON.parse — means valid findings JSON that merely
-    // quotes refusal text as evidence parses normally.
     const refusalSource = classifyPolicyRefusal(resultText);
     if (refusalSource) {
       throw new AgentPolicyRefusalError(refusalSource, resultText);
@@ -834,6 +855,10 @@ function parseAgentJsonArray(params: {
     }
 
     if (!Array.isArray(parsed)) {
+      const refusalSource = classifyPolicyRefusal(JSON.stringify(parsed));
+      if (refusalSource) {
+        throw new AgentPolicyRefusalError(refusalSource, resultText);
+      }
       const excerpt = resultText.slice(0, 400).replace(/\s+/g, " ");
       throw new Error(
         `${parseFailurePrefix}: ${strictErr instanceof Error ? strictErr.message : strictErr}. ` +
@@ -846,6 +871,10 @@ function parseAgentJsonArray(params: {
   }
 
   if (!Array.isArray(parsed)) {
+    const refusalSource = classifyPolicyRefusal(jsonPayload);
+    if (refusalSource) {
+      throw new AgentPolicyRefusalError(refusalSource, resultText);
+    }
     throw new Error(nonArrayMessage(parsed));
   }
 

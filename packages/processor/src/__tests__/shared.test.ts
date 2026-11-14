@@ -233,8 +233,41 @@ describe("classifyPolicyRefusal", () => {
     expect(classifyPolicyRefusal('```json\n[{"filePath":')).toBeUndefined();
     expect(classifyPolicyRefusal("")).toBeUndefined();
     expect(classifyPolicyRefusal("You've hit your usage limit.")).toBeUndefined();
+    expect(
+      classifyPolicyRefusal("Source declares invalid_prompt and content_policy_violation"),
+    ).toBeUndefined();
+    expect(classifyPolicyRefusal("See https://www.anthropic.com/legal/aup")).toBeUndefined();
+  });
+
+  it("recognizes a CLI-prefixed provider envelope", () => {
+    expect(classifyPolicyRefusal('API Error: 400 {"error":{"code":"invalid_prompt"}}')).toBe(
+      "openai-safety-system",
+    );
+  });
+
+  it("does not classify an envelope quoted inside findings", () => {
+    const findings = [{ description: '{"error":{"code":"invalid_prompt"}}' }];
+    expect(classifyPolicyRefusal(JSON.stringify(findings))).toBeUndefined();
   });
 });
+
+const policyRefusalOutputs = [
+  '{"error":{"code":"invalid_prompt"}}',
+  '```json\n{"error":{"type":"content_policy_violation"}}\n```',
+  '{"type":"error","error":{"type":"invalid_request_error","message":"Claude Code is unable to respond to this request, which appears to violate our Usage Policy."}}',
+  'API Error: 400 {"error":{"code":"invalid_prompt"}}',
+  '{"error":{"code":"invalid_prompt",}}',
+  "The prompt was rejected as a result of our safety system. []",
+];
+
+const quotedRefusalEvidence = [
+  "invalid_prompt",
+  "content_policy_violation",
+  "https://www.anthropic.com/legal/aup",
+  "unable to respond to this request, which appears to violate our Usage Policy",
+  "rejected as a result of our safety system",
+  '{"error":{"code":"invalid_prompt"}}',
+];
 
 describe("AgentPolicyRefusalError", () => {
   it("carries source + raw, and the message includes both", () => {
@@ -450,17 +483,33 @@ describe("parseInvestigateResults", () => {
   });
 
   it("throws AgentPolicyRefusalError (not a parse error) on a provider policy refusal", () => {
-    // A refusal must never reach jsonrepair or surface as a formatting
-    // problem: the batch has zero coverage, and the repair follow-up would
-    // accept an empty findings array as a valid answer.
+    // A refusal must skip the model repair follow-up: the batch has no coverage.
     const refusal =
       "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup). Try rephrasing the request or attempting a different approach.";
     expect(() => parseInvestigateResults(refusal, batch)).toThrow(AgentPolicyRefusalError);
   });
 
+  it.each(
+    policyRefusalOutputs,
+  )("classifies a provider refusal before a repair follow-up: %s", (text) => {
+    expect(() => parseInvestigateResults(text, batch)).toThrow(AgentPolicyRefusalError);
+  });
+
+  it.each(quotedRefusalEvidence)("repairs findings quoting refusal evidence: %s", (evidence) => {
+    const finding = validFinding({ description: evidence });
+    const json = JSON.stringify([{ filePath: "a.ts", findings: [finding] }]);
+    for (const prefix of ["Confirmed:\n```json\n", "Confirmed:\n", ""]) {
+      const text = `${prefix}${json.slice(0, -1)},]`;
+      const out = parseInvestigateResults(text, batch);
+      expect(out.results.find((r) => r.filePath === "a.ts")?.findings[0]?.description).toBe(
+        evidence,
+      );
+      expect(out.invalid).toEqual([]);
+    }
+  });
+
   it("does NOT flag valid findings JSON that quotes refusal text as evidence", () => {
-    // Classification runs only inside the JSON.parse catch, so a finding
-    // citing a refusal string parses like any other.
+    // Finding evidence is data, including when it quotes a provider refusal.
     const finding = validFinding({
       description:
         "Endpoint relays the upstream string 'unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup)' verbatim to clients.",
@@ -652,6 +701,22 @@ describe("parseRevalidateVerdicts", () => {
     const refusal =
       "API Error: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup).";
     expect(() => parseRevalidateVerdicts(refusal)).toThrow(AgentPolicyRefusalError);
+  });
+
+  it.each(
+    policyRefusalOutputs,
+  )("classifies a provider refusal before a repair follow-up: %s", (text) => {
+    expect(() => parseRevalidateVerdicts(text)).toThrow(AgentPolicyRefusalError);
+  });
+
+  it.each(quotedRefusalEvidence)("repairs verdicts quoting refusal evidence: %s", (evidence) => {
+    const json = JSON.stringify([
+      { filePath: "a.ts", title: "x", verdict: "true-positive", reasoning: evidence },
+    ]);
+    for (const prefix of ["Here are the verdicts:\n```json\n", "Here are the verdicts:\n", ""]) {
+      const text = `${prefix}${json.slice(0, -1)},]`;
+      expect(parseRevalidateVerdicts(text)[0]?.reasoning).toBe(evidence);
+    }
   });
 });
 
