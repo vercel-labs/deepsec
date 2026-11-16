@@ -9,12 +9,12 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.292",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.318",
     "@deepsec/core": "workspace:*",
     "@deepsec/scanner": "workspace:*",
-    "@earendil-works/pi-coding-agent": "1.0.4",
-    "@openai/codex": "^0.160.1",
-    "@openai/codex-sdk": "^0.160.1",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@openai/codex": "^0.167.0",
+    "@openai/codex-sdk": "^0.167.0",
     "@opencode-ai/sdk": "^1.18.35",
     "jsonrepair": "^3.15.0",
     "undici": "^8.11.2"

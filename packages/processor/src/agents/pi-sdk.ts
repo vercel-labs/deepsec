@@ -326,7 +326,6 @@ function getGatewayCredential(): string | undefined {
 }
 
 async function configureRuntimeAuth(runtime: ModelRuntime, cfg: PiAgentConfig): Promise<void> {
-  // allowNetwork: false on every call. setRuntimeApiKey's refresh
   // Note: pi 0.81 needed `{ allowNetwork: false }` here to avoid a full
   // remote model-catalog sweep on every setRuntimeApiKey call (observed
   // hanging batch startup for minutes). pi 1.0 removed that option —
