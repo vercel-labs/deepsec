@@ -43,6 +43,19 @@ export function selectPackageManager(
   throw new Error("Deepsec requires pnpm or npm, but neither command is available on PATH");
 }
 
+export function reconcilePnpmWorkspace(workspaceDir: string): void {
+  const file = path.join(workspaceDir, "pnpm-workspace.yaml");
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+  if (/^strictDepBuilds:/m.test(content)) return;
+  const separator = content === "" || content.endsWith("\n") ? "" : "\n";
+  fs.writeFileSync(file, `${content}${separator}strictDepBuilds: false\n`);
+}
+
 export function probeWorkspaceInstall(
   workspaceDir: string,
   // Set when the installer child just wrote this tree: a lagging mount can
@@ -89,6 +102,7 @@ export async function ensureWorkspaceInstall(params: {
   onProgress?: (progress: { message: string; current?: number; total?: number }) => void;
 }): Promise<{ packageManager: SupportedPackageManager; version: string; installed: boolean }> {
   const workspaceDir = path.resolve(params.workspaceDir);
+  reconcilePnpmWorkspace(workspaceDir);
   const packageManager = selectPackageManager(workspaceDir, params.packageManager);
   const before = probeWorkspaceInstall(workspaceDir);
   if (before.ok && !params.force) {

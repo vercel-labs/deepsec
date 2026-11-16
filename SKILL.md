@@ -64,6 +64,11 @@ npx -y deepsec init --plan --output json
 npx -y deepsec init --yes --through coverage --output jsonl
 ```
 
+If `npx` fails with `EBADDEVENGINES`, the repository's
+`devEngines.packageManager` requires another package manager. Run the same
+commands with `pnpm dlx deepsec` (or that package manager's equivalent) in
+place of `npx -y deepsec`.
+
 Parse every output line as JSON. On a `needs_input` event, show the supplied
 message and actions to the user rather than inventing remediation. In
 particular, `VERCEL_AUTH_REQUIRED` normally asks the user to run

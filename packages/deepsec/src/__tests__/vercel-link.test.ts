@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ensureVercelLink, readWorkspaceLink } from "../auth/vercel-link.js";
+import { ensureVercelLink, readWorkspaceLink, runPinnedVercelCli } from "../auth/vercel-link.js";
 import { SetupProtocolError } from "../setup/protocol.js";
 
 describe("Vercel project link", () => {
@@ -60,6 +60,7 @@ describe("Vercel project link", () => {
 
   it("returns structured login instructions when headless Vercel auth is missing", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "deepsec-headless-login-"));
+    await writeFile(join(workspace, "package.json"), "{}\n");
     const runCli = vi.fn(async () => ({ exitCode: 1, stdout: "", stderr: "not logged in" }));
 
     const error = await ensureVercelLink({
@@ -74,7 +75,10 @@ describe("Vercel project link", () => {
       code: "VERCEL_AUTH_REQUIRED",
       missingInputs: ["vercel.authentication"],
     });
-    expect(error.actions[0].commands).toContain("npx vercel login");
+    expect(error.actions[0].commands).toEqual([
+      expect.stringContaining(workspace),
+      "npx vercel login",
+    ]);
     expect(error.actions[1]).toMatchObject({
       id: "vercel-link-workspace",
       commands: [expect.stringContaining(workspace), "npx vercel link"],
@@ -256,5 +260,19 @@ describe("Vercel project link", () => {
     expect(contents).toContain("KEEP = exact # comment");
     expect(contents).toContain("VERCEL_OIDC_TOKEN=oidc-new");
     expect(contents).not.toContain("SECRET_PROJECT_ENV");
+  });
+
+  it("pins npm's project prefix to the CLI working directory", async () => {
+    const bin = await mkdtemp(join(tmpdir(), "deepsec-fake-npx-"));
+    const cwd = await mkdtemp(join(tmpdir(), "deepsec-vercel-cwd-"));
+    await writeFile(join(bin, "npx"), '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 });
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${originalPath}`;
+    try {
+      const result = await runPinnedVercelCli(["teams", "list", "--format=json"], cwd);
+      expect(result.stdout.split("\n").slice(0, 3)).toEqual(["--prefix", cwd, "--yes"]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 });
