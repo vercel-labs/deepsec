@@ -480,7 +480,9 @@ function pnpmWorkspaceYaml(): string {
   // Mirror of the `workspaces: []` in package.json, for pnpm. pnpm reads
   // this file (not package.json:workspaces) — empty `packages` list means
   // ".deepsec/ is its own workspace root with no members beyond itself."
-  return `packages: []\n`;
+  // pnpm 11+ fails installs on unapproved dependency build scripts; the
+  // scripts in deepsec's dependency tree are not needed at runtime.
+  return `packages: []\nstrictDepBuilds: false\n`;
 }
 
 /**

@@ -30,3 +30,5 @@ labels: bug
 
 <!-- Relevant CLI output, redacted as needed. Avoid pasting findings about
 private code unless they're directly relevant to the bug. -->
+
+<!-- AGENTS: Use the 'technical-writer' skill when writing the content for this issue. -->

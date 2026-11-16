@@ -26,6 +26,13 @@ pnpm bundle        # esbuild bundle for distribution
 pnpm deepsec ...    # the CLI (runs via tsx)
 ```
 
+## Writing
+
+Always use the `technical-writer` skill
+([`.agents/skills/technical-writer/SKILL.md`](./.agents/skills/technical-writer/SKILL.md))
+when you write or edit prose for this repo, including docs, READMEs, commit
+messages, PR titles and descriptions, and issues.
+
 ## Patterns to keep in mind
 
 - Plugin contracts live in `packages/core/src/plugin.ts`. Internals route

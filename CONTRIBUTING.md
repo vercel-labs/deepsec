@@ -132,6 +132,9 @@ export default function myPlugin(): DeepsecPlugin {
   comments that restate the code.
 - Keep PRs small and single-purpose. If a matcher add needs a test
   fixture refactor, separate PRs.
+- If an AI coding agent writes any of your contribution's prose, including
+  docs, commit messages, PR descriptions, and issues, it must use the
+  [`technical-writer` skill](./.agents/skills/technical-writer/SKILL.md).
 
 ## Testing
 
