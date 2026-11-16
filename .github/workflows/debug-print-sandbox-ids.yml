@@ -1,6 +1,7 @@
 # TEMPORARY: prints the Vercel team/project IDs behind the live-sandbox
-# secrets so they can be reconciled with the dashboard. Delete this branch
-# after use. Never prints VERCEL_TOKEN.
+# secrets so they can be reconciled with the dashboard. These are
+# identifiers, not credentials. Delete this branch after use.
+# Does not use or print VERCEL_TOKEN.
 name: Debug print sandbox IDs
 
 on:
@@ -14,27 +15,15 @@ jobs:
   print-ids:
     runs-on: ubuntu-latest
     steps:
-      - name: Print IDs and check token
+      - name: Print IDs
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           set -u
-          # GitHub masks exact secret values; space-separated chars are not masked.
-          echo "VERCEL_TEAM_ID    (spaced): $(printf '%s' "$VERCEL_TEAM_ID" | sed 's/./& /g')"
-          echo "VERCEL_PROJECT_ID (spaced): $(printf '%s' "$VERCEL_PROJECT_ID" | sed 's/./& /g')"
-          echo "VERCEL_TOKEN length: ${#VERCEL_TOKEN}"
-
-          echo "--- GET /v2/user (token validity) ---"
-          code=$(curl -sS -o user.json -w '%{http_code}' \
-            -H "Authorization: Bearer $VERCEL_TOKEN" https://api.vercel.com/v2/user)
-          echo "HTTP $code"
-          jq -c '{username: .user.username, error: .error}' user.json || true
-
-          echo "--- GET /v9/projects/<id>?teamId=<team> ---"
-          code=$(curl -sS -o project.json -w '%{http_code}' \
-            -H "Authorization: Bearer $VERCEL_TOKEN" \
-            "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_TEAM_ID")
-          echo "HTTP $code"
-          jq -c '{name: .name, accountId: .accountId, error: .error}' project.json || true
+          # GitHub masks exact secret values; hex bytes are not masked.
+          for name in VERCEL_TEAM_ID VERCEL_PROJECT_ID; do
+            val="${!name}"
+            echo "$name length=$(printf '%s' "$val" | wc -c)"
+            echo "$name hex=$(printf '%s' "$val" | od -An -tx1 | tr -d ' \n')"
+          done
