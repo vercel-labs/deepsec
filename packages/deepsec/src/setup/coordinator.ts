@@ -10,6 +10,7 @@ import {
 } from "@deepsec/core";
 import {
   type AgentProgress,
+  fxCostLimitError,
   type ProcessProgress,
   process as processCandidates,
 } from "@deepsec/processor";
@@ -450,6 +451,16 @@ export async function runSetupWorkflow(
     assertFxSetupRoute(agentType, route);
     reconcileAiGatewayDefaultsForRoute(route);
     const agentConfig = buildAgentConfig({ agentType, model, thinkingLevel, modelRoute: route });
+    if (agentType === "fx" && options.maxCostUsd !== undefined) {
+      const message = await fxCostLimitError(model, agentConfig.aiBaseUrl as string | undefined);
+      if (message) {
+        throw new SetupProtocolError({
+          code: "COST_LIMIT_UNENFORCEABLE",
+          kind: "failure",
+          message,
+        });
+      }
+    }
     reconcileWorkspaceConfig(workspaceDir, route, agentType, model, thinkingLevel);
 
     const loaded = await loadConfig(workspaceDir);

@@ -406,6 +406,23 @@ async function estimateFxCostUsd(
 }
 
 /**
+ * Why a cost limit can't be enforced for fx with this model and endpoint,
+ * or undefined when it can. Without a price every batch would count as $0
+ * and the limit would never stop the run.
+ */
+export async function fxCostLimitError(
+  model: string | undefined,
+  aiBaseUrl: string | undefined,
+): Promise<string | undefined> {
+  const consequence =
+    "so --max-cost-usd can't be enforced. Remove the limit or use a Gateway model with a listed price.";
+  if (aiBaseUrl) return `fx can't price requests to a custom endpoint, ${consequence}`;
+  const id = model ?? FX_DEFAULT_MODEL;
+  if ((await loadGatewayPricing())?.has(id)) return undefined;
+  return `AI Gateway's price list has no entry for ${id}, ${consequence}`;
+}
+
+/**
  * Project-relative paths of symlinks whose real target is outside the
  * project. Dangling links are skipped (nothing can be read through them),
  * and `.git` is not walked.

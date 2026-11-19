@@ -17,6 +17,7 @@ import {
   FX_DEFAULT_MODEL,
   FX_READ_ONLY_PERMISSIONS,
   FxAgentPlugin,
+  fxCostLimitError,
   findSymlinksOutsideProject,
   parseFxAskOutput,
   parseGatewayPricing,
@@ -484,5 +485,33 @@ describe("fx backend symlink boundary", () => {
       ),
     ).rejects.toThrow(/symlinks that point outside the project root: src\/config\.ts/);
     expect(() => readFileSync(marker)).toThrow();
+  });
+});
+
+describe("fxCostLimitError", () => {
+  it("allows a cost limit for a Gateway model with a listed price", async () => {
+    expect(await fxCostLimitError("openai/gpt-6.1-sol", undefined)).toBeUndefined();
+    expect(await fxCostLimitError(undefined, undefined)).toBeUndefined();
+  });
+
+  it("refuses a model the price list doesn't have", async () => {
+    expect(await fxCostLimitError("acme/unpriced", undefined)).toMatch(
+      /no entry for acme\/unpriced, so --max-cost-usd can't be enforced/,
+    );
+  });
+
+  it("refuses when the price list can't be fetched", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 503 })),
+    );
+    expect(await fxCostLimitError("openai/gpt-6.1-sol", undefined)).toMatch(/can't be enforced/);
+  });
+
+  it("refuses a custom endpoint without fetching prices", async () => {
+    expect(await fxCostLimitError("openai/gpt-6.1-sol", "https://llm.example.com/v1")).toMatch(
+      /custom endpoint, so --max-cost-usd can't be enforced/,
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
