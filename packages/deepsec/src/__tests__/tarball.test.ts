@@ -6,7 +6,12 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { extractTarballLocally } from "../sandbox/download.js";
-import { makeTarball } from "../sandbox/upload.js";
+import {
+  DEEPSEC_APP_EXCLUDES,
+  makeTarball,
+  nestedExcludePaths,
+  TARGET_EXCLUDES,
+} from "../sandbox/upload.js";
 
 describe("makeTarball — symlink filtering (git branch)", () => {
   let tmp: string;
@@ -52,6 +57,107 @@ describe("makeTarball — symlink filtering (git branch)", () => {
     const stats = await makeTarball(tmp, []);
     createdTars.push(stats.tarPath);
     expect(fs.statSync(stats.tarPath).size).toBe(stats.bytes);
+  });
+});
+
+describe("makeTarball — workspace credentials and nested workspaces", () => {
+  let tmp: string;
+  const createdTars: string[] = [];
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-upload-excl-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    for (const p of createdTars.splice(0)) {
+      try {
+        fs.unlinkSync(p);
+      } catch {}
+    }
+  });
+
+  function write(rel: string, content = "x") {
+    const abs = path.join(tmp, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  }
+
+  async function filePaths(
+    excludes: string[],
+    options?: { excludePaths?: string[] },
+  ): Promise<string[]> {
+    const stats = await makeTarball(tmp, excludes, undefined, options);
+    createdTars.push(stats.tarPath);
+    const entries = await listTarballEntriesFromFile(stats.tarPath);
+    return entries
+      .filter((e) => e.type === "File")
+      .map((e) => e.path.replace(/^\.\//, ""))
+      .sort();
+  }
+
+  it("app bundle drops the workspace .env files", async () => {
+    write("deepsec.config.ts");
+    write("package.json", "{}");
+    write(".env.local", "VERCEL_OIDC_TOKEN=secret");
+    write(".env", "AI_GATEWAY_API_KEY=secret");
+    write("matchers/environment.ts");
+
+    expect(await filePaths(DEEPSEC_APP_EXCLUDES)).toEqual([
+      "deepsec.config.ts",
+      "matchers/environment.ts",
+      "package.json",
+    ]);
+  });
+
+  it("non-git target drops exactly the nested workspace subtree", async () => {
+    write("src/index.ts");
+    write(".deepsec/.env.local", "VERCEL_OIDC_TOKEN=secret");
+    write(".deepsec/data/app/files/src/index.ts.json", "{}");
+    write("apps/web/.deepsec/keep.ts");
+    write("node_modules/dep/index.js");
+
+    expect(await filePaths(TARGET_EXCLUDES, { excludePaths: [".deepsec"] })).toEqual([
+      "apps/web/.deepsec/keep.ts",
+      "src/index.ts",
+    ]);
+  });
+
+  it("non-git target drops a workspace nested more than one level deep", async () => {
+    write("audits/workspace/.env.local", "secret");
+    write("audits/notes.md");
+    write("lib/a.ts");
+
+    expect(await filePaths([], { excludePaths: ["audits/workspace"] })).toEqual([
+      "audits/notes.md",
+      "lib/a.ts",
+    ]);
+  });
+
+  it("git target drops the nested workspace from the ls-files list", async () => {
+    execSync("git init -q", { cwd: tmp });
+    write("src/index.ts");
+    write(".deepsec/deepsec.config.ts");
+    write(".deepsec/data/app/INFO.md");
+
+    expect(await filePaths(TARGET_EXCLUDES, { excludePaths: [".deepsec"] })).toEqual([
+      "src/index.ts",
+    ]);
+  });
+
+  it("nestedExcludePaths keeps only paths strictly inside the root", () => {
+    fs.mkdirSync(path.join(tmp, "target", ".deepsec", "data"), { recursive: true });
+    fs.mkdirSync(path.join(tmp, "elsewhere"), { recursive: true });
+    const root = path.join(tmp, "target");
+
+    expect(
+      nestedExcludePaths(root, [
+        path.join(root, ".deepsec"),
+        path.join(root, ".deepsec", "data"),
+        path.join(tmp, "elsewhere"),
+        root,
+      ]),
+    ).toEqual([".deepsec", ".deepsec/data"]);
   });
 });
 
