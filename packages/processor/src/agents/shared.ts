@@ -841,10 +841,20 @@ export function parseInvestigateResults(
     }
   }
 
-  for (const filePath of batchPaths) {
-    results.push({ filePath, findings: [] });
+  // The prompt requires an entry for every target file, empty findings
+  // included. Output that names none of them is not a result: tolerant
+  // jsonrepair turns prose such as "the allowlist is []" into an empty
+  // array, which used to record every file as clean. Throw so the caller
+  // runs its JSON repair turn or fails the batch.
+  if (batch.length > 0 && results.length === 0) {
+    const excerpt = resultText.slice(0, 400).replace(/\s+/g, " ");
+    throw new Error(
+      `Agent output did not include any of the ${batch.length} target file(s). First 400 chars: ${excerpt}`,
+    );
   }
 
+  // Files the agent left out are not clean. Leaving them out of `results`
+  // lets the processor mark them `error`, so the next run picks them up.
   return { results, invalid };
 }
 

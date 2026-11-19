@@ -363,12 +363,43 @@ function validFinding(overrides: Record<string, unknown> = {}): Record<string, u
 describe("parseInvestigateResults", () => {
   const batch = [{ filePath: "a.ts" } as any, { filePath: "b.ts" } as any];
 
-  it("matches results to batch files; fills missing with empty findings", () => {
+  it("matches results to batch files; leaves missing files out so they become errors", () => {
     const text = `\`\`\`json\n[{"filePath":"a.ts","findings":[${JSON.stringify(validFinding())}]}]\n\`\`\``;
     const out = parseInvestigateResults(text, batch);
     expect(out.results.find((r) => r.filePath === "a.ts")?.findings.length).toBe(1);
-    expect(out.results.find((r) => r.filePath === "b.ts")?.findings).toEqual([]);
+    // The prompt requires an entry per file; an omitted file is not clean.
+    expect(out.results.find((r) => r.filePath === "b.ts")).toBeUndefined();
     expect(out.invalid).toEqual([]);
+  });
+
+  it("keeps files the agent reported with empty findings", () => {
+    const text = `\`\`\`json\n[{"filePath":"a.ts","findings":[]},{"filePath":"b.ts","findings":[]}]\n\`\`\``;
+    const out = parseInvestigateResults(text, batch);
+    expect(out.results).toEqual([
+      { filePath: "a.ts", findings: [] },
+      { filePath: "b.ts", findings: [] },
+    ]);
+  });
+
+  it("throws on an empty array instead of recording every file as clean", () => {
+    expect(() => parseInvestigateResults("```json\n[]\n```", batch)).toThrow(
+      /did not include any of the 2 target file/,
+    );
+  });
+
+  it("throws when a progress note that mentions [] repairs into an empty array", () => {
+    // A turn cut off mid-investigation leaves prose like this as its last
+    // message; tolerant jsonrepair turns it into `[]`.
+    const note =
+      "The SSO callback falls back to an empty allowlist when `allowedDomains` is [] — checking the caller next.";
+    expect(() => parseInvestigateResults(note, batch)).toThrow(
+      /did not include any of the 2 target file/,
+    );
+  });
+
+  it("throws when the array names only files outside the batch", () => {
+    const text = '```json\n[{"filePath":"other.ts","findings":[]}]\n```';
+    expect(() => parseInvestigateResults(text, batch)).toThrow(/did not include any/);
   });
 
   it("repairs common malformed model JSON before parsing findings", () => {
@@ -383,7 +414,7 @@ describe("parseInvestigateResults", () => {
     expect(out.results.find((r) => r.filePath === "a.ts")?.findings[0]?.description).toBe(
       'Uses "signature !== expectedHash" comparison',
     );
-    expect(out.results.find((r) => r.filePath === "b.ts")?.findings).toEqual([]);
+    expect(out.results.find((r) => r.filePath === "b.ts")).toBeUndefined();
   });
 
   it("throws on parse failure (fail-loud, never silently empty)", () => {

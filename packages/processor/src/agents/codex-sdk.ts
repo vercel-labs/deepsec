@@ -747,6 +747,23 @@ export async function runCodexSetupTask(params: SetupTaskParams): Promise<string
   return text;
 }
 
+/**
+ * Why an investigate turn produced no usable result, or "" when it
+ * completed. Only turns that left agent messages behind matter: a turn
+ * with no messages goes through the silent-failure path instead.
+ */
+export function codexIncompleteTurnReason(turn: {
+  agentMessages: number;
+  turnCompleted: boolean;
+  turnFailure: string;
+  lastError: string;
+}): string {
+  if (turn.agentMessages === 0) return "";
+  if (turn.turnFailure) return turn.turnFailure;
+  if (!turn.turnCompleted) return turn.lastError || "Codex turn ended before turn.completed";
+  return "";
+}
+
 export function finalizeCodexSetupResult(messages: string[], failure: string): string {
   const text = messages.join("\n").trim();
   if (failure) {
@@ -795,6 +812,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     let toolUseCount = 0;
     let sdkMeta: Partial<BatchMeta> = {};
     let lastError = "";
+    // Set when the turn ends without `turn.completed`: a `turn.failed`
+    // event (for example a safety-filter block), or the CLI dying mid-turn.
+    // The agent messages from such a turn are progress notes, not results.
+    let incompleteTurn = "";
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -810,6 +831,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           sdkMeta = {};
           lastError = "";
         }
+        let turnCompleted = false;
+        let turnFailure = "";
 
         try {
           const thread = codex.startThread({
@@ -862,10 +885,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
                 }
                 sdkMeta.numTurns = turnCount;
                 sdkMeta.agentSessionId = threadId ?? thread.id ?? undefined;
+                turnCompleted = true;
                 break;
 
               case "turn.failed":
                 lastError = event.error?.message ?? "turn.failed";
+                turnFailure = lastError;
                 yield {
                   type: "error" as const,
                   message: `Codex turn failed: ${lastError.slice(0, 300)}`,
@@ -889,7 +914,28 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           };
         }
 
-        if (agentMessages.length > 0) break;
+        if (signal?.aborted) {
+          throw signal.reason instanceof Error ? signal.reason : new Error("Codex batch aborted");
+        }
+        incompleteTurn = codexIncompleteTurnReason({
+          agentMessages: agentMessages.length,
+          turnCompleted,
+          turnFailure,
+          lastError,
+        });
+        if (agentMessages.length > 0 && !incompleteTurn) break;
+        if (incompleteTurn && agentMessages.length > 0) {
+          // A partial turn's last message would otherwise be parsed (or
+          // JSON-repaired) into "no findings" for files the agent never
+          // finished. Retry on a fresh thread, and fail the batch if every
+          // attempt ends this way so its files stay eligible for a re-run.
+          const quotaSource = classifyQuotaError(incompleteTurn, "codex");
+          if (quotaSource) throw new QuotaExhaustedError(quotaSource, incompleteTurn);
+          if (attempt >= MAX_ATTEMPTS) break;
+          lastError = incompleteTurn;
+          await backoff(attempt);
+          continue;
+        }
         // Codex frequently exits silent on quota/auth errors — the SDK
         // returns an empty `response.completed` and the error only lives in
         // the wrapper-captured stderr. Read it BEFORE deciding to retry so
@@ -920,6 +966,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           };
         }
         await backoff(attempt);
+      }
+
+      if (incompleteTurn && agentMessages.length > 0) {
+        throw new Error(
+          `Codex turn did not complete after ${MAX_ATTEMPTS} attempt(s): ${incompleteTurn.slice(0, 500)}`,
+        );
       }
 
       const resultText = chooseFinalText(agentMessages);
@@ -1122,6 +1174,9 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     let turnCount = 0;
     let sdkMeta: Partial<BatchMeta> = {};
     let lastError = "";
+    // See investigate(): a turn that ended without `turn.completed` left
+    // progress notes, not verdicts.
+    let incompleteTurn = "";
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -1136,6 +1191,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           sdkMeta = {};
           lastError = "";
         }
+        let turnCompleted = false;
+        let turnFailure = "";
 
         try {
           const thread = codex.startThread({
@@ -1178,9 +1235,11 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
                 }
                 sdkMeta.numTurns = turnCount;
                 sdkMeta.agentSessionId = threadId ?? thread.id ?? undefined;
+                turnCompleted = true;
                 break;
               case "turn.failed":
                 lastError = event.error?.message ?? "turn.failed";
+                turnFailure = lastError;
                 yield {
                   type: "error" as const,
                   message: `Codex turn failed: ${lastError.slice(0, 300)}`,
@@ -1200,7 +1259,24 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           yield { type: "error" as const, message: `Codex SDK error: ${lastError.slice(0, 300)}` };
         }
 
-        if (agentMessages.length > 0) break;
+        if (signal?.aborted) {
+          throw signal.reason instanceof Error ? signal.reason : new Error("Codex batch aborted");
+        }
+        incompleteTurn = codexIncompleteTurnReason({
+          agentMessages: agentMessages.length,
+          turnCompleted,
+          turnFailure,
+          lastError,
+        });
+        if (agentMessages.length > 0 && !incompleteTurn) break;
+        if (incompleteTurn && agentMessages.length > 0) {
+          const quotaSource = classifyQuotaError(incompleteTurn, "codex");
+          if (quotaSource) throw new QuotaExhaustedError(quotaSource, incompleteTurn);
+          if (attempt >= MAX_ATTEMPTS) break;
+          lastError = incompleteTurn;
+          await backoff(attempt);
+          continue;
+        }
         // See investigate() — read stderr first so we bail fast on quota
         // misses instead of burning all 3 attempts.
         const stderrPeek = readStderrTail(invocation.stderrLog) ?? "";
@@ -1228,6 +1304,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           };
         }
         await backoff(attempt);
+      }
+
+      if (incompleteTurn && agentMessages.length > 0) {
+        throw new Error(
+          `Codex revalidation turn did not complete after ${MAX_ATTEMPTS} attempt(s): ${incompleteTurn.slice(0, 500)}`,
+        );
       }
 
       const resultText = chooseFinalText(agentMessages);
