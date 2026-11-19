@@ -1,6 +1,6 @@
 ---
 title: "Models"
-description: "Choose Codex, Claude, or Pi for process and revalidate runs, and compare models under the same workload."
+description: "Choose Codex, Claude, Pi, or fx for process and revalidate runs, and compare models under the same workload."
 ---
 
 deepsec talks to LLMs through interchangeable agent backends:
@@ -10,6 +10,7 @@ deepsec talks to LLMs through interchangeable agent backends:
 | `codex` (default)           | `gpt-5.5`             | `process`, `revalidate`      |
 | `claude`                    | `claude-opus-4-8`     | `process`, `revalidate`      |
 | `pi`                        | `zai/glm-5.2`        | `process`, `revalidate` |
+| `fx`                        | `openai/gpt-6.2-sol`  | `process`, `revalidate`      |
 | `claude` (triage)           | `claude-sonnet-4-6`   | `triage` (Claude-only)       |
 
 Interactive one-shot setup recommends five benchmark-backed combinations:
@@ -76,9 +77,19 @@ pnpm deepsec process --project-id my-app --agent pi
 # Pi with an AI SDK / AI Gateway style model id:
 pnpm deepsec process --project-id my-app --agent pi --model zai/glm-5.2
 
+# fx (https://fx.sh) through Vercel AI Gateway:
+pnpm deepsec process --project-id my-app --agent fx --model openai/gpt-6.2-sol
+
 # Triage uses Claude; pass a cheaper model if you want:
 pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
 ```
+
+The `fx` backend runs the fx CLI (`fx` on `PATH`, or the path in
+`DEEPSEC_FX_BIN`) with `fx ask --json`. Like Pi, it is read-only: each run
+gets a temporary fx home whose permission rules allow only `read_file`,
+`glob_files` and `grep_files` on paths inside the project. It uses
+`AI_GATEWAY_API_KEY` or a custom endpoint key, never a local `fx login`.
+`deepsec sandbox` does not install fx, so run this backend locally.
 
 `--agent`, `--model`, and `--thinking-level` are also accepted on `setup` and
 `revalidate`. Setup persists the interactive choice as `defaultAgent`,
@@ -105,6 +116,7 @@ The flag maps onto each backend's native dial:
 |----------|---------------------------------------------|
 | `codex`  | model reasoning effort (`minimal`–`xhigh`)  |
 | `pi`     | thinking level (`minimal`–`xhigh`)          |
+| `fx`     | `fx ask --effort` (`minimal`–`xhigh`)       |
 | `claude` | adaptive-thinking effort (`minimal` → `low`, `xhigh` → `max`) |
 
 It applies to the main investigation/revalidation runs only.

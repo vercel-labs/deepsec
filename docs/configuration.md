@@ -177,6 +177,7 @@ requires the complete access-token triple.
 | `OPENAI_API_KEY` | `--agent codex`, `--agent pi --model openai/...` | Codex SDK token or Pi OpenAI-provider token. Unset is fine if `AI_GATEWAY_API_KEY` is set. |
 | `OPENAI_BASE_URL` | `--agent codex` | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh/v1`. |
 | `PI_CODING_AGENT_DIR` | `--agent pi` | Optional Pi config/auth directory. Defaults to `~/.pi/agent`; local non-sandbox runs can reuse `auth.json` there. |
+| `DEEPSEC_FX_BIN` | `--agent fx` | Path to the `fx` binary. Defaults to `fx` on `PATH`. |
 | `DEEPSEC_AGENT_DEBUG` | both backends | Set to `1` to enable verbose agent logging. |
 | `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Equivalent to `dataDir` in config. |
 
