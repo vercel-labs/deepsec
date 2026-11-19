@@ -1,6 +1,6 @@
 {
   "name": "deepsec",
-  "version": "2.3.15",
+  "version": "2.3.16",
   "description": "AI-powered vulnerability scanner for any codebase",
   "license": "Apache-2.0",
   "repository": {
