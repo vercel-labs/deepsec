@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyResolvedModelRoute, resolveModelRoute } from "../auth/model-route.js";
+import {
+  applyResolvedModelRoute,
+  resolveModelRoute,
+  verifyModelRouteWithFetch,
+} from "../auth/model-route.js";
 
 describe("resolveModelRoute", () => {
   it("refuses to resolve a local-subscription route to a brokered credential", async () => {
@@ -112,5 +116,34 @@ describe("resolveModelRoute", () => {
         { agentType: "pi", env: { X_KEY: "secret" } },
       ),
     ).rejects.toThrow(/https/);
+  });
+});
+
+describe("verifyModelRouteWithFetch", () => {
+  async function probedUrl(route: Parameters<typeof resolveModelRoute>[0], env: NodeJS.ProcessEnv) {
+    const resolved = await resolveModelRoute(route, { agentType: "claude-agent-sdk", env });
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+    await verifyModelRouteWithFetch(resolved, fetchImpl as unknown as typeof fetch);
+    return String((fetchImpl.mock.calls[0] as unknown[])[0]);
+  }
+
+  it("probes the default Anthropic models endpoint", async () => {
+    await expect(
+      probedUrl({ mode: "direct", provider: "anthropic" }, { ANTHROPIC_API_KEY: "sk-ant" }),
+    ).resolves.toBe("https://api.anthropic.com/v1/models?limit=1");
+  });
+
+  it("keeps the path of an Anthropic-compatible base URL", async () => {
+    await expect(
+      probedUrl(
+        {
+          mode: "direct",
+          provider: "anthropic",
+          apiKeyEnv: "ZAI_API_KEY",
+          baseUrl: "https://api.z.ai/api/anthropic/",
+        },
+        { ZAI_API_KEY: "secret" },
+      ),
+    ).resolves.toBe("https://api.z.ai/api/anthropic/v1/models?limit=1");
   });
 });

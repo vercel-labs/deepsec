@@ -238,11 +238,10 @@ export type ModelRouteVerifier = (route: ResolvedModelRoute) => Promise<void>;
 
 function modelsEndpoint(route: ResolvedModelRoute): URL {
   if (route.route.mode === "gateway") return new URL("https://ai-gateway.vercel.sh/v1/models");
-  if (route.route.provider === "anthropic")
-    return new URL("/v1/models?limit=1", route.route.baseUrl);
+  const isAnthropic = route.route.provider === "anthropic";
   const base = new URL(route.route.baseUrl!);
-  base.pathname = `${base.pathname.replace(/\/$/, "")}/models`;
-  base.search = "";
+  base.pathname = `${base.pathname.replace(/\/$/, "")}${isAnthropic ? "/v1/models" : "/models"}`;
+  base.search = isAnthropic ? "?limit=1" : "";
   return base;
 }
 
