@@ -507,12 +507,17 @@ class FxSession {
     readonly ledger?: FxUsageLedger,
   ) {
     this.home = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-"));
-    fs.mkdirSync(path.join(this.home, ".fx"), { mode: 0o700 });
-    fs.writeFileSync(
-      path.join(this.home, ".fx", "settings.json"),
-      JSON.stringify(buildFxSettings(cfg), null, 2),
-      { mode: 0o600 },
-    );
+    try {
+      fs.mkdirSync(path.join(this.home, ".fx"), { mode: 0o700 });
+      fs.writeFileSync(
+        path.join(this.home, ".fx", "settings.json"),
+        JSON.stringify(buildFxSettings(cfg), null, 2),
+        { mode: 0o600 },
+      );
+    } catch (err) {
+      this.dispose();
+      throw err;
+    }
   }
 
   get modelLabel(): string {
@@ -638,23 +643,32 @@ async function* runWithRetries(
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     attempts = attempt;
     const session = new FxSession(projectRoot, cfg, ledger);
-    if (attempt === 1) yield { type: "started", message: startedMessage(session.modelLabel) };
-    else
-      yield {
-        type: "thinking",
-        message: `Retrying fx ${label} on a fresh session (attempt ${attempt}/${MAX_ATTEMPTS}): ${lastError.slice(0, 200)}`,
-      };
+    // Handed to the caller only on success; any other exit from this block,
+    // including the consumer closing the generator at a yield, removes it.
+    let handedOff = false;
     let turnIncomplete = false;
     try {
-      const run = await runFxPrompt(session, prompt, maxTurns, signal);
-      if (run.resultText) return { session, run, ledger };
-      lastError = "fx returned an empty response";
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      turnIncomplete = err instanceof FxAskError && err.turnIncomplete;
-      yield { type: "error", message: `fx error: ${lastError.slice(0, 300)}` };
+      if (attempt === 1) yield { type: "started", message: startedMessage(session.modelLabel) };
+      else
+        yield {
+          type: "thinking",
+          message: `Retrying fx ${label} on a fresh session (attempt ${attempt}/${MAX_ATTEMPTS}): ${lastError.slice(0, 200)}`,
+        };
+      try {
+        const run = await runFxPrompt(session, prompt, maxTurns, signal);
+        if (run.resultText) {
+          handedOff = true;
+          return { session, run, ledger };
+        }
+        lastError = "fx returned an empty response";
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        turnIncomplete = err instanceof FxAskError && err.turnIncomplete;
+        yield { type: "error", message: `fx error: ${lastError.slice(0, 300)}` };
+      }
+    } finally {
+      if (!handedOff) session.dispose();
     }
-    session.dispose();
     if (signal?.aborted) {
       throw signal.reason instanceof Error ? signal.reason : new Error("fx batch aborted");
     }

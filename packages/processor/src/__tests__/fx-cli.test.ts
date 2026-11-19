@@ -2,6 +2,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -17,8 +18,8 @@ import {
   FX_DEFAULT_MODEL,
   FX_READ_ONLY_PERMISSIONS,
   FxAgentPlugin,
-  fxCostLimitError,
   findSymlinksOutsideProject,
+  fxCostLimitError,
   parseFxAskOutput,
   parseGatewayPricing,
   resetFxPricingCache,
@@ -513,5 +514,32 @@ describe("fxCostLimitError", () => {
       /custom endpoint, so --max-cost-usd can't be enforced/,
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("fx temporary HOME", () => {
+  const homes = () =>
+    readdirSync(tmpdir()).filter((name) => /^deepsec-fx-[A-Za-z0-9]{6}$/.test(name));
+
+  it("is removed when the consumer closes the generator mid-attempt", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deepsec-fx-close-"));
+    const before = new Set(homes());
+    try {
+      const gen = new FxAgentPlugin().investigate({
+        batch: [record("a.ts")],
+        projectRoot: root,
+        promptTemplate: "Investigate",
+        projectInfo: "",
+        config: {},
+        projectId: "test",
+      });
+      const first = await gen.next();
+      expect(first.value).toMatchObject({ type: "started" });
+      expect(homes().filter((name) => !before.has(name))).toHaveLength(1);
+      await gen.return(undefined as never);
+      expect(homes().filter((name) => !before.has(name))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
