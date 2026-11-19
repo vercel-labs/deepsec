@@ -32,7 +32,64 @@ export const DEEPSEC_APP_EXCLUDES = [
   "--exclude=data", // uploaded separately per project
   "--exclude=.DS_Store",
   "--exclude=*.log",
+  // The workspace's .env files hold the host's Vercel and model credentials.
+  // Workers must only receive those through the egress broker.
+  "--exclude=.env",
+  "--exclude=.env.*",
 ];
+
+/**
+ * Paths of `candidates` that lie strictly inside `root`, relative to `root`
+ * with POSIX separators. Used to keep a deepsec workspace or data root that
+ * lives inside the scan target out of the target upload.
+ */
+export function nestedExcludePaths(root: string, candidates: string[]): string[] {
+  const canonical = (p: string) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const absRoot = canonical(root);
+  const out = new Set<string>();
+  for (const candidate of candidates) {
+    const rel = path.relative(absRoot, canonical(candidate));
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    out.add(rel.split(path.sep).join("/"));
+  }
+  return [...out];
+}
+
+function isExcludedPath(relPath: string, excludePaths: string[]): boolean {
+  return excludePaths.some((e) => relPath === e || relPath.startsWith(`${e}/`));
+}
+
+/**
+ * Top-level tar arguments covering everything under `root` except the
+ * `excludePaths` subtrees. tar's `--exclude` patterns are unanchored (an
+ * exclude for `.deepsec` would also drop `app/.deepsec`), so exact subtrees
+ * are removed by descending only along the excluded paths.
+ */
+function entriesExcluding(root: string, excludePaths: string[]): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const name of fs.readdirSync(rel ? path.join(root, rel) : root)) {
+      const child = rel ? `${rel}/${name}` : name;
+      if (excludePaths.includes(child)) continue;
+      if (
+        excludePaths.some((e) => e.startsWith(`${child}/`)) &&
+        fs.lstatSync(path.join(root, child)).isDirectory()
+      ) {
+        walk(child);
+        continue;
+      }
+      out.push(`./${child}`);
+    }
+  };
+  walk("");
+  return out;
+}
 
 export interface TarballStats {
   /**
@@ -60,6 +117,9 @@ export interface TarballStats {
  *
  * If not a git repo, falls back to the provided exclude list.
  *
+ * `excludePaths` are exact subtrees (relative to `sourceDir`) left out in
+ * both modes, such as a deepsec workspace nested inside the scan target.
+ *
  * Spawns the system `tar` rather than going through the `tar` npm package:
  * for many-small-files repos that's 2-3x faster on the archive step,
  * which on cold uploads is enough wall time to notice.
@@ -72,8 +132,10 @@ export async function makeTarball(
   sourceDir: string,
   excludes: string[],
   onLog?: (msg: string) => void,
+  options: { excludePaths?: string[] } = {},
 ): Promise<TarballStats> {
   const started = Date.now();
+  const excludePaths = options.excludePaths ?? [];
   // Callers pass sourceDir as either an absolute or a process-cwd-relative
   // path (e.g. `data/<id>` from dataDir()). Resolve once so the spawn's
   // `cwd` and tar's `-C` arg can't disagree — passing a relative cwd to
@@ -126,6 +188,7 @@ export async function makeTarball(
     let skippedSymlink = 0;
     const existing: string[] = [];
     for (const p of candidates) {
+      if (isExcludedPath(p, excludePaths)) continue;
       let st: fs.Stats;
       try {
         st = fs.lstatSync(path.join(absSourceDir, p));
@@ -178,7 +241,12 @@ export async function makeTarball(
     // pre-filter here — tar would archive symlinks-as-links by default
     // anyway, which is safe; the host-side strict extract would
     // refuse them on the way back if any ever appeared.
-    tar = spawn("tar", ["-czf", "-", ...excludes, "-C", absSourceDir, "."], {
+    let members = ["."];
+    if (excludePaths.length > 0) {
+      const entries = entriesExcluding(absSourceDir, excludePaths);
+      members = entries.length > 0 ? entries : ["-T", os.devNull];
+    }
+    tar = spawn("tar", ["-czf", "-", ...excludes, "-C", absSourceDir, ...members], {
       cwd: absSourceDir,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, COPYFILE_DISABLE: "1" },
