@@ -47,6 +47,7 @@ describe("fx settings and arguments", () => {
     });
     // Permission rules do not cover the web tools; toolbox, denied by "*", hides them.
     expect(settings.tool_placement).toEqual({ web_fetch: "toolbox", web_search: "toolbox" });
+    expect(settings.session_titles).toBe(false);
     expect(settings.providers).toBeUndefined();
   });
 

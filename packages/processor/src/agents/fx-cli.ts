@@ -128,6 +128,9 @@ export function buildFxSettings(cfg: FxAgentConfig): Record<string, unknown> {
     permission_mode: "ask",
     permission: FX_READ_ONLY_PERMISSIONS,
     tool_placement: FX_TOOL_PLACEMENT,
+    // Titles are a separate helper-model request that would be billed to
+    // the candidate under a different model.
+    session_titles: false,
   };
   if (cfg.aiBaseUrl) {
     settings.providers = {
