@@ -231,7 +231,7 @@ function hasLocalPiAgent(): boolean {
 // via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
 // their own credential resolution, so we skip the check for anything
 // other than these.
-const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi"]);
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi", "fx"]);
 
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
@@ -305,6 +305,22 @@ export function assertAgentCredential(
       : "";
     throw new Error(
       `Missing AI credentials for --agent pi.\n` +
+        `\n` +
+        `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
+        `  Setup: ${SETUP_DOC_URL}`,
+    );
+  }
+
+  if (agentType === "fx") {
+    // The fx backend runs fx with a throwaway HOME and no keychain, so a
+    // local `fx login` is never used: it needs a Gateway key or the key of
+    // the selected custom endpoint.
+    if (gateway || custom) return;
+    const customHint = options.aiApiKeyEnv
+      ? `, or set ${options.aiApiKeyEnv}=… for the selected --ai-api-key-env`
+      : "";
+    throw new Error(
+      `Missing AI credentials for --agent fx.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
         `  Setup: ${SETUP_DOC_URL}`,

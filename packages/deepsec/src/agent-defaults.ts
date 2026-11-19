@@ -14,6 +14,8 @@ export function defaultModelForAgent(agentType: string): string {
       return "gpt-5.5";
     case "pi":
       return "zai/glm-5.2";
+    case "fx":
+      return "openai/gpt-6.2-sol";
     default:
       return "claude-opus-4-8";
   }
