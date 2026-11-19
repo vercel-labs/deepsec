@@ -136,7 +136,7 @@ async function processStandardMode(opts: Parameters<typeof processCommand>[0]) {
     model,
     modelRoute: resolvedRoute?.route,
   });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv, aiBaseUrl: opts.aiBaseUrl });
 
   // --reinvestigate  → true (re-investigate all)
   // --reinvestigate 2 → number (only files with < 2 analyses)
@@ -289,7 +289,7 @@ async function processDirectMode(opts: Parameters<typeof processCommand>[0]) {
     model,
     modelRoute: resolvedRoute?.route,
   });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv, aiBaseUrl: opts.aiBaseUrl });
 
   // Resolve the file list.
   const resolved = resolveFiles({

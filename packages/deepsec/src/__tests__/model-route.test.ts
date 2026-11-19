@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyResolvedModelRoute, resolveModelRoute } from "../auth/model-route.js";
+import {
+  applyResolvedModelRoute,
+  modelRouteCompatibilityError,
+  resolveModelRoute,
+} from "../auth/model-route.js";
 
 describe("resolveModelRoute", () => {
   it("refuses to resolve a local-subscription route to a brokered credential", async () => {
@@ -112,5 +116,36 @@ describe("resolveModelRoute", () => {
         { agentType: "pi", env: { X_KEY: "secret" } },
       ),
     ).rejects.toThrow(/https/);
+  });
+});
+
+describe("modelRouteCompatibilityError for fx", () => {
+  it("accepts gateway and custom routes and rejects direct and local ones", () => {
+    expect(
+      modelRouteCompatibilityError({ mode: "gateway", provider: "vercel" }, "fx"),
+    ).toBeUndefined();
+    expect(
+      modelRouteCompatibilityError(
+        {
+          mode: "custom",
+          provider: "router",
+          baseUrl: "https://router.example/v1",
+          apiKeyEnv: "ROUTER_KEY",
+        },
+        "fx",
+      ),
+    ).toBeUndefined();
+    expect(modelRouteCompatibilityError({ mode: "direct", provider: "openai" }, "fx")).toMatch(
+      /can't use the direct model route/,
+    );
+    expect(modelRouteCompatibilityError({ mode: "local", provider: "local" }, "fx")).toMatch(
+      /can't use the local model route/,
+    );
+    expect(
+      modelRouteCompatibilityError(
+        { mode: "custom", provider: "router", baseUrl: "https://router.example/v1" },
+        "codex",
+      ),
+    ).toMatch(/require --agent pi or --agent fx/);
   });
 });

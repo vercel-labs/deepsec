@@ -97,7 +97,7 @@ export async function revalidateCommand(opts: {
     model,
     modelRoute: resolvedRoute?.route,
   });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv, aiBaseUrl: opts.aiBaseUrl });
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);
   console.log(`  Agent: ${agentType} (${model})`);

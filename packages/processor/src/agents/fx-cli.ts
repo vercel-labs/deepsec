@@ -53,10 +53,11 @@ import type {
  * Verified against fx 0.0.17: the model is offered exactly read_file,
  * glob_files and grep_files.
  *
- * The path rules below are lexical. Symlinks are handled by fx itself: it
- * resolves the real path of every read, glob and grep target and refuses
- * targets outside the workspace ("Path is outside the workspace"). The
- * opt-in test fx-cli-symlinks.test.ts checks this against a real binary.
+ * The path rules below are lexical. Symlinks are handled twice: fx resolves
+ * the real path of every read, glob and grep target and refuses targets
+ * outside the workspace ("Path is outside the workspace"), and the backend
+ * refuses to start when a symlink in the project resolves outside it. The
+ * opt-in test fx-cli-symlinks.test.ts checks fx's side against a real binary.
  */
 const FX_TOOL_PLACEMENT = { web_fetch: "toolbox", web_search: "toolbox" } as const;
 
@@ -70,7 +71,7 @@ const CUSTOM_PROVIDER = "deepsec-custom";
  * that can leave the project root is denied: absolute paths, `~`, and any
  * `..` segment (a leading `..` needs its own pattern because `*` matches at
  * least one character). Verified against fx 0.0.17 with read_file, glob_files
- * and grep_files. Symlinks inside the repository are not resolved.
+ * and grep_files. Symlinks are covered separately (see the note above).
  */
 const FX_PROJECT_PATHS_ONLY = {
   "*": "allow",
@@ -98,6 +99,10 @@ interface FxAgentConfig {
   thinkingLevel?: string;
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
+  /** Extra headers for a custom endpoint, with literal values. */
+  aiHeaders?: Record<string, string>;
+  /** Header that carries the custom endpoint's credential. */
+  aiCredentialHeader?: { name: string; scheme: "bearer" | "raw" };
 }
 
 interface FxAskJson {
@@ -132,6 +137,58 @@ function readConfig(config: Record<string, unknown>): FxAgentConfig {
     thinkingLevel: typeof config.thinkingLevel === "string" ? config.thinkingLevel : undefined,
     aiBaseUrl: typeof config.aiBaseUrl === "string" ? config.aiBaseUrl : undefined,
     aiApiKeyEnv: typeof config.aiApiKeyEnv === "string" ? config.aiApiKeyEnv : undefined,
+    aiHeaders:
+      config.aiHeaders && typeof config.aiHeaders === "object" && !Array.isArray(config.aiHeaders)
+        ? (config.aiHeaders as Record<string, string>)
+        : undefined,
+    aiCredentialHeader:
+      config.aiCredentialHeader && typeof config.aiCredentialHeader === "object"
+        ? (config.aiCredentialHeader as { name: string; scheme: "bearer" | "raw" })
+        : undefined,
+  };
+}
+
+const FX_CREDENTIAL_ENV = "DEEPSEC_FX_CREDENTIAL";
+
+/**
+ * Headers for a custom endpoint, mapped onto fx's connection format: fx reads
+ * every header value from an environment variable, so each literal value gets
+ * a private variable in fx's environment. The credential goes in fx's bearer
+ * auth when it is `Authorization: Bearer`, and in its own header otherwise.
+ */
+function customEndpointHeaders(cfg: FxAgentConfig): {
+  auth: Record<string, unknown>;
+  headers: Array<{ name: string; env: string; value?: string }>;
+} {
+  const headers = Object.entries(cfg.aiHeaders ?? {}).map(([name, value], i) => ({
+    name,
+    env: `DEEPSEC_FX_HEADER_${i}`,
+    value,
+  }));
+  if (!cfg.aiApiKeyEnv) return { auth: { type: "none" }, headers };
+  const credential = cfg.aiCredentialHeader;
+  const isAuthorization = !credential || credential.name.toLowerCase() === "authorization";
+  if (isAuthorization) {
+    if (credential && credential.scheme !== "bearer") {
+      throw new Error(
+        "fx sends an Authorization credential only with the Bearer scheme; use a different credential header",
+      );
+    }
+    return { auth: { type: "bearer", env: cfg.aiApiKeyEnv }, headers };
+  }
+  if (credential.scheme === "raw") {
+    return {
+      auth: { type: "none" },
+      headers: [...headers, { name: credential.name, env: cfg.aiApiKeyEnv }],
+    };
+  }
+  const key = process.env[cfg.aiApiKeyEnv];
+  return {
+    auth: { type: "none" },
+    headers: [
+      ...headers,
+      { name: credential.name, env: FX_CREDENTIAL_ENV, value: key ? `Bearer ${key}` : undefined },
+    ],
   };
 }
 
@@ -156,11 +213,15 @@ export function buildFxSettings(cfg: FxAgentConfig): Record<string, unknown> {
     session_titles: false,
   };
   if (cfg.aiBaseUrl) {
+    const endpoint = customEndpointHeaders(cfg);
     settings.providers = {
       [CUSTOM_PROVIDER]: {
         protocol: "openai-chat-completions",
         base_url: cfg.aiBaseUrl,
-        auth: cfg.aiApiKeyEnv ? { type: "bearer", env: cfg.aiApiKeyEnv } : { type: "none" },
+        auth: endpoint.auth,
+        ...(endpoint.headers.length > 0
+          ? { headers: Object.fromEntries(endpoint.headers.map((h) => [h.name, { env: h.env }])) }
+          : {}),
         model_metadata: {
           [cfg.model ?? FX_DEFAULT_MODEL]: {
             context_window: 200000,
@@ -219,6 +280,11 @@ function fxEnvironment(home: string, cfg: FxAgentConfig): NodeJS.ProcessEnv {
   }
   if (cfg.aiApiKeyEnv && process.env[cfg.aiApiKeyEnv])
     env[cfg.aiApiKeyEnv] = process.env[cfg.aiApiKeyEnv];
+  if (cfg.aiBaseUrl) {
+    for (const header of customEndpointHeaders(cfg).headers) {
+      if (header.value !== undefined) env[header.env] = header.value;
+    }
+  }
   return env;
 }
 
@@ -238,6 +304,167 @@ function errorMessage(result: FxAskJson | undefined, stderr: string, code: numbe
     stderr.trim().split("\n").slice(-5).join("\n"),
   ].filter(Boolean);
   return `fx exited ${code ?? "by signal"}: ${parts.join(" | ") || "(no output)"}`;
+}
+
+/**
+ * Token usage of every `fx ask` in one batch: each attempt, including failed
+ * ones, and every follow-up. fx's `input_tokens` includes cache reads and
+ * writes; Deepsec's `inputTokens` counts uncached input only.
+ */
+class FxUsageLedger {
+  private input = 0;
+  private output = 0;
+  private cacheRead = 0;
+  private cacheWrite = 0;
+  private reported = false;
+
+  add(usage: FxAskJson["usage"]): void {
+    if (!usage) return;
+    for (const value of [usage.input_tokens, usage.output_tokens]) {
+      if (typeof value === "number") this.reported = true;
+    }
+    this.input += usage.input_tokens ?? 0;
+    this.output += usage.output_tokens ?? 0;
+    this.cacheRead += usage.cache_read_tokens ?? 0;
+    this.cacheWrite += usage.cache_write_tokens ?? 0;
+  }
+
+  usage(): BatchMeta["usage"] | undefined {
+    if (!this.reported) return undefined;
+    return {
+      inputTokens: Math.max(0, this.input - this.cacheRead - this.cacheWrite),
+      outputTokens: this.output,
+      cacheReadInputTokens: this.cacheRead,
+      cacheCreationInputTokens: this.cacheWrite,
+    };
+  }
+}
+
+const GATEWAY_MODELS_URL = "https://ai-gateway.vercel.sh/v1/models";
+
+/** USD per token. */
+interface FxTokenRates {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** Base per-token prices from AI Gateway's public model list. */
+export function parseGatewayPricing(body: unknown): Map<string, FxTokenRates> {
+  const rates = new Map<string, FxTokenRates>();
+  const models = (body as { data?: unknown })?.data;
+  if (!Array.isArray(models)) return rates;
+  for (const model of models as Array<{ id?: unknown; pricing?: Record<string, unknown> }>) {
+    const price = (key: string) => {
+      const value = Number(model.pricing?.[key]);
+      return Number.isFinite(value) && value >= 0 ? value : undefined;
+    };
+    const input = price("input");
+    const output = price("output");
+    if (typeof model.id !== "string" || input === undefined || output === undefined) continue;
+    rates.set(model.id, {
+      input,
+      output,
+      cacheRead: price("input_cache_read") ?? input,
+      cacheWrite: price("input_cache_write") ?? input,
+    });
+  }
+  return rates;
+}
+
+let gatewayPricing: Promise<Map<string, FxTokenRates> | undefined> | undefined;
+
+function loadGatewayPricing(): Promise<Map<string, FxTokenRates> | undefined> {
+  gatewayPricing ??= fetch(GATEWAY_MODELS_URL, { signal: AbortSignal.timeout(10_000) })
+    .then((response) => (response.ok ? response.json() : undefined))
+    .then((body) => (body === undefined ? undefined : parseGatewayPricing(body)))
+    .catch(() => undefined);
+  return gatewayPricing;
+}
+
+/** Test hook: forget the cached AI Gateway prices. */
+export function resetFxPricingCache(): void {
+  gatewayPricing = undefined;
+}
+
+/**
+ * Estimated batch cost from AI Gateway's base prices, like the Codex
+ * backend's estimate. Tiered long-context prices are not applied because fx
+ * reports totals, not per-request counts. Undefined for custom endpoints or
+ * when the price list is unavailable.
+ */
+async function estimateFxCostUsd(
+  cfg: FxAgentConfig,
+  usage: BatchMeta["usage"] | undefined,
+): Promise<number | undefined> {
+  if (cfg.aiBaseUrl || !usage) return undefined;
+  const rates = (await loadGatewayPricing())?.get(cfg.model ?? FX_DEFAULT_MODEL);
+  if (!rates) return undefined;
+  return (
+    usage.inputTokens * rates.input +
+    usage.outputTokens * rates.output +
+    usage.cacheReadInputTokens * rates.cacheRead +
+    usage.cacheCreationInputTokens * rates.cacheWrite
+  );
+}
+
+/**
+ * Project-relative paths of symlinks whose real target is outside the
+ * project. Dangling links are skipped (nothing can be read through them),
+ * and `.git` is not walked.
+ */
+export function findSymlinksOutsideProject(projectRoot: string, limit = 5): string[] {
+  const root = fs.realpathSync.native(projectRoot);
+  const escapes: string[] = [];
+  const pending = [root];
+  while (pending.length > 0 && escapes.length < limit) {
+    const dir = pending.pop() as string;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        let target: string;
+        try {
+          target = fs.realpathSync.native(full);
+        } catch {
+          continue;
+        }
+        if (target !== root && !target.startsWith(root + path.sep)) {
+          escapes.push(path.relative(root, full));
+          if (escapes.length >= limit) break;
+        }
+      } else if (entry.isDirectory() && entry.name !== ".git") {
+        pending.push(full);
+      }
+    }
+  }
+  return escapes;
+}
+
+const symlinkChecks = new Map<string, string[]>();
+
+/**
+ * Second layer under fx's own workspace check: refuse to run on a project
+ * whose symlinks resolve outside it. Checked once per project per process.
+ */
+function assertNoSymlinksOutsideProject(projectRoot: string): void {
+  let escapes = symlinkChecks.get(projectRoot);
+  if (!escapes) {
+    escapes = findSymlinksOutsideProject(projectRoot);
+    symlinkChecks.set(projectRoot, escapes);
+  }
+  if (escapes.length > 0) {
+    throw new Error(
+      `The fx backend refuses projects with symlinks that point outside the project root: ${escapes.join(", ")}. ` +
+        "Remove or replace these links, or use another backend.",
+    );
+  }
 }
 
 /**
@@ -264,6 +491,7 @@ class FxSession {
   constructor(
     readonly projectRoot: string,
     readonly cfg: FxAgentConfig,
+    readonly ledger?: FxUsageLedger,
   ) {
     this.home = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-"));
     fs.mkdirSync(path.join(this.home, ".fx"), { mode: 0o700 });
@@ -305,6 +533,7 @@ class FxSession {
     } catch {
       result = undefined;
     }
+    this.ledger?.add(result?.usage);
     if (code !== 0 || !result || result.exit_code !== 0) {
       throw new FxAskError(errorMessage(result, stderr, code), result !== undefined);
     }
@@ -317,20 +546,12 @@ class FxSession {
   }
 }
 
+/** Usage and cost come from the batch's FxUsageLedger, not one result. */
 function metaFromResult(result: FxAskJson, durationMs: number): Partial<BatchMeta> {
-  const u = result.usage;
   return {
     durationMs,
     numTurns: result.steps,
     agentSessionId: result.session_id || undefined,
-    usage: u
-      ? {
-          inputTokens: u.input_tokens ?? 0,
-          outputTokens: u.output_tokens ?? 0,
-          cacheReadInputTokens: u.cache_read_tokens ?? 0,
-          cacheCreationInputTokens: u.cache_write_tokens ?? 0,
-        }
-      : undefined,
   };
 }
 
@@ -393,12 +614,17 @@ async function* runWithRetries(
   label: string,
   startedMessage: (model: string) => string,
   signal?: AbortSignal,
-): AsyncGenerator<AgentProgress, { session: FxSession; run: FxPromptResult }> {
+): AsyncGenerator<
+  AgentProgress,
+  { session: FxSession; run: FxPromptResult; ledger: FxUsageLedger }
+> {
+  assertNoSymlinksOutsideProject(projectRoot);
+  const ledger = new FxUsageLedger();
   let lastError = "";
   let attempts = 0;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     attempts = attempt;
-    const session = new FxSession(projectRoot, cfg);
+    const session = new FxSession(projectRoot, cfg, ledger);
     if (attempt === 1) yield { type: "started", message: startedMessage(session.modelLabel) };
     else
       yield {
@@ -408,7 +634,7 @@ async function* runWithRetries(
     let turnIncomplete = false;
     try {
       const run = await runFxPrompt(session, prompt, maxTurns, signal);
-      if (run.resultText) return { session, run };
+      if (run.resultText) return { session, run, ledger };
       lastError = "fx returned an empty response";
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
@@ -432,6 +658,7 @@ async function* runWithRetries(
 
 export async function runFxSetupTask(params: SetupTaskParams): Promise<string> {
   const cfg = readConfig(params.config);
+  assertNoSymlinksOutsideProject(params.projectRoot);
   const session = new FxSession(params.projectRoot, cfg);
   try {
     params.onProgress?.({
@@ -457,7 +684,7 @@ export class FxAgentPlugin implements AgentPlugin {
     const maxTurns = cfg.maxTurns ?? 150;
     const prompt = buildInvestigatePrompt({ promptTemplate, projectInfo, batch });
     const startTime = Date.now();
-    const { session, run } = yield* runWithRetries(
+    const { session, run, ledger } = yield* runWithRetries(
       projectRoot,
       cfg,
       prompt,
@@ -529,14 +756,17 @@ export class FxAgentPlugin implements AgentPlugin {
       if (refusal?.refused) {
         yield { type: "thinking", message: `Refusal detected: ${refusal.reason ?? "see raw"}` };
       }
-      const tokensStr = run.meta.usage
-        ? ` ${run.meta.usage.inputTokens + run.meta.usage.outputTokens} tokens`
+      const usage = ledger.usage();
+      const costUsd = await estimateFxCostUsd(cfg, usage);
+      const tokensStr = usage
+        ? ` ${usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens + usage.outputTokens} tokens`
         : "";
+      const costStr = costUsd !== undefined ? ` $${costUsd.toFixed(3)}` : "";
       yield {
         type: "complete",
-        message: `Investigation complete (${(durationMs / 1000).toFixed(1)}s, ${run.turnCount} turns, ${run.toolUseCount} tool calls${tokensStr}${refusal?.refused ? " refusal" : ""})`,
+        message: `Investigation complete (${(durationMs / 1000).toFixed(1)}s, ${run.turnCount} turns, ${run.toolUseCount} tool calls${costStr}${tokensStr}${refusal?.refused ? " refusal" : ""})`,
       };
-      return { results, meta: { ...run.meta, durationMs, refusal } };
+      return { results, meta: { ...run.meta, usage, costUsd, durationMs, refusal } };
     } finally {
       session.dispose();
     }
@@ -563,7 +793,7 @@ export class FxAgentPlugin implements AgentPlugin {
       onlyFindingIds: onlyFindingIds ? new Set(onlyFindingIds) : undefined,
     });
     const startTime = Date.now();
-    const { session, run } = yield* runWithRetries(
+    const { session, run, ledger } = yield* runWithRetries(
       projectRoot,
       cfg,
       prompt,
@@ -633,13 +863,16 @@ export class FxAgentPlugin implements AgentPlugin {
           message: `Refusal detected during revalidation: ${refusal.reason ?? "see raw"}`,
         };
       }
+      const usage = ledger.usage();
+      const costUsd = await estimateFxCostUsd(cfg, usage);
+      const costStr = costUsd !== undefined ? ` $${costUsd.toFixed(3)}` : "";
       yield {
         type: "complete",
-        message: `Revalidation complete (${(durationMs / 1000).toFixed(1)}s, ${run.turnCount} turns, ${run.toolUseCount} tool calls, ${verdicts.length} verdicts${refusal?.refused ? " refusal" : ""})`,
+        message: `Revalidation complete (${(durationMs / 1000).toFixed(1)}s, ${run.turnCount} turns, ${run.toolUseCount} tool calls${costStr}, ${verdicts.length} verdicts${refusal?.refused ? " refusal" : ""})`,
       };
       return {
         verdicts,
-        meta: { ...run.meta, durationMs, refusal },
+        meta: { ...run.meta, usage, costUsd, durationMs, refusal },
         rawResponses: [...preResponses, ...repair.rawResponses],
         repairAttempts: repair.repairAttempts,
       };

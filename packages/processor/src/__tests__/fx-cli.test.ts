@@ -1,4 +1,12 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FileRecord } from "@deepsec/core";
@@ -9,7 +17,10 @@ import {
   FX_DEFAULT_MODEL,
   FX_READ_ONLY_PERMISSIONS,
   FxAgentPlugin,
+  findSymlinksOutsideProject,
   parseFxAskOutput,
+  parseGatewayPricing,
+  resetFxPricingCache,
   resolveFxEffort,
 } from "../agents/fx-cli.js";
 import type { AgentProgress, InvestigateOutput } from "../agents/types.js";
@@ -17,6 +28,27 @@ import type { AgentProgress, InvestigateOutput } from "../agents/types.js";
 vi.mock("../agents/shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/shared.js")>();
   return { ...actual, backoff: async () => {} };
+});
+
+// AI Gateway's public price list, stubbed so cost estimates never use the network.
+const SOL = { input: "0.000002", output: "0.00001", input_cache_read: "0.0000002" };
+const GATEWAY_PRICES = {
+  data: [
+    { id: "openai/gpt-6.2-sol", pricing: SOL },
+    { id: "openai/gpt-6.1-sol", pricing: SOL },
+  ],
+};
+
+beforeEach(() => {
+  resetFxPricingCache();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify(GATEWAY_PRICES), { status: 200 })),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 function record(filePath: string): FileRecord {
@@ -72,6 +104,71 @@ describe("fx settings and arguments", () => {
     });
   });
 
+  it("maps a custom endpoint's headers and credential header onto fx's connection", () => {
+    const settings = buildFxSettings({
+      model: "m",
+      aiBaseUrl: "https://router.example/v1",
+      aiApiKeyEnv: "ROUTER_KEY",
+      aiCredentialHeader: { name: "x-api-key", scheme: "raw" },
+      aiHeaders: { "X-Org-Id": "acme" },
+    });
+    const provider = (settings.providers as Record<string, Record<string, unknown>>)[
+      "deepsec-custom"
+    ];
+    expect(provider.auth).toEqual({ type: "none" });
+    expect(provider.headers).toEqual({
+      "X-Org-Id": { env: "DEEPSEC_FX_HEADER_0" },
+      "x-api-key": { env: "ROUTER_KEY" },
+    });
+    const bearer = buildFxSettings({
+      model: "m",
+      aiBaseUrl: "https://router.example/v1",
+      aiApiKeyEnv: "ROUTER_KEY",
+    });
+    expect(
+      (bearer.providers as Record<string, Record<string, unknown>>)["deepsec-custom"].auth,
+    ).toEqual({ type: "bearer", env: "ROUTER_KEY" });
+    expect(() =>
+      buildFxSettings({
+        model: "m",
+        aiBaseUrl: "https://router.example/v1",
+        aiApiKeyEnv: "ROUTER_KEY",
+        aiCredentialHeader: { name: "Authorization", scheme: "raw" },
+      }),
+    ).toThrow(/only with the Bearer scheme/);
+  });
+
+  it("reads base per-token prices from AI Gateway's model list", () => {
+    const rates = parseGatewayPricing({
+      data: [
+        {
+          id: "a/full",
+          pricing: {
+            input: "0.000002",
+            output: "0.00001",
+            input_cache_read: "0.0000002",
+            input_cache_write: "0.0000025",
+          },
+        },
+        { id: "a/no-cache", pricing: { input: "0.000001", output: "0.000004" } },
+        { id: "a/unpriced" },
+      ],
+    });
+    expect(rates.get("a/full")).toEqual({
+      input: 0.000002,
+      output: 0.00001,
+      cacheRead: 0.0000002,
+      cacheWrite: 0.0000025,
+    });
+    expect(rates.get("a/no-cache")).toEqual({
+      input: 0.000001,
+      output: 0.000004,
+      cacheRead: 0.000001,
+      cacheWrite: 0.000001,
+    });
+    expect(rates.has("a/unpriced")).toBe(false);
+  });
+
   it("uses AI Gateway, the default model and the requested effort", () => {
     expect(buildFxAskArgs({ thinkingLevel: "medium" }, { maxTurns: 50 })).toEqual([
       "ask",
@@ -125,7 +222,7 @@ const fs = require("node:fs");
 const stdin = fs.readFileSync(0, "utf8");
 const args = process.argv.slice(2);
 const settings = JSON.parse(fs.readFileSync(process.env.HOME + "/.fx/settings.json", "utf8"));
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, settings, cwd: process.cwd(), followUp: args.includes("--resume"), mentionsFile: stdin.includes("src/app.ts") }) + "\\n");
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, settings, cwd: process.cwd(), followUp: args.includes("--resume"), mentionsFile: stdin.includes("src/app.ts"), headerEnv: process.env.DEEPSEC_FX_HEADER_0, credentialEnv: process.env.DEEPSEC_FX_CREDENTIAL }) + "\\n");
 const finding = { severity: "HIGH", vulnSlug: "xss", title: "Unescaped output", description: "d", lineNumbers: [1], recommendation: "r", confidence: "high" };
 const answer = args.includes("--resume")
   ? JSON.stringify({ refused: false, skipped: [] })
@@ -160,12 +257,15 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
       title: "Unescaped output",
       severity: "HIGH",
     });
+    // Main call plus refusal follow-up, each 1200 input (900 cached) and 300
+    // output. fx's input_tokens includes cache reads; inputTokens is uncached.
     expect(out.meta.usage).toEqual({
-      inputTokens: 1200,
-      outputTokens: 300,
-      cacheReadInputTokens: 900,
+      inputTokens: 600,
+      outputTokens: 600,
+      cacheReadInputTokens: 1800,
       cacheCreationInputTokens: 0,
     });
+    expect(out.meta.costUsd).toBeCloseTo(600 * 0.000002 + 600 * 0.00001 + 1800 * 0.0000002, 10);
     expect(out.meta.numTurns).toBe(3);
     expect(out.meta.agentSessionId).toBe("sess-1");
     expect(out.meta.refusal?.refused).toBe(false);
@@ -181,6 +281,38 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
     );
     expect(calls[0].settings.permission).toEqual(FX_READ_ONLY_PERMISSIONS);
     expect(calls[1].args.slice(-2)).toEqual(["--resume", "sess-1"]);
+  });
+
+  it("passes custom endpoint header values to fx through private variables and reports no cost", async () => {
+    process.env.FX_TEST_ROUTER_KEY = "sekret";
+    try {
+      const out: InvestigateOutput = await drain(
+        new FxAgentPlugin().investigate({
+          batch: [record("src/app.ts")],
+          projectRoot: dir,
+          promptTemplate: "Find vulnerabilities.",
+          projectInfo: "",
+          config: {
+            model: "router/model",
+            aiBaseUrl: "https://router.example/v1",
+            aiApiKeyEnv: "FX_TEST_ROUTER_KEY",
+            aiCredentialHeader: { name: "x-router-key", scheme: "bearer" },
+            aiHeaders: { "X-Org-Id": "acme" },
+          },
+        }),
+      );
+      const first = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]);
+      expect(first.headerEnv).toBe("acme");
+      expect(first.credentialEnv).toBe("Bearer sekret");
+      expect(first.settings.providers["deepsec-custom"].headers).toEqual({
+        "X-Org-Id": { env: "DEEPSEC_FX_HEADER_0" },
+        "x-router-key": { env: "DEEPSEC_FX_CREDENTIAL" },
+      });
+      expect(out.meta.costUsd).toBeUndefined();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.FX_TEST_ROUTER_KEY;
+    }
   });
 });
 
@@ -206,13 +338,13 @@ const followUp = args.includes("--resume");
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ followUp, home: process.env.HOME }) + "\\n");
 const mainCalls = fs.readFileSync(${JSON.stringify(log)}, "utf8").trim().split("\\n").map(JSON.parse).filter((c) => !c.followUp).length;
 if (!followUp && mainCalls <= ${failures}) {
-  process.stdout.write(JSON.stringify({ exit_code: 1, error: ${JSON.stringify(FLAGGED)}, output: "Checked the allowlist; it is [] so far.", session_id: "sess-flagged" }));
+  process.stdout.write(JSON.stringify({ exit_code: 1, error: ${JSON.stringify(FLAGGED)}, output: "Checked the allowlist; it is [] so far.", session_id: "sess-flagged", usage: { input_tokens: 100, output_tokens: 10 } }));
   process.exit(1);
 }
 const answer = followUp
   ? JSON.stringify({ refused: false, skipped: [] })
   : JSON.stringify([{ filePath: "src/app.ts", findings: [{ severity: "HIGH", vulnSlug: "xss", title: "Unescaped output", description: "d", lineNumbers: [1], recommendation: "r", confidence: "high" }] }]);
-process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, session_id: "sess-ok", steps: 2 }));
+process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, session_id: "sess-ok", steps: 2, usage: { input_tokens: 1000, output_tokens: 200, cache_read_tokens: 400 } }));
 `,
     );
     chmodSync(fake, 0o755);
@@ -257,6 +389,15 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
     const main = calls().filter((c) => !c.followUp);
     expect(main).toHaveLength(2);
     expect(main[0].home).not.toBe(main[1].home);
+    // The blocked attempt's usage counts too: 100 + 1000 + 1000 (follow-up)
+    // input with 800 cached, and 10 + 200 + 200 output.
+    expect(out.meta.usage).toEqual({
+      inputTokens: 1300,
+      outputTokens: 410,
+      cacheReadInputTokens: 800,
+      cacheCreationInputTokens: 0,
+    });
+    expect(out.meta.costUsd).toBeCloseTo(1300 * 0.000002 + 410 * 0.00001 + 800 * 0.0000002, 10);
   });
 
   it("fails the batch after the last attempt instead of recording the files as clean", async () => {
@@ -267,5 +408,61 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
     const all = calls();
     expect(all.filter((c) => !c.followUp)).toHaveLength(3);
     expect(all.some((c) => c.followUp)).toBe(false);
+  });
+});
+
+describe("fx backend symlink boundary", () => {
+  let dir: string;
+  let project: string;
+  let previousBin: string | undefined;
+  let marker: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "deepsec-fx-links-"));
+    project = path.join(dir, "project");
+    mkdirSync(path.join(project, "src"), { recursive: true });
+    mkdirSync(path.join(project, ".git"));
+    mkdirSync(path.join(dir, "outside"));
+    writeFileSync(path.join(project, "src", "app.ts"), "export {};\n");
+    writeFileSync(path.join(dir, "outside", "secret.txt"), "secret\n");
+    symlinkSync("app.ts", path.join(project, "src", "alias.ts"));
+    symlinkSync("missing.ts", path.join(project, "src", "dangling.ts"));
+    symlinkSync("../../outside", path.join(project, ".git", "ignored"));
+    marker = path.join(dir, "fx-was-called");
+    const fake = path.join(dir, "fx");
+    writeFileSync(
+      fake,
+      `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "1");\n`,
+    );
+    chmodSync(fake, 0o755);
+    previousBin = process.env.DEEPSEC_FX_BIN;
+    process.env.DEEPSEC_FX_BIN = fake;
+  });
+
+  afterEach(() => {
+    if (previousBin === undefined) delete process.env.DEEPSEC_FX_BIN;
+    else process.env.DEEPSEC_FX_BIN = previousBin;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ignores in-project, dangling and .git links", () => {
+    expect(findSymlinksOutsideProject(project)).toEqual([]);
+  });
+
+  it("refuses to run fx when a link resolves outside the project", async () => {
+    symlinkSync("../../outside/secret.txt", path.join(project, "src", "config.ts"));
+    expect(findSymlinksOutsideProject(project)).toEqual([path.join("src", "config.ts")]);
+    await expect(
+      drain(
+        new FxAgentPlugin().investigate({
+          batch: [record("src/app.ts")],
+          projectRoot: project,
+          promptTemplate: "Find vulnerabilities.",
+          projectInfo: "",
+          config: { model: "openai/gpt-6.2-sol" },
+        }),
+      ),
+    ).rejects.toThrow(/symlinks that point outside the project root: src\/config\.ts/);
+    expect(() => readFileSync(marker)).toThrow();
   });
 });

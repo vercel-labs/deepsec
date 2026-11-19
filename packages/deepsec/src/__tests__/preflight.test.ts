@@ -221,6 +221,46 @@ describe("assertAgentCredential", () => {
     writeFileSync(join(piHome, "auth.json"), "{}");
     expect(() => assertAgentCredential("pi", { inSandbox: true })).toThrow(/AI_GATEWAY_API_KEY/);
   });
+
+  it("passes for fx with AI_GATEWAY_API_KEY and refuses it in sandbox mode", () => {
+    process.env.AI_GATEWAY_API_KEY = "vck_gateway";
+    expect(() => assertAgentCredential("fx")).not.toThrow();
+    expect(() => assertAgentCredential("fx", { inSandbox: true })).toThrow(
+      /deepsec sandbox does not support --agent fx/,
+    );
+  });
+
+  it("refuses fx on a local or direct route, which it can't use", () => {
+    process.env.AI_GATEWAY_API_KEY = "vck_gateway";
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    expect(() => assertAgentCredential("fx")).toThrow(/can't use the local model route/);
+    setLoadedConfig({ projects: [], ai: { mode: "direct", provider: "openai" } });
+    expect(() => assertAgentCredential("fx")).toThrow(/can't use the direct model route/);
+    // Explicit endpoint flags replace the persisted route.
+    process.env.MARTIAN_API_KEY = "martian-key";
+    expect(() =>
+      assertAgentCredential("fx", {
+        aiBaseUrl: "https://router.example/v1",
+        aiApiKeyEnv: "MARTIAN_API_KEY",
+      }),
+    ).not.toThrow();
+  });
+
+  it("checks a custom fx endpoint's own key, never the Gateway key", () => {
+    process.env.AI_GATEWAY_API_KEY = "vck_gateway";
+    expect(() =>
+      assertAgentCredential("fx", {
+        aiBaseUrl: "https://router.example/v1",
+        aiApiKeyEnv: "MARTIAN_API_KEY",
+      }),
+    ).toThrow(/MARTIAN_API_KEY is not set for the custom endpoint/);
+    delete process.env.AI_GATEWAY_API_KEY;
+    // No key variable: an explicitly unauthenticated endpoint, such as local vLLM.
+    expect(() =>
+      assertAgentCredential("fx", { aiBaseUrl: "http://127.0.0.1:8000/v1" }),
+    ).not.toThrow();
+    expect(() => assertAgentCredential("fx")).toThrow(/Missing AI credentials for --agent fx/);
+  });
 });
 
 describe("assertSandboxCredential", () => {
