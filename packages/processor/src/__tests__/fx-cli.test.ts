@@ -46,7 +46,7 @@ describe("fx settings and arguments", () => {
       glob: projectOnly,
       grep: projectOnly,
     });
-    // Permission rules do not cover the web tools; toolbox, denied by "*", hides them.
+    // "*" can't deny web_fetch (its rules only match exact domains); toolbox, denied by "*", hides it.
     expect(settings.tool_placement).toEqual({ web_fetch: "toolbox", web_search: "toolbox" });
     expect(settings.session_titles).toBe(false);
     expect(settings.providers).toBeUndefined();

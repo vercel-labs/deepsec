@@ -47,8 +47,9 @@ import type {
  * Read-only, like the Pi backend: each run gets a throwaway HOME whose
  * permission rules allow only read_file, glob_files and grep_files, inside
  * the project root, and deny every other tool; fx does not offer denied
- * tools to the model. web_fetch and web_search are not governed by
- * permission rules, so they are moved into toolbox, which "*" denies.
+ * tools to the model. web_fetch rules only match an exact `domain:<host>`,
+ * so "*" can't deny it for every domain; web_fetch and web_search are moved
+ * into toolbox instead, which "*" denies.
  * Verified against fx 0.0.17: the model is offered exactly read_file,
  * glob_files and grep_files.
  */
