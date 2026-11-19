@@ -97,7 +97,11 @@ export async function revalidateCommand(opts: {
     model,
     modelRoute: resolvedRoute?.route,
   });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv, aiBaseUrl: opts.aiBaseUrl });
+  assertAgentCredential(agentType, {
+    aiApiKeyEnv: opts.aiApiKeyEnv,
+    aiBaseUrl: opts.aiBaseUrl,
+    modelRoute: agentType === "fx" ? resolvedRoute?.route : undefined,
+  });
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);
   console.log(`  Agent: ${agentType} (${model})`);

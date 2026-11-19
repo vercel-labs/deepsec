@@ -246,6 +246,46 @@ describe("assertAgentCredential", () => {
     ).not.toThrow();
   });
 
+  it("does not let a saved local route waive the explicit endpoint's missing key", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    process.env.AI_GATEWAY_API_KEY = "unrelated";
+    expect(() =>
+      assertAgentCredential("fx", {
+        aiBaseUrl: "https://router.example/v1",
+        aiApiKeyEnv: "MARTIAN_API_KEY",
+      }),
+    ).toThrow(/MARTIAN_API_KEY/);
+  });
+
+  it("rejects a key override without an endpoint instead of selecting Gateway", () => {
+    process.env.MARTIAN_API_KEY = "unused";
+    expect(() => assertAgentCredential("fx", { aiApiKeyEnv: "MARTIAN_API_KEY" })).toThrow(
+      /--ai-base-url/,
+    );
+  });
+
+  it("validates the resolved custom route used by the backend, not the ambient Gateway key", async () => {
+    setLoadedConfig({
+      projects: [],
+      ai: {
+        mode: "custom",
+        provider: "router",
+        baseUrl: "https://router.example/v1",
+        apiKeyEnv: "MARTIAN_API_KEY",
+        credentialHeader: { name: "Authorization", scheme: "bearer" },
+      },
+    });
+    process.env.MARTIAN_API_KEY = "selected";
+    const resolved = await applyConfiguredModelRoute("fx", { MARTIAN_API_KEY: "selected" });
+    expect(resolved?.route.mode).toBe("custom");
+    expect(() => assertAgentCredential("fx", { modelRoute: resolved?.route })).not.toThrow();
+    delete process.env.MARTIAN_API_KEY;
+    process.env.AI_GATEWAY_API_KEY = "unrelated";
+    expect(() => assertAgentCredential("fx", { modelRoute: resolved?.route })).toThrow(
+      /MARTIAN_API_KEY/,
+    );
+  });
+
   it("checks a custom fx endpoint's own key, never the Gateway key", () => {
     process.env.AI_GATEWAY_API_KEY = "vck_gateway";
     expect(() =>

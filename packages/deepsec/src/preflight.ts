@@ -233,11 +233,8 @@ function hasLocalPiAgent(): boolean {
 // other than these.
 const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi", "fx"]);
 
-/**
- * fx-specific refusals, checked before any credential: sandboxes don't install
- * fx or broker its credential, and fx never uses a local login.
- */
-function assertFxRunnable(
+/** Check the credential of the endpoint fx will actually select. */
+function assertFxCredential(
   route: ModelRoute | undefined,
   options: { inSandbox?: boolean; aiApiKeyEnv?: string; aiBaseUrl?: string },
 ): void {
@@ -247,11 +244,26 @@ function assertFxRunnable(
         "  Run `deepsec process --agent fx` locally instead.",
     );
   }
-  // Explicit endpoint flags replace the persisted route, as everywhere else.
-  const explicitEndpoint = Boolean(options.aiBaseUrl || options.aiApiKeyEnv);
-  if (!explicitEndpoint && (route?.mode === "local" || route?.mode === "direct")) {
+  if (options.aiApiKeyEnv && !options.aiBaseUrl) {
+    throw new Error("--agent fx requires --ai-base-url with --ai-api-key-env");
+  }
+  if (!options.aiBaseUrl && route) {
+    const error = modelRouteCompatibilityError(route, "fx");
+    if (error) throw new Error(error);
+  }
+  const custom = options.aiBaseUrl || route?.mode === "custom";
+  const key = options.aiBaseUrl
+    ? options.aiApiKeyEnv
+    : route?.mode === "custom"
+      ? route.apiKeyEnv
+      : "AI_GATEWAY_API_KEY";
+  // Only an explicitly supplied endpoint without a credential requests anonymous access.
+  if (options.aiBaseUrl && !key) return;
+  if (!key || !process.env[key]) {
     throw new Error(
-      `--agent fx can't use the ${route.mode} model route; use AI Gateway or a custom endpoint.`,
+      custom
+        ? `Missing AI credentials for --agent fx: ${key ?? "apiKeyEnv"} is not set for the custom endpoint.`
+        : `Missing AI credentials for --agent fx: set AI_GATEWAY_API_KEY.\n  Setup: ${SETUP_DOC_URL}`,
     );
   }
 }
@@ -289,7 +301,10 @@ export function assertAgentCredential(
   // so fall through to the normal checks (an ambient AI_GATEWAY_API_KEY
   // still works there, and the standard actionable error fires otherwise).
   const selectedRoute = options.modelRoute ?? (getConfig()?.ai as ModelRoute | undefined);
-  if (agentType === "fx") assertFxRunnable(selectedRoute, options);
+  if (agentType === "fx") {
+    assertFxCredential(selectedRoute, options);
+    return;
+  }
   if (selectedRoute?.mode === "local" && !options.inSandbox) return;
 
   const gateway = process.env.AI_GATEWAY_API_KEY;
@@ -334,32 +349,6 @@ export function assertAgentCredential(
       : "";
     throw new Error(
       `Missing AI credentials for --agent pi.\n` +
-        `\n` +
-        `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
-        `  Setup: ${SETUP_DOC_URL}`,
-    );
-  }
-
-  if (agentType === "fx") {
-    // The fx backend runs fx with a throwaway HOME and no keychain, so a
-    // local `fx login` is never used: it needs a Gateway key or the key of
-    // the selected custom endpoint. A custom endpoint never falls back to
-    // the Gateway key; one without --ai-api-key-env is called without auth.
-    if (options.aiBaseUrl) {
-      if (!options.aiApiKeyEnv || custom) return;
-      throw new Error(
-        `Missing AI credentials for --agent fx: ${options.aiApiKeyEnv} is not set for the custom endpoint.\n` +
-          `\n` +
-          `  Add to .env.local:    ${options.aiApiKeyEnv}=…\n` +
-          `  Setup: ${SETUP_DOC_URL}`,
-      );
-    }
-    if (gateway || custom) return;
-    const customHint = options.aiApiKeyEnv
-      ? `, or set ${options.aiApiKeyEnv}=… for the selected --ai-api-key-env`
-      : "";
-    throw new Error(
-      `Missing AI credentials for --agent fx.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
         `  Setup: ${SETUP_DOC_URL}`,
