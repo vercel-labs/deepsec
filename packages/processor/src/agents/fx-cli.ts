@@ -52,6 +52,11 @@ import type {
  * into toolbox instead, which "*" denies.
  * Verified against fx 0.0.17: the model is offered exactly read_file,
  * glob_files and grep_files.
+ *
+ * The path rules below are lexical. Symlinks are handled by fx itself: it
+ * resolves the real path of every read, glob and grep target and refuses
+ * targets outside the workspace ("Path is outside the workspace"). The
+ * opt-in test fx-cli-symlinks.test.ts checks this against a real binary.
  */
 const FX_TOOL_PLACEMENT = { web_fetch: "toolbox", web_search: "toolbox" } as const;
 
