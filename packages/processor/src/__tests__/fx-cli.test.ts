@@ -39,11 +39,12 @@ describe("fx settings and arguments", () => {
     const settings = buildFxSettings({});
     expect(settings.permission_mode).toBe("ask");
     expect(settings.permission).toEqual(FX_READ_ONLY_PERMISSIONS);
+    const projectOnly = { "*": "allow", "/*": "deny", "~*": "deny", "..*": "deny", "*..*": "deny" };
     expect(FX_READ_ONLY_PERMISSIONS).toEqual({
       "*": "deny",
-      read: "allow",
-      glob: "allow",
-      grep: "allow",
+      read: projectOnly,
+      glob: projectOnly,
+      grep: projectOnly,
     });
     // Permission rules do not cover the web tools; toolbox, denied by "*", hides them.
     expect(settings.tool_placement).toEqual({ web_fetch: "toolbox", web_search: "toolbox" });

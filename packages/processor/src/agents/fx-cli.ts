@@ -45,11 +45,12 @@ import type {
  * follow-ups.
  *
  * Read-only, like the Pi backend: each run gets a throwaway HOME whose
- * permission rules allow only read_file, glob_files and grep_files and deny
- * every other tool; fx does not offer denied tools to the model. web_fetch
- * and web_search are not governed by permission rules, so they are moved
- * into toolbox, which "*" denies. Verified against fx 0.0.17: the model is
- * offered exactly read_file, glob_files and grep_files.
+ * permission rules allow only read_file, glob_files and grep_files, inside
+ * the project root, and deny every other tool; fx does not offer denied
+ * tools to the model. web_fetch and web_search are not governed by
+ * permission rules, so they are moved into toolbox, which "*" denies.
+ * Verified against fx 0.0.17: the model is offered exactly read_file,
+ * glob_files and grep_files.
  */
 export const FX_TOOL_PLACEMENT = { web_fetch: "toolbox", web_search: "toolbox" } as const;
 
@@ -57,12 +58,28 @@ export const FX_DEFAULT_MODEL = "openai/gpt-6.2-sol";
 const DEFAULT_THINKING_LEVEL = "high";
 const FX_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
 const CUSTOM_PROVIDER = "deepsec-custom";
+/**
+ * Path rules for the three read tools. fx matches a rule against the path
+ * argument as the model sent it, so relative paths stay allowed and anything
+ * that can leave the project root is denied: absolute paths, `~`, and any
+ * `..` segment (a leading `..` needs its own pattern because `*` matches at
+ * least one character). Verified against fx 0.0.17 with read_file, glob_files
+ * and grep_files. Symlinks inside the repository are not resolved.
+ */
+const FX_PROJECT_PATHS_ONLY = {
+  "*": "allow",
+  "/*": "deny",
+  "~*": "deny",
+  "..*": "deny",
+  "*..*": "deny",
+} as const;
+
 /** fx permission rule keys: read_file -> read, glob_files -> glob, grep_files -> grep. */
 export const FX_READ_ONLY_PERMISSIONS = {
   "*": "deny",
-  read: "allow",
-  glob: "allow",
-  grep: "allow",
+  read: FX_PROJECT_PATHS_ONLY,
+  glob: FX_PROJECT_PATHS_ONLY,
+  grep: FX_PROJECT_PATHS_ONLY,
 } as const;
 
 const FX_SYSTEM_NOTE =
