@@ -53,7 +53,7 @@ import type {
  * Verified against fx 0.0.17: the model is offered exactly read_file,
  * glob_files and grep_files.
  */
-export const FX_TOOL_PLACEMENT = { web_fetch: "toolbox", web_search: "toolbox" } as const;
+const FX_TOOL_PLACEMENT = { web_fetch: "toolbox", web_search: "toolbox" } as const;
 
 export const FX_DEFAULT_MODEL = "openai/gpt-6.2-sol";
 const DEFAULT_THINKING_LEVEL = "high";
@@ -235,6 +235,22 @@ function errorMessage(result: FxAskJson | undefined, stderr: string, code: numbe
   return `fx exited ${code ?? "by signal"}: ${parts.join(" | ") || "(no output)"}`;
 }
 
+/**
+ * A failed `fx ask`. `turnIncomplete` is set when fx printed its JSON result
+ * but the turn did not finish (a model error such as a provider safety-filter
+ * block). Like an incomplete Codex turn, any output from it is progress, not
+ * a result, so the batch is retried on a fresh session and never parsed.
+ */
+class FxAskError extends Error {
+  constructor(
+    message: string,
+    readonly turnIncomplete: boolean,
+  ) {
+    super(message);
+    this.name = "FxAskError";
+  }
+}
+
 /** One saved fx conversation in its own HOME, continued across prompts. */
 class FxSession {
   readonly home: string;
@@ -285,7 +301,7 @@ class FxSession {
       result = undefined;
     }
     if (code !== 0 || !result || result.exit_code !== 0) {
-      throw new Error(errorMessage(result, stderr, code));
+      throw new FxAskError(errorMessage(result, stderr, code), result !== undefined);
     }
     if (result.session_id) this.sessionId = result.session_id;
     return result;
@@ -357,9 +373,12 @@ async function runRefusalFollowUp(
 }
 
 /**
- * Runs the main prompt with Deepsec's retry policy. Returns the live session
- * (for follow-ups) and the result; throws QuotaExhaustedError or the last
- * error when every attempt fails.
+ * Runs the main prompt with Deepsec's retry policy. Every attempt starts a
+ * fresh session. Transient errors and incomplete turns (see FxAskError) are
+ * retried; after the last attempt the batch fails, so the processor marks its
+ * files as errors and a later run picks them up again. Returns the live
+ * session (for follow-ups) and the result; throws QuotaExhaustedError on
+ * quota errors.
  */
 async function* runWithRetries(
   projectRoot: string,
@@ -371,30 +390,38 @@ async function* runWithRetries(
   signal?: AbortSignal,
 ): AsyncGenerator<AgentProgress, { session: FxSession; run: FxPromptResult }> {
   let lastError = "";
+  let attempts = 0;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    attempts = attempt;
     const session = new FxSession(projectRoot, cfg);
     if (attempt === 1) yield { type: "started", message: startedMessage(session.modelLabel) };
     else
       yield {
         type: "thinking",
-        message: `Retrying fx ${label} after transient error (attempt ${attempt}/${MAX_ATTEMPTS}): ${lastError.slice(0, 200)}`,
+        message: `Retrying fx ${label} on a fresh session (attempt ${attempt}/${MAX_ATTEMPTS}): ${lastError.slice(0, 200)}`,
       };
+    let turnIncomplete = false;
     try {
       const run = await runFxPrompt(session, prompt, maxTurns, signal);
       if (run.resultText) return { session, run };
       lastError = "fx returned an empty response";
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
+      turnIncomplete = err instanceof FxAskError && err.turnIncomplete;
       yield { type: "error", message: `fx error: ${lastError.slice(0, 300)}` };
     }
     session.dispose();
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("fx batch aborted");
+    }
     const quotaSource = classifyQuotaError(lastError);
     if (quotaSource) throw new QuotaExhaustedError(quotaSource, lastError);
-    if (attempt >= MAX_ATTEMPTS || !isTransientError(lastError)) break;
+    if (attempt >= MAX_ATTEMPTS) break;
+    if (!turnIncomplete && !isTransientError(lastError)) break;
     await backoff(attempt);
   }
   throw new Error(
-    `fx produced no ${label} result after ${MAX_ATTEMPTS} attempt(s). Last error: ${lastError || "(none captured)"}.`,
+    `fx produced no ${label} result after ${attempts} attempt(s). Last error: ${lastError || "(none captured)"}.`,
   );
 }
 
