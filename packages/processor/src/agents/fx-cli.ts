@@ -174,12 +174,12 @@ function customEndpointHeaders(cfg: FxAgentConfig): {
         "fx sends an Authorization credential only with the Bearer scheme; use a different credential header",
       );
     }
-    return { auth: { type: "bearer", env: cfg.aiApiKeyEnv }, headers };
+    return { auth: { type: "bearer", env: FX_CREDENTIAL_ENV }, headers };
   }
   if (credential.scheme === "raw") {
     return {
       auth: { type: "none" },
-      headers: [...headers, { name: credential.name, env: cfg.aiApiKeyEnv }],
+      headers: [...headers, { name: credential.name, env: FX_CREDENTIAL_ENV }],
     };
   }
   const key = process.env[cfg.aiApiKeyEnv];
@@ -269,21 +269,17 @@ function fxEnvironment(home: string, cfg: FxAgentConfig): NodeJS.ProcessEnv {
     FX_SOUND: "0",
     NO_COLOR: "1",
   };
-  for (const key of [
-    "AI_GATEWAY_API_KEY",
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY",
-    "SSL_CERT_FILE",
-  ]) {
+  for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
-  if (cfg.aiApiKeyEnv && process.env[cfg.aiApiKeyEnv])
-    env[cfg.aiApiKeyEnv] = process.env[cfg.aiApiKeyEnv];
   if (cfg.aiBaseUrl) {
+    const key = cfg.aiApiKeyEnv && process.env[cfg.aiApiKeyEnv];
+    if (key) env[FX_CREDENTIAL_ENV] = key;
     for (const header of customEndpointHeaders(cfg).headers) {
       if (header.value !== undefined) env[header.env] = header.value;
     }
+  } else if (process.env.AI_GATEWAY_API_KEY) {
+    env.AI_GATEWAY_API_KEY = process.env.AI_GATEWAY_API_KEY;
   }
   return env;
 }

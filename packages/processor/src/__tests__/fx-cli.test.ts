@@ -22,6 +22,7 @@ import {
   parseGatewayPricing,
   resetFxPricingCache,
   resolveFxEffort,
+  runFxSetupTask,
 } from "../agents/fx-cli.js";
 import type { AgentProgress, InvestigateOutput } from "../agents/types.js";
 
@@ -98,7 +99,7 @@ describe("fx settings and arguments", () => {
     expect(settings.providers).toMatchObject({
       "deepsec-custom": {
         base_url: "http://127.0.0.1:9/v1",
-        auth: { type: "bearer", env: "MY_KEY" },
+        auth: { type: "bearer", env: "DEEPSEC_FX_CREDENTIAL" },
         model_metadata: { m: { supports_tool_use: true } },
       },
     });
@@ -118,7 +119,7 @@ describe("fx settings and arguments", () => {
     expect(provider.auth).toEqual({ type: "none" });
     expect(provider.headers).toEqual({
       "X-Org-Id": { env: "DEEPSEC_FX_HEADER_0" },
-      "x-api-key": { env: "ROUTER_KEY" },
+      "x-api-key": { env: "DEEPSEC_FX_CREDENTIAL" },
     });
     const bearer = buildFxSettings({
       model: "m",
@@ -127,7 +128,7 @@ describe("fx settings and arguments", () => {
     });
     expect(
       (bearer.providers as Record<string, Record<string, unknown>>)["deepsec-custom"].auth,
-    ).toEqual({ type: "bearer", env: "ROUTER_KEY" });
+    ).toEqual({ type: "bearer", env: "DEEPSEC_FX_CREDENTIAL" });
     expect(() =>
       buildFxSettings({
         model: "m",
@@ -222,7 +223,7 @@ const fs = require("node:fs");
 const stdin = fs.readFileSync(0, "utf8");
 const args = process.argv.slice(2);
 const settings = JSON.parse(fs.readFileSync(process.env.HOME + "/.fx/settings.json", "utf8"));
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, settings, cwd: process.cwd(), followUp: args.includes("--resume"), mentionsFile: stdin.includes("src/app.ts"), headerEnv: process.env.DEEPSEC_FX_HEADER_0, credentialEnv: process.env.DEEPSEC_FX_CREDENTIAL }) + "\\n");
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, settings, cwd: process.cwd(), followUp: args.includes("--resume"), mentionsFile: stdin.includes("src/app.ts"), headerEnv: process.env.DEEPSEC_FX_HEADER_0, hasGatewayKey: Boolean(process.env.AI_GATEWAY_API_KEY), hasRouterKey: Boolean(process.env.FX_TEST_ROUTER_KEY), credentialEnv: process.env.DEEPSEC_FX_CREDENTIAL }) + "\\n");
 const finding = { severity: "HIGH", vulnSlug: "xss", title: "Unescaped output", description: "d", lineNumbers: [1], recommendation: "r", confidence: "high" };
 const answer = args.includes("--resume")
   ? JSON.stringify({ refused: false, skipped: [] })
@@ -283,6 +284,24 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
     expect(calls[1].args.slice(-2)).toEqual(["--resume", "sess-1"]);
   });
 
+  it("does not let a custom credential name replace the isolated HOME", async () => {
+    vi.stubEnv("HOME", "synthetic-host-home");
+    vi.stubEnv("AI_GATEWAY_API_KEY", "unrelated-gateway-key");
+    try {
+      await runFxSetupTask({
+        projectRoot: dir,
+        prompt: "test",
+        config: { aiBaseUrl: "https://router.example/v1", aiApiKeyEnv: "HOME" },
+      });
+      // The fake child reads the settings from its HOME before writing the log.
+      const call = JSON.parse(readFileSync(log, "utf8").trim());
+      expect(call.credentialEnv).toBe("synthetic-host-home");
+      expect(call.hasGatewayKey).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("passes custom endpoint header values to fx through private variables and reports no cost", async () => {
     process.env.FX_TEST_ROUTER_KEY = "sekret";
     try {
@@ -302,6 +321,7 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
         }),
       );
       const first = JSON.parse(readFileSync(log, "utf8").trim().split("\n")[0]);
+      expect(first.hasRouterKey).toBe(false);
       expect(first.headerEnv).toBe("acme");
       expect(first.credentialEnv).toBe("Bearer sekret");
       expect(first.settings.providers["deepsec-custom"].headers).toEqual({

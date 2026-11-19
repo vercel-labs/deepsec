@@ -17,6 +17,7 @@ import { runSetupWorkflow, type SetupThrough } from "../setup/coordinator.js";
 import type { SupportedPackageManager } from "../setup/install.js";
 import { shouldUseHeadlessMode } from "../setup/interaction.js";
 import { acquireSetupLock } from "../setup/lock.js";
+import { assertFxSetupRoute } from "../setup/options.js";
 import { persistedModelRoute, recordInitialModelRoute } from "../setup/persisted-route.js";
 import { buildSetupPlan } from "../setup/plan.js";
 import { deterministicVercelProjectName } from "../setup/project-name.js";
@@ -216,7 +217,6 @@ export async function initCommand(opts: InitOpts) {
       modelRoute = choice.route;
       agent ??= choice.defaultAgent;
     }
-    recordInitialModelRoute(workspaceDir, modelRoute);
     if (!model && !resuming && !headless && process.stdin.isTTY && process.stdout.isTTY) {
       const choice = await promptForModelSelection({
         route: modelRoute ?? { mode: "gateway", provider: "vercel" },
@@ -271,6 +271,8 @@ export async function initCommand(opts: InitOpts) {
     // route comes from the login checkpoint, or from the generated config when
     // setup was interrupted before login; the prompt above is first-run only.
     const linkRoute = modelRoute ?? persistedModelRoute(workspaceDir, registered.id);
+    assertFxSetupRoute(agent, linkRoute);
+    recordInitialModelRoute(workspaceDir, modelRoute);
     if (
       linkRoute?.mode !== "local" &&
       !headless &&

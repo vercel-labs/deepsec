@@ -17,6 +17,32 @@ const originalCwd = process.cwd();
 afterEach(() => process.chdir(originalCwd));
 
 describe("one-shot setup coordinator", () => {
+  it.each([
+    "local",
+    "direct",
+  ] as const)("rejects %s with fx before persisting setup", async (mode) => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-route-"));
+    try {
+      await expect(
+        runSetupWorkflow({
+          workspaceDir: workspace,
+          projectRoot: workspace,
+          projectId: "app",
+          agent: "fx",
+          modelRoute: { mode, provider: mode === "local" ? "local" : "openai" },
+          services: {
+            install: () => {
+              throw new Error("unexpected installation");
+            },
+          },
+        }),
+      ).rejects.toThrow(`--agent fx can't use the ${mode} model route`);
+      expect(fs.readdirSync(workspace)).toEqual([]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("honors a local route selected during setup despite ambient workspace OIDC", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-local-route-"));
     const workspace = path.join(root, ".deepsec");
