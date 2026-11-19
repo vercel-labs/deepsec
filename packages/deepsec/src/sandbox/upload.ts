@@ -301,18 +301,21 @@ export async function makeTarball(
 }
 
 /**
+ * Largest payload sent in one `writeFiles` call. The Sandbox file API
+ * rejects large request bodies (a 639 MB target tarball failed with
+ * "Request Entity Too Large"), so bigger tarballs are uploaded in parts.
+ */
+const UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024;
+
+/**
  * Upload a local tarball file to a path on the sandbox.
  *
- * Reads the local tarball into memory only at upload time and frees it
- * (along with the local temp file) immediately after, so callers that
- * build several tarballs in parallel don't keep all of them resident.
- *
- * The SDK's `writeFiles` API accepts only `string | Uint8Array` for
- * `content` — there's no public streaming-upload path in `@vercel/sandbox`
- * today, so we still hold one full Buffer for the duration of this call.
- * That's the smallest memory footprint achievable through the SDK; the
- * win vs. the previous design is that the Buffer's lifetime is now
- * scoped to a single call instead of the entire orchestration window.
+ * Tarballs up to `chunkBytes` go up in a single `writeFiles` call. Larger
+ * ones are read from disk one chunk at a time, written as numbered
+ * `<remoteTarPath>.part-NNNNN` files, and joined on the sandbox with `cat`;
+ * the joined size is checked against the local size before returning. The
+ * SDK's `writeFiles` accepts only `string | Uint8Array`, so at most one
+ * chunk is resident in this process at a time.
  *
  * Pass `keepLocal: true` if the caller wants to retain the local file
  * (e.g. for retries). Default is to unlink on success.
@@ -322,18 +325,20 @@ export async function uploadTarballToSandbox(
   remoteTarPath: string,
   localTarPath: string,
   onLog?: (msg: string) => void,
-  opts: { keepLocal?: boolean } = {},
+  opts: { keepLocal?: boolean; chunkBytes?: number } = {},
 ): Promise<void> {
   const size = fs.statSync(localTarPath).size;
   const mb = (size / 1024 / 1024).toFixed(1);
-  onLog?.(`Uploading ${remoteTarPath} (${mb}MB)...`);
+  const chunkBytes = opts.chunkBytes ?? UPLOAD_CHUNK_BYTES;
+  const parts = Math.ceil(size / chunkBytes);
+  onLog?.(`Uploading ${remoteTarPath} (${mb}MB${parts > 1 ? `, ${parts} parts` : ""})...`);
   const started = Date.now();
-  // Read just-in-time so that, in the parallel-upload case, only the
-  // tarball currently in flight is resident in this process. (The SDK
-  // internally re-tars+gzips into a second buffer; that's its concern.)
-  const buffer = fs.readFileSync(localTarPath);
   try {
-    await sandbox.writeFiles([{ path: remoteTarPath, content: buffer }]);
+    if (size <= chunkBytes) {
+      await sandbox.writeFiles([{ path: remoteTarPath, content: fs.readFileSync(localTarPath) }]);
+    } else {
+      await uploadInChunks(sandbox, remoteTarPath, localTarPath, size, chunkBytes);
+    }
   } finally {
     // Buffer goes out of scope here; explicit `= null` would help GC
     // earlier but V8's escape analysis already does this. The local
@@ -345,6 +350,50 @@ export async function uploadTarballToSandbox(
     }
   }
   onLog?.(`Uploaded ${remoteTarPath} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+}
+
+async function uploadInChunks(
+  sandbox: Sandbox,
+  remotePath: string,
+  localPath: string,
+  size: number,
+  chunkBytes: number,
+): Promise<void> {
+  const partPaths: string[] = [];
+  const fd = fs.openSync(localPath, "r");
+  try {
+    for (let offset = 0; offset < size; offset += chunkBytes) {
+      const length = Math.min(chunkBytes, size - offset);
+      const chunk = Buffer.alloc(length);
+      let read = 0;
+      while (read < length) {
+        const n = fs.readSync(fd, chunk, read, length - read, offset + read);
+        if (n === 0) throw new Error(`Unexpected end of ${localPath} at byte ${offset + read}`);
+        read += n;
+      }
+      const partPath = `${remotePath}.part-${String(partPaths.length).padStart(5, "0")}`;
+      await sandbox.writeFiles([{ path: partPath, content: chunk }]);
+      partPaths.push(partPath);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  // `$0` is the destination and `$@` the parts, in upload order.
+  const join = await sandbox.runCommand({
+    cmd: "sh",
+    args: ["-c", 'cat "$@" > "$0" && rm -f "$@" && wc -c < "$0"', remotePath, ...partPaths],
+  });
+  if (join.exitCode !== 0) {
+    const err = await join.stderr();
+    throw new Error(
+      `Joining ${partPaths.length} parts into ${remotePath} failed (exit ${join.exitCode}): ${err.slice(0, 500)}`,
+    );
+  }
+  const joined = Number((await join.stdout()).trim());
+  if (joined !== size) {
+    throw new Error(`Uploaded ${remotePath} is ${joined} bytes on the sandbox, expected ${size}`);
+  }
 }
 
 /**
