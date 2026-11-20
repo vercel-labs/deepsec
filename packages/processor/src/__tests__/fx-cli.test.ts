@@ -480,6 +480,25 @@ describe("FxAgentPlugin with a scripted fx", () => {
     ).rejects.toThrow("fx --json output has no usage");
   });
 
+  it("fails a batch whose follow-up has no token counts", async () => {
+    process.env.DEEPSEC_FX_BIN = fakeFx(
+      dir,
+      `if (args.includes("--resume")) reply(JSON.stringify({ refused: false, skipped: [] }), { usage: {} });
+else reply(JSON.stringify([{ filePath: "src/app.ts", findings: [] }]));`,
+    );
+    await expect(
+      drain(
+        new FxAgentPlugin().investigate({
+          batch: [record("src/app.ts")],
+          projectRoot: dir,
+          promptTemplate: "Find vulnerabilities.",
+          projectInfo: "",
+          config: { model: "openai/gpt-6.2-sol" },
+        }),
+      ),
+    ).rejects.toThrow("fx --json output has no usage");
+  });
+
   it("repairs non-JSON revalidation output in the same session", async () => {
     process.env.DEEPSEC_FX_BIN = fakeFx(
       dir,

@@ -494,6 +494,14 @@ class FxAskError extends Error {
   }
 }
 
+/** A successful fx result without token counts; the batch's spend would be unknown. */
+class FxUsageError extends Error {
+  constructor() {
+    super("fx --json output has no usage; this fx version is not supported");
+    this.name = "FxUsageError";
+  }
+}
+
 /** One saved fx conversation in its own HOME, continued across prompts. */
 class FxSession {
   readonly home: string;
@@ -560,7 +568,7 @@ class FxSession {
       typeof result.usage?.input_tokens !== "number" ||
       typeof result.usage.output_tokens !== "number"
     )
-      throw new Error("fx --json output has no usage; this fx version is not supported");
+      throw new FxUsageError();
     if (result.session_id) this.sessionId = result.session_id;
     return result;
   }
@@ -607,7 +615,9 @@ async function runFollowUp(
       signal,
     );
     return result.final_output || result.output || "";
-  } catch {
+  } catch (err) {
+    // A follow-up is optional, but unknown spend and cancellation are not.
+    if (err instanceof FxUsageError || signal?.aborted) throw err;
     return undefined;
   }
 }
