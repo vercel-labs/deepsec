@@ -62,15 +62,15 @@ import type {
 const FX_TOOL_PLACEMENT = { web_fetch: "toolbox", web_search: "toolbox" } as const;
 
 export const FX_DEFAULT_MODEL = "openai/gpt-6.2-sol";
-const DEFAULT_THINKING_LEVEL = "high";
+const DEFAULT_THINKING_LEVEL = "xhigh";
 const FX_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
 const CUSTOM_PROVIDER = "deepsec-custom";
 /**
  * Path rules for the three read tools. fx matches a rule against the path
  * argument as the model sent it, so relative paths stay allowed and anything
  * that can leave the project root is denied: absolute paths, `~`, and any
- * `..` segment (a leading `..` needs its own pattern because `*` matches at
- * least one character). Verified against fx 0.0.17 with read_file, glob_files
+ * `..` segment. fx's `*` also matches nothing, so the patterns cover a bare
+ * `/`, `~` and `..` too. Verified against fx 0.0.17 with read_file, glob_files
  * and grep_files. Symlinks are covered separately (see the note above).
  */
 const FX_PROJECT_PATHS_ONLY = {
@@ -463,12 +463,17 @@ export function findSymlinksOutsideProject(projectRoot: string, limit = 5): stri
   return escapes;
 }
 
+/** Projects this process has already found free of escaping symlinks. */
+const projectsWithoutEscapes = new Set<string>();
+
 /**
  * Second layer under fx's own workspace check: refuse to run on a project
- * whose symlinks resolve outside it. Checked before every run, since the
- * tree can change between batches.
+ * whose symlinks resolve outside it. The walk covers the whole tree, so it
+ * runs once per project per process rather than once per batch; fx still
+ * checks the real path of every read, including links added later.
  */
 function assertNoSymlinksOutsideProject(projectRoot: string): void {
+  if (projectsWithoutEscapes.has(projectRoot)) return;
   const escapes = findSymlinksOutsideProject(projectRoot);
   if (escapes.length > 0) {
     throw new Error(
@@ -476,6 +481,7 @@ function assertNoSymlinksOutsideProject(projectRoot: string): void {
         "Remove or replace these links, or use another backend.",
     );
   }
+  projectsWithoutEscapes.add(projectRoot);
 }
 
 /**
@@ -616,8 +622,12 @@ async function runFollowUp(
     );
     return result.final_output || result.output || "";
   } catch (err) {
-    // A follow-up is optional, but unknown spend and cancellation are not.
+    // A follow-up is optional, but unknown spend, exhausted quota and
+    // cancellation must still stop the run.
     if (err instanceof FxUsageError || signal?.aborted) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    const quotaSource = classifyQuotaError(message);
+    if (quotaSource) throw new QuotaExhaustedError(quotaSource, message);
     return undefined;
   }
 }

@@ -1,4 +1,4 @@
-import {
+import fs, {
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -141,7 +141,8 @@ describe("fx settings and arguments", () => {
       { maxTurns: 8, resumeSessionId: "s1" },
     );
     expect(resumed.slice(-2)).toEqual(["--resume", "s1"]);
-    expect(resumed).toContain("high");
+    // Like the other backends, no thinking level means full effort.
+    expect(resumed[resumed.indexOf("--effort") + 1]).toBe("xhigh");
   });
 });
 
@@ -421,6 +422,28 @@ describe("fx backend symlink boundary", () => {
     ).rejects.toThrow(/symlinks that point outside the project root: src\/config\.ts/);
     expect(() => readFileSync(marker)).toThrow();
   });
+
+  it("walks a clean project once per process, not once per batch", async () => {
+    const walk = vi.spyOn(fs, "readdirSync");
+    const batch = () =>
+      drain(
+        new FxAgentPlugin().investigate({
+          batch: [record("src/app.ts")],
+          projectRoot: project,
+          promptTemplate: "Find vulnerabilities.",
+          projectInfo: "",
+          config: { model: "openai/gpt-6.2-sol" },
+        }),
+      ).catch(() => undefined);
+    try {
+      await batch();
+      await batch();
+      const root = fs.realpathSync.native(project);
+      expect(walk.mock.calls.filter(([dir]) => dir === root)).toHaveLength(1);
+    } finally {
+      walk.mockRestore();
+    }
+  });
 });
 
 describe("fxCostLimitError", () => {
@@ -497,6 +520,28 @@ else reply(JSON.stringify([{ filePath: "src/app.ts", findings: [] }]));`,
         }),
       ),
     ).rejects.toThrow("fx --json output has no usage");
+  });
+
+  it("stops on exhausted quota in a follow-up", async () => {
+    process.env.DEEPSEC_FX_BIN = fakeFx(
+      dir,
+      `if (args.includes("--resume")) {
+  process.stdout.write(JSON.stringify({ exit_code: 1, error: "Insufficient funds. Please add credits to your account", usage: { input_tokens: 1, output_tokens: 0 } }));
+  process.exit(1);
+}
+reply(JSON.stringify([{ filePath: "src/app.ts", findings: [] }]));`,
+    );
+    await expect(
+      drain(
+        new FxAgentPlugin().investigate({
+          batch: [record("src/app.ts")],
+          projectRoot: dir,
+          promptTemplate: "Find vulnerabilities.",
+          projectInfo: "",
+          config: { model: "openai/gpt-6.2-sol" },
+        }),
+      ),
+    ).rejects.toMatchObject({ name: "QuotaExhaustedError" });
   });
 
   it("repairs non-JSON revalidation output in the same session", async () => {
