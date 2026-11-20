@@ -12,7 +12,7 @@ import { resolveAgentType } from "../resolve-agent-type.js";
 import { orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
-import { extractReinvestigate } from "./sandbox-process.js";
+import { extractReinvestigate, rejectCyberAccessProgram } from "./sandbox-process.js";
 
 // Mirror of VALID_COMMANDS in sandbox-process.ts. Kept in sync by hand —
 // `enrich` is intentionally excluded: it runs locally (git committer
@@ -88,6 +88,7 @@ export async function sandboxAllCommand(
   }
   const command = subcommand as SandboxSubcommand;
   const passthrough = opts.args ?? [];
+  rejectCyberAccessProgram(passthrough);
   const totalSandboxes = opts.sandboxes ?? 10;
   const concurrency = parseInt(extractFlag(passthrough, "--concurrency") ?? "4", 10) || 4;
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);

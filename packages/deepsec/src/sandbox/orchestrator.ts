@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dataDir, getConfigPath, readProjectConfig } from "@deepsec/core";
+import { dataDir, getConfigPath, getDataRoot, readProjectConfig } from "@deepsec/core";
 import { Sandbox } from "@vercel/sandbox";
 import { downloadResults } from "./download.js";
 import { partitionFiles } from "./partitioner.js";
@@ -22,7 +22,13 @@ import {
   saveRunState,
 } from "./state.js";
 import type { SandboxConfig, SandboxInstance, SandboxResult, SandboxRunState } from "./types.js";
-import { DATA_EXCLUDES, DEEPSEC_APP_EXCLUDES, makeTarball, TARGET_EXCLUDES } from "./upload.js";
+import {
+  DATA_EXCLUDES,
+  DEEPSEC_APP_EXCLUDES,
+  makeTarball,
+  nestedExcludePaths,
+  TARGET_EXCLUDES,
+} from "./upload.js";
 
 /** Commands where we inject --root to point at the sandbox target checkout */
 const NEEDS_ROOT = new Set(["process", "revalidate", "scan"]);
@@ -256,9 +262,17 @@ async function prepareUploads(
     `Preparing upload bundles (mode=${mode}, app=${appRoot}, target=${localTargetRoot}, data=${localDataDir})...`,
   );
 
+  // `deepsec init` places the workspace inside the target by default. Keep it
+  // (credentials, data mirror) out of the target bundle in git and non-git mode.
+  const configPath = getConfigPath();
+  const targetExcludePaths = nestedExcludePaths(localTargetRoot, [
+    ...(configPath ? [path.dirname(configPath)] : []),
+    getDataRoot(),
+  ]);
+
   const [app, target, data] = await Promise.all([
     makeTarball(appRoot, DEEPSEC_APP_EXCLUDES, onLog),
-    makeTarball(localTargetRoot, TARGET_EXCLUDES, onLog),
+    makeTarball(localTargetRoot, TARGET_EXCLUDES, onLog, { excludePaths: targetExcludePaths }),
     makeTarball(localDataDir, DATA_EXCLUDES, onLog),
   ]);
 

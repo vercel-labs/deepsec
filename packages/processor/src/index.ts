@@ -45,7 +45,7 @@ import {
 } from "./reconcile.js";
 
 export { ClaudeAgentSdkPlugin } from "./agents/claude-agent-sdk.js";
-export { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
+export { CodexAgentSdkPlugin, findCodexSubscriptionHome } from "./agents/codex-sdk.js";
 export { GrokBuildAgentPlugin } from "./agents/grok-build.js";
 export { PiAgentPlugin } from "./agents/pi-sdk.js";
 export { AgentRegistry } from "./agents/registry.js";

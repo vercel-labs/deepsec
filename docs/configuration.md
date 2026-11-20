@@ -34,6 +34,7 @@ see [`samples/webapp/deepsec.config.ts`](https://github.com/vercel-labs/deepsec/
 | `defaultAgent` | `string` | Default `--agent` value (`codex`, `claude`, or `pi`). See [models](models.md). |
 | `defaultModel` | `string` | Default `--model` value selected during setup. |
 | `defaultThinkingLevel` | `string` | Default reasoning effort (`minimal` through `xhigh`) selected during setup. |
+| `codex` | `{ cyberAccessProgram?: "standard" \| "daybreak_blue" \| "daybreak_red" }` | Codex-only settings. `--cyber-access-program` overrides `cyberAccessProgram`. See [models](models.md#cyber-access-programs). |
 | `ai` | `ModelRoute` | Non-secret model credential route selected and verified by setup. |
 | `dataDir` | `string` | Override the `data/` directory. Defaults to `./data`. |
 
