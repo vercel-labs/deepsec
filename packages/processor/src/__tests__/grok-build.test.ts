@@ -56,7 +56,7 @@ describe("Grok Build agent", () => {
 
   it("parseGrokStdout recovers a banner + nested JSON object", () => {
     const raw = parseGrokStdout(
-      'note: starting\n{"text":"{\\"ok\\":true}","usage":{"input_tokens":12},"sessionId":"abc","num_turns":1}\n',
+      'note: starting\n{"text":"{\\"ok\\":true}","usage":{"input_tokens":12},"stopReason":"end_turn","sessionId":"abc","num_turns":1}\n',
     );
     expect(raw.text).toBe('{"ok":true}');
     expect(raw.sessionId).toBe("abc");

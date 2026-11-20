@@ -277,6 +277,19 @@ export function assertAgentCredential(
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
   const env = options.env ?? process.env;
 
+  if (isGrok(agentType)) {
+    if (env.XAI_API_KEY) return;
+    if (!options.inSandbox && hasLocalGrokAgent(env)) return;
+    throw new Error(
+      `Missing AI credentials for --agent grok.\n` +
+        `\n` +
+        `  Option A:  export XAI_API_KEY=xai-…   (from https://console.x.ai)\n` +
+        `  Option B:  run \`grok login\` once on this machine\n` +
+        `  Ensure the \`grok\` CLI is on PATH (or set GROK_EXECUTABLE).\n` +
+        `  Setup: ${SETUP_DOC_URL}`,
+    );
+  }
+
   // A local-subscription route is the user saying "claude/codex are set up
   // machine-wide" — skip the env-var checks entirely and let the agent SDK
   // error clearly at first call if the login is actually missing. Sandboxes
@@ -330,19 +343,6 @@ export function assertAgentCredential(
       `Missing AI credentials for --agent pi.\n` +
         `\n` +
         `  Add to .env.local:    AI_GATEWAY_API_KEY=vck_…${customHint}\n` +
-        `  Setup: ${SETUP_DOC_URL}`,
-    );
-  }
-
-  if (isGrok(agentType)) {
-    if (env.XAI_API_KEY) return;
-    if (!options.inSandbox && hasLocalGrokAgent(env)) return;
-    throw new Error(
-      `Missing AI credentials for --agent grok.\n` +
-        `\n` +
-        `  Option A:  export XAI_API_KEY=xai-…   (from https://console.x.ai)\n` +
-        `  Option B:  run \`grok login\` once on this machine\n` +
-        `  Ensure the \`grok\` CLI is on PATH (or set GROK_EXECUTABLE).\n` +
         `  Setup: ${SETUP_DOC_URL}`,
     );
   }

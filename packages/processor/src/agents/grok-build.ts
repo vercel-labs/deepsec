@@ -42,7 +42,7 @@ import type {
 const DEFAULT_MODEL = "grok-4.6";
 const DEFAULT_THINKING_LEVEL = "xhigh";
 
-const INVESTIGATE_TOOLS = "read_file,grep,list_dir,run_terminal_cmd";
+const INVESTIGATE_TOOLS = "read_file,grep,list_dir";
 const SETUP_TOOLS = "read_file,grep,list_dir";
 const TOOLLESS = "read_file";
 
@@ -70,6 +70,13 @@ const GROK_ENV_ALLOWLIST = new Set<string>([
   "GROK_DISABLE_AUTOUPDATER",
   "RUST_LOG",
   "RUST_BACKTRACE",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
 ]);
 
 const GROK_OUTPUT_CAP = 4 * 1024 * 1024;
@@ -157,6 +164,12 @@ export function makeIsolatedGrokHome(): string {
     try {
       fs.symlinkSync(auth, path.join(home, "auth.json"));
     } catch {
+      try {
+        fs.linkSync(auth, path.join(home, "auth.json"));
+        break;
+      } catch {
+        // fall through
+      }
       throw new Error(
         `Could not link grok login from ${auth}. Export XAI_API_KEY instead of copying credentials into the temp home.`,
       );
@@ -171,7 +184,8 @@ export function buildGrokEnv(grokHome: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v !== "string") continue;
-    if (GROK_ENV_ALLOWLIST.has(k) || k.startsWith("LC_")) {
+    const name = process.platform === "win32" ? k.toUpperCase() : k;
+    if (GROK_ENV_ALLOWLIST.has(name) || name.startsWith("LC_")) {
       env[k] = v;
     }
   }
@@ -196,9 +210,15 @@ export function isGrokSandboxApplyFailure(text: string): boolean {
   );
 }
 
-function extractJsonObject(text: string): string | undefined {
-  const start = text.indexOf("{");
-  if (start < 0) return undefined;
+function isGrokEnvelope(value: unknown): value is GrokJsonResult {
+  if (!value || typeof value !== "object") return false;
+  const v = value as GrokJsonResult;
+  return (
+    v.type === "error" || (typeof v.sessionId === "string" && typeof v.stopReason === "string")
+  );
+}
+
+function extractJsonObject(text: string, start: number): string | undefined {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -233,9 +253,17 @@ export function parseGrokStdout(stdout: string): GrokJsonResult {
   try {
     return JSON.parse(trimmed) as GrokJsonResult;
   } catch {
-    const slice = extractJsonObject(trimmed);
-    if (!slice) throw new Error(`Grok stdout was not JSON: ${trimmed.slice(0, 200)}`);
-    return JSON.parse(slice) as GrokJsonResult;
+    for (let i = trimmed.lastIndexOf("{"); i >= 0; i = trimmed.lastIndexOf("{", i - 1)) {
+      const slice = extractJsonObject(trimmed, i);
+      if (!slice) continue;
+      try {
+        const parsed: unknown = JSON.parse(slice);
+        if (isGrokEnvelope(parsed)) return parsed;
+      } catch {
+        // keep scanning
+      }
+    }
+    throw new Error(`Grok stdout was not JSON: ${trimmed.slice(0, 200)}`);
   }
 }
 
@@ -359,6 +387,11 @@ async function runGrokHeadless(opts: GrokRunOptions): Promise<GrokRunResult> {
       throw new Error(`Grok error: ${msg}`);
     }
 
+    if (raw.stopReason !== "end_turn") {
+      throw new Error(
+        `Grok stopped before finishing (stopReason=${raw.stopReason ?? "?"}, turns=${raw.num_turns ?? "?"}).`,
+      );
+    }
     const resultText = String(raw.text ?? "").trim();
     if (!resultText) {
       throw new Error(
@@ -397,12 +430,16 @@ function killGrokChild(child: ChildProcess, signal: NodeJS.Signals): void {
       stdio: "ignore",
       windowsHide: true,
     });
-    killer.on("error", () => {
+    const fallback = () => {
       try {
         child.kill(signal);
       } catch {
         // already exited
       }
+    };
+    killer.on("error", fallback);
+    killer.on("exit", (code) => {
+      if (code !== 0) fallback();
     });
     killer.unref();
     return;
@@ -837,9 +874,9 @@ export class GrokBuildAgentPlugin implements AgentPlugin {
           });
           throw err;
         }
-        rawResponses.push({ kind: "json-repair", prompt: repairPrompt, rawText: repairText });
         try {
           verdicts = parseRevalidateVerdicts(repairText);
+          rawResponses.push({ kind: "json-repair", prompt: repairPrompt, rawText: resultText });
           resultText = repairText;
           yield { type: "thinking", message: "Grok revalidation JSON repair succeeded" };
         } catch (repairErr) {

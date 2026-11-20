@@ -78,6 +78,9 @@ export function modelRouteCompatibilityError(
   if (route.mode === "custom" && agentType !== "pi") {
     return `Custom model routes require --agent pi (received ${agentType})`;
   }
+  if (route.mode === "direct" && route.provider === "xai" && agentType !== "pi") {
+    return `Direct xAI credentials require --agent grok or pi (received ${agentType})`;
+  }
   if (route.mode === "direct" && route.provider === "anthropic" && agentType === "codex") {
     return "Direct Anthropic credentials are not compatible with --agent codex";
   }

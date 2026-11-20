@@ -178,7 +178,6 @@ function remapGrokRecommendation(choice: RecommendedModelChoice): RecommendedMod
   return {
     ...choice,
     agent: "grok",
-    harness: "grok",
     configuredModel: modelForHarness(choice.modelId, "grok"),
   };
 }
@@ -188,7 +187,9 @@ function compatibleHarness(route: ModelRoute, requested?: string): ModelHarness 
   if (requestedHarness === "grok") return "grok";
   if (route.mode === "direct") {
     if (route.provider === "anthropic") return "claude";
-    if (route.provider === "xai" || route.provider === "grok") return "grok";
+    if (route.provider === "xai" || route.provider === "grok") {
+      return requestedHarness === "pi" ? "pi" : "grok";
+    }
     return "codex";
   }
   if (route.mode === "custom") return "pi";
@@ -300,7 +301,7 @@ export async function promptForModelSelection(options: {
     }
     for (const [index, choice] of choices.entries()) {
       console.log(
-        `  ${index + 1}. ${BOLD}${choice.label}${RESET} · ${displayHarness(choice.agent)} · ${choice.reasoning}  ${CYAN}score ${choice.score.toFixed(2)}${RESET}  price ${formatRelativePrice(choice.relativePrice)}`,
+        `  ${index + 1}. ${BOLD}${choice.label}${RESET} · ${displayHarness(choice.agent)}${choice.harness === choice.agent ? "" : ` (scored with ${displayHarness(choice.harness)})`} · ${choice.reasoning}  ${CYAN}score ${choice.score.toFixed(2)}${RESET}  price ${formatRelativePrice(choice.relativePrice)}`,
       );
     }
     const customIndex = choices.length + 1;

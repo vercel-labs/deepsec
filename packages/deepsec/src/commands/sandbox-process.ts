@@ -30,6 +30,8 @@ interface SandboxOpts {
  * e.g. extractFlag(["--limit", "50", "--force"], "--limit") => "50"
  */
 function extractFlag(args: string[], flag: string): string | undefined {
+  const inline = args.find((arg) => arg.startsWith(`${flag}=`));
+  if (inline) return inline.slice(flag.length + 1);
   const idx = args.indexOf(flag);
   if (idx === -1 || idx + 1 >= args.length) return undefined;
   const val = args[idx + 1];
