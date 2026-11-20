@@ -169,7 +169,7 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   }
 
   const projectId = resolveProjectId(opts.projectId);
-  rejectCyberAccessProgram(opts.args ?? []);
+  rejectCyberAccessProgram(normalizePassthroughArgs(opts.args ?? []));
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
 
   if (!config.aiApiKeyEnv && !config.aiBaseUrl) {
