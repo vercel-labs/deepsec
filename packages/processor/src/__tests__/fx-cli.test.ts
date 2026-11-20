@@ -269,6 +269,11 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
         "X-Org-Id": { env: "DEEPSEC_FX_HEADER_0" },
         "x-router-key": { env: "DEEPSEC_FX_CREDENTIAL" },
       });
+      // Without listed levels fx would drop --effort on the custom endpoint.
+      expect(
+        first.settings.providers["deepsec-custom"].model_metadata["router/model"].reasoning_efforts
+          .xhigh,
+      ).toEqual({ reasoning_effort: "xhigh" });
       expect(out.meta.costUsd).toBeUndefined();
       expect(fetch).not.toHaveBeenCalled();
     } finally {

@@ -227,6 +227,10 @@ export function buildFxSettings(cfg: FxAgentConfig): Record<string, unknown> {
             context_window: 200000,
             max_output_tokens: 32000,
             supports_tool_use: true,
+            // fx drops an --effort its model metadata doesn't list.
+            reasoning_efforts: Object.fromEntries(
+              [...FX_EFFORTS].map((effort) => [effort, { reasoning_effort: effort }]),
+            ),
           },
         },
       },
