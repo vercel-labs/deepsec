@@ -555,8 +555,11 @@ class FxSession {
     if (code !== 0 || !result || result.exit_code !== 0) {
       throw new FxAskError(errorMessage(result, stderr, code), result !== undefined);
     }
-    // Cost limits depend on it; fx 0.0.17 and later always report usage.
-    if (!result.usage)
+    // Cost limits depend on it; fx 0.0.17 and later always report token counts.
+    if (
+      typeof result.usage?.input_tokens !== "number" ||
+      typeof result.usage.output_tokens !== "number"
+    )
       throw new Error("fx --json output has no usage; this fx version is not supported");
     if (result.session_id) this.sessionId = result.session_id;
     return result;

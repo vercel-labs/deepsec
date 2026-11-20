@@ -465,6 +465,21 @@ describe("FxAgentPlugin with a scripted fx", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("fails a batch whose fx result has no token counts", async () => {
+    process.env.DEEPSEC_FX_BIN = fakeFx(dir, `reply("[]", { usage: {} });`);
+    await expect(
+      drain(
+        new FxAgentPlugin().investigate({
+          batch: [record("src/app.ts")],
+          projectRoot: dir,
+          promptTemplate: "Find vulnerabilities.",
+          projectInfo: "",
+          config: { model: "openai/gpt-6.2-sol" },
+        }),
+      ),
+    ).rejects.toThrow("fx --json output has no usage");
+  });
+
   it("repairs non-JSON revalidation output in the same session", async () => {
     process.env.DEEPSEC_FX_BIN = fakeFx(
       dir,
