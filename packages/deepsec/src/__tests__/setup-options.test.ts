@@ -75,6 +75,37 @@ describe("modelRouteFromCli", () => {
   });
 });
 
+describe("headless setup route", () => {
+  it("is saved before setup stops to ask for a model profile", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-headless-route-"));
+    const workspace = path.join(root, ".deepsec");
+    try {
+      await expect(
+        initCommand({
+          workspace,
+          targetRoot: root,
+          id: "app",
+          headless: true,
+          agent: "fx",
+          modelRoute: {
+            mode: "custom",
+            provider: "openai",
+            baseUrl: "https://llm.example.com/v1",
+            apiKeyEnv: "LLM_KEY",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "MODEL_SELECTION_REQUIRED" });
+      // Resuming with only --model-profile must not fall back to Gateway.
+      expect(readWorkspaceConfigRoute(workspace)).toMatchObject({
+        mode: "custom",
+        baseUrl: "https://llm.example.com/v1",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("interactive setup route selection", () => {
   it("does not persist a local route when the final harness choice is fx", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-init-"));

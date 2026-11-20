@@ -121,7 +121,8 @@ The flag maps onto each backend's native dial:
 
 It applies to the main investigation/revalidation runs only.
 Special-purpose follow-up calls (the refusal report, JSON repair) keep
-their own fixed, cheap settings regardless of the flag.
+their own fixed, cheap settings regardless of the flag, except with `fx`,
+which resumes the same session at the same effort.
 
 Like other subcommand flags, it passes through sandbox mode unchanged:
 

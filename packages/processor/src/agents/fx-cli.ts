@@ -192,7 +192,7 @@ function customEndpointHeaders(cfg: FxAgentConfig): {
   };
 }
 
-export function resolveFxEffort(thinkingLevel: string | undefined): string {
+function resolveFxEffort(thinkingLevel: string | undefined): string {
   const effort = thinkingLevel ?? DEFAULT_THINKING_LEVEL;
   if (!FX_EFFORTS.has(effort)) {
     throw new Error(
@@ -285,7 +285,7 @@ function fxEnvironment(home: string, cfg: FxAgentConfig): NodeJS.ProcessEnv {
 }
 
 /** Parses the single JSON object `fx ask --json` prints on stdout. */
-export function parseFxAskOutput(stdout: string): FxAskJson {
+function parseFxAskOutput(stdout: string): FxAskJson {
   const text = stdout.trim();
   const start = text.indexOf("{");
   if (start < 0) throw new Error(`fx printed no JSON result: ${text.slice(0, 300)}`);
@@ -353,7 +353,10 @@ export function parseGatewayPricing(body: unknown): Map<string, FxTokenRates> {
   if (!Array.isArray(models)) return rates;
   for (const model of models as Array<{ id?: unknown; pricing?: Record<string, unknown> }>) {
     const price = (key: string) => {
-      const value = Number(model.pricing?.[key]);
+      const raw = model.pricing?.[key];
+      if (typeof raw !== "number" && (typeof raw !== "string" || raw.trim() === ""))
+        return undefined;
+      const value = Number(raw);
       return Number.isFinite(value) && value >= 0 ? value : undefined;
     };
     const input = price("input");
@@ -460,18 +463,13 @@ export function findSymlinksOutsideProject(projectRoot: string, limit = 5): stri
   return escapes;
 }
 
-const symlinkChecks = new Map<string, string[]>();
-
 /**
  * Second layer under fx's own workspace check: refuse to run on a project
- * whose symlinks resolve outside it. Checked once per project per process.
+ * whose symlinks resolve outside it. Checked before every run, since the
+ * tree can change between batches.
  */
 function assertNoSymlinksOutsideProject(projectRoot: string): void {
-  let escapes = symlinkChecks.get(projectRoot);
-  if (!escapes) {
-    escapes = findSymlinksOutsideProject(projectRoot);
-    symlinkChecks.set(projectRoot, escapes);
-  }
+  const escapes = findSymlinksOutsideProject(projectRoot);
   if (escapes.length > 0) {
     throw new Error(
       `The fx backend refuses projects with symlinks that point outside the project root: ${escapes.join(", ")}. ` +
@@ -540,6 +538,8 @@ class FxSession {
     child.stderr.setEncoding("utf8").on("data", (d) => {
       stderr += d;
     });
+    // fx may exit before reading the whole prompt; its exit status reports why.
+    child.stdin.on("error", () => {});
     child.stdin.end(prompt);
     const code = await new Promise<number | null>((resolve, reject) => {
       child.once("error", reject);
@@ -555,6 +555,9 @@ class FxSession {
     if (code !== 0 || !result || result.exit_code !== 0) {
       throw new FxAskError(errorMessage(result, stderr, code), result !== undefined);
     }
+    // Cost limits depend on it; fx 0.0.17 and later always report usage.
+    if (!result.usage)
+      throw new Error("fx --json output has no usage; this fx version is not supported");
     if (result.session_id) this.sessionId = result.session_id;
     return result;
   }
@@ -565,9 +568,8 @@ class FxSession {
 }
 
 /** Usage and cost come from the batch's FxUsageLedger, not one result. */
-function metaFromResult(result: FxAskJson, durationMs: number): Partial<BatchMeta> {
+function metaFromResult(result: FxAskJson): Partial<BatchMeta> {
   return {
-    durationMs,
     numTurns: result.steps,
     agentSessionId: result.session_id || undefined,
   };
@@ -579,11 +581,10 @@ async function runFxPrompt(
   maxTurns: number,
   signal?: AbortSignal,
 ): Promise<FxPromptResult> {
-  const startTime = Date.now();
   const result = await session.ask(`${FX_SYSTEM_NOTE}\n\n${prompt}`, maxTurns, signal);
   return {
     resultText: result.final_output || result.output || "",
-    meta: metaFromResult(result, Date.now() - startTime),
+    meta: metaFromResult(result),
     turnCount: result.steps ?? 0,
     toolUseCount: result.tool_calls?.length ?? 0,
   };
@@ -722,7 +723,6 @@ export class FxAgentPlugin implements AgentPlugin {
     );
     try {
       let resultText = run.resultText;
-      const durationMs = Date.now() - startTime;
       let parsed: ParsedInvestigateResults;
       try {
         parsed = parseInvestigateResults(resultText, batch);
@@ -783,6 +783,7 @@ export class FxAgentPlugin implements AgentPlugin {
       if (refusal?.refused) {
         yield { type: "thinking", message: `Refusal detected: ${refusal.reason ?? "see raw"}` };
       }
+      const durationMs = Date.now() - startTime;
       const usage = ledger.usage();
       const costUsd = await estimateFxCostUsd(cfg, usage);
       const tokensStr = usage
@@ -832,7 +833,6 @@ export class FxAgentPlugin implements AgentPlugin {
     );
     try {
       let resultText = run.resultText;
-      const durationMs = Date.now() - startTime;
       const preResponses: RevalidateRawResponse[] = [];
       const jsonRepairPrompt = buildRevalidateJsonRepairPrompt(expected);
       let verdicts: RevalidateVerdict[];
@@ -890,6 +890,7 @@ export class FxAgentPlugin implements AgentPlugin {
           message: `Refusal detected during revalidation: ${refusal.reason ?? "see raw"}`,
         };
       }
+      const durationMs = Date.now() - startTime;
       const usage = ledger.usage();
       const costUsd = await estimateFxCostUsd(cfg, usage);
       const costStr = costUsd !== undefined ? ` $${costUsd.toFixed(3)}` : "";

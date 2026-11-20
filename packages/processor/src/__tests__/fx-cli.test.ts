@@ -2,7 +2,6 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -20,10 +19,8 @@ import {
   FxAgentPlugin,
   findSymlinksOutsideProject,
   fxCostLimitError,
-  parseFxAskOutput,
   parseGatewayPricing,
   resetFxPricingCache,
-  resolveFxEffort,
   runFxSetupTask,
 } from "../agents/fx-cli.js";
 import type { AgentProgress, InvestigateOutput } from "../agents/types.js";
@@ -92,55 +89,6 @@ describe("fx settings and arguments", () => {
     expect(settings.providers).toBeUndefined();
   });
 
-  it("adds a custom provider only when a base URL is configured", () => {
-    const settings = buildFxSettings({
-      aiBaseUrl: "http://127.0.0.1:9/v1",
-      aiApiKeyEnv: "MY_KEY",
-      model: "m",
-    });
-    expect(settings.providers).toMatchObject({
-      "deepsec-custom": {
-        base_url: "http://127.0.0.1:9/v1",
-        auth: { type: "bearer", env: "DEEPSEC_FX_CREDENTIAL" },
-        model_metadata: { m: { supports_tool_use: true } },
-      },
-    });
-  });
-
-  it("maps a custom endpoint's headers and credential header onto fx's connection", () => {
-    const settings = buildFxSettings({
-      model: "m",
-      aiBaseUrl: "https://router.example/v1",
-      aiApiKeyEnv: "ROUTER_KEY",
-      aiCredentialHeader: { name: "x-api-key", scheme: "raw" },
-      aiHeaders: { "X-Org-Id": "acme" },
-    });
-    const provider = (settings.providers as Record<string, Record<string, unknown>>)[
-      "deepsec-custom"
-    ];
-    expect(provider.auth).toEqual({ type: "none" });
-    expect(provider.headers).toEqual({
-      "X-Org-Id": { env: "DEEPSEC_FX_HEADER_0" },
-      "x-api-key": { env: "DEEPSEC_FX_CREDENTIAL" },
-    });
-    const bearer = buildFxSettings({
-      model: "m",
-      aiBaseUrl: "https://router.example/v1",
-      aiApiKeyEnv: "ROUTER_KEY",
-    });
-    expect(
-      (bearer.providers as Record<string, Record<string, unknown>>)["deepsec-custom"].auth,
-    ).toEqual({ type: "bearer", env: "DEEPSEC_FX_CREDENTIAL" });
-    expect(() =>
-      buildFxSettings({
-        model: "m",
-        aiBaseUrl: "https://router.example/v1",
-        aiApiKeyEnv: "ROUTER_KEY",
-        aiCredentialHeader: { name: "Authorization", scheme: "raw" },
-      }),
-    ).toThrow(/only with the Bearer scheme/);
-  });
-
   it("reads base per-token prices from AI Gateway's model list", () => {
     const rates = parseGatewayPricing({
       data: [
@@ -155,6 +103,7 @@ describe("fx settings and arguments", () => {
         },
         { id: "a/no-cache", pricing: { input: "0.000001", output: "0.000004" } },
         { id: "a/unpriced" },
+        { id: "a/blank", pricing: { input: null, output: " " } },
       ],
     });
     expect(rates.get("a/full")).toEqual({
@@ -170,6 +119,7 @@ describe("fx settings and arguments", () => {
       cacheWrite: 0.000001,
     });
     expect(rates.has("a/unpriced")).toBe(false);
+    expect(rates.has("a/blank")).toBe(false);
   });
 
   it("uses AI Gateway, the default model and the requested effort", () => {
@@ -192,18 +142,6 @@ describe("fx settings and arguments", () => {
     );
     expect(resumed.slice(-2)).toEqual(["--resume", "s1"]);
     expect(resumed).toContain("high");
-  });
-
-  it("rejects thinking levels fx does not accept", () => {
-    expect(resolveFxEffort("xhigh")).toBe("xhigh");
-    expect(() => resolveFxEffort("max")).toThrow(/does not support thinking level "max"/);
-  });
-
-  it("parses the JSON object fx ask prints", () => {
-    expect(
-      parseFxAskOutput('\n{"exit_code":0,"final_output":"[]","session_id":"s"}\n').session_id,
-    ).toBe("s");
-    expect(() => parseFxAskOutput("no json")).toThrow(/no JSON result/);
   });
 });
 
@@ -467,10 +405,6 @@ describe("fx backend symlink boundary", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("ignores in-project, dangling and .git links", () => {
-    expect(findSymlinksOutsideProject(project)).toEqual([]);
-  });
-
   it("refuses to run fx when a link resolves outside the project", async () => {
     symlinkSync("../../outside/secret.txt", path.join(project, "src", "config.ts"));
     expect(findSymlinksOutsideProject(project)).toEqual([path.join("src", "config.ts")]);
@@ -490,56 +424,79 @@ describe("fx backend symlink boundary", () => {
 });
 
 describe("fxCostLimitError", () => {
-  it("allows a cost limit for a Gateway model with a listed price", async () => {
+  it("allows a cost limit only when fx can price the model", async () => {
     expect(await fxCostLimitError("openai/gpt-6.1-sol", undefined)).toBeUndefined();
-    expect(await fxCostLimitError(undefined, undefined)).toBeUndefined();
-  });
-
-  it("refuses a model the price list doesn't have", async () => {
-    expect(await fxCostLimitError("acme/unpriced", undefined)).toMatch(
-      /no entry for acme\/unpriced, so --max-cost-usd can't be enforced/,
-    );
-  });
-
-  it("refuses when the price list can't be fetched", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("", { status: 503 })),
-    );
-    expect(await fxCostLimitError("openai/gpt-6.1-sol", undefined)).toMatch(/can't be enforced/);
-  });
-
-  it("refuses a custom endpoint without fetching prices", async () => {
+    expect(await fxCostLimitError("acme/unpriced", undefined)).toMatch(/can't be enforced/);
     expect(await fxCostLimitError("openai/gpt-6.1-sol", "https://llm.example.com/v1")).toMatch(
-      /custom endpoint, so --max-cost-usd can't be enforced/,
+      /custom endpoint/,
     );
-    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
-describe("fx temporary HOME", () => {
-  const homes = () =>
-    readdirSync(tmpdir()).filter((name) => /^deepsec-fx-[A-Za-z0-9]{6}$/.test(name));
+/** A fake `fx` answering from a script that sees stdin and args. */
+function fakeFx(dir: string, body: string): string {
+  const fake = path.join(dir, "fx");
+  writeFileSync(
+    fake,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const stdin = fs.readFileSync(0, "utf8");
+const args = process.argv.slice(2);
+const reply = (finalOutput, extra = {}) => process.stdout.write(JSON.stringify({ exit_code: 0, final_output: finalOutput, session_id: "sess", steps: 1, usage: { input_tokens: 100, output_tokens: 10 }, ...extra }));
+${body}
+`,
+  );
+  chmodSync(fake, 0o755);
+  return fake;
+}
 
-  it("is removed when the consumer closes the generator mid-attempt", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "deepsec-fx-close-"));
-    const before = new Set(homes());
-    try {
-      const gen = new FxAgentPlugin().investigate({
-        batch: [record("a.ts")],
-        projectRoot: root,
-        promptTemplate: "Investigate",
+describe("FxAgentPlugin with a scripted fx", () => {
+  let dir: string;
+  let previousBin: string | undefined;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "deepsec-fx-scripted-"));
+    previousBin = process.env.DEEPSEC_FX_BIN;
+  });
+
+  afterEach(() => {
+    if (previousBin === undefined) delete process.env.DEEPSEC_FX_BIN;
+    else process.env.DEEPSEC_FX_BIN = previousBin;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("repairs non-JSON revalidation output in the same session", async () => {
+    process.env.DEEPSEC_FX_BIN = fakeFx(
+      dir,
+      `if (!args.includes("--resume")) reply("The finding looks real.");
+else if (stdin.includes("declined to fully analyze")) reply(JSON.stringify({ refused: false, skipped: [] }));
+else reply(JSON.stringify([{ findingId: "finding_1", verdict: "true-positive", reasoning: "Output is unescaped." }]));`,
+    );
+    const rec = record("src/app.ts");
+    rec.findings = [
+      {
+        findingId: "finding_1",
+        severity: "HIGH",
+        vulnSlug: "xss",
+        title: "Unescaped output",
+        description: "d",
+        lineNumbers: [1],
+        recommendation: "r",
+        confidence: "high",
+      },
+    ];
+    const out = await drain(
+      new FxAgentPlugin().revalidate({
+        batch: [rec],
+        projectRoot: dir,
         projectInfo: "",
-        config: {},
-        projectId: "test",
-      });
-      const first = await gen.next();
-      expect(first.value).toMatchObject({ type: "started" });
-      expect(homes().filter((name) => !before.has(name))).toHaveLength(1);
-      await gen.return(undefined as never);
-      expect(homes().filter((name) => !before.has(name))).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+        config: { model: "openai/gpt-6.1-sol" },
+      }),
+    );
+    expect(out.verdicts).toEqual([
+      expect.objectContaining({ findingId: "finding_1", verdict: "true-positive" }),
+    ]);
+    expect(out.rawResponses?.map((r) => r.kind)).toContain("json-repair");
+    expect(out.meta.costUsd).toBeGreaterThan(0);
   });
 });

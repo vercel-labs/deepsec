@@ -226,6 +226,10 @@ export async function initCommand(opts: InitOpts) {
       model = choice.model;
       thinkingLevel = choice.thinkingLevel;
     }
+    // Saved after any interactive choice and before a headless run can stop
+    // to ask for a profile, so resuming keeps the same route.
+    assertFxSetupRoute(agent, modelRoute);
+    recordInitialModelRoute(workspaceDir, modelRoute);
     if (!model && !resuming && headless) {
       const profile = parseModelProfile(opts.modelProfile);
       if (!profile && !opts.yes) {
@@ -272,7 +276,6 @@ export async function initCommand(opts: InitOpts) {
     // setup was interrupted before login; the prompt above is first-run only.
     const linkRoute = modelRoute ?? persistedModelRoute(workspaceDir, registered.id);
     assertFxSetupRoute(agent, linkRoute);
-    recordInitialModelRoute(workspaceDir, modelRoute);
     if (
       linkRoute?.mode !== "local" &&
       !headless &&

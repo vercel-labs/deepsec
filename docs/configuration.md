@@ -31,7 +31,7 @@ see [`samples/webapp/deepsec.config.ts`](https://github.com/vercel-labs/deepsec/
 | `projects` | `ProjectDeclaration[]` | The codebases deepsec knows about. |
 | `plugins` | `DeepsecPlugin[]` | Loaded in order; later plugins override single-slot capabilities. |
 | `matchers` | `{ only?: string[]; exclude?: string[] }` | Filter the matcher set used by `scan`. |
-| `defaultAgent` | `string` | Default `--agent` value (`codex`, `claude`, or `pi`). See [models](models.md). |
+| `defaultAgent` | `string` | Default `--agent` value (`codex`, `claude`, `pi`, or `fx`). See [models](models.md). |
 | `defaultModel` | `string` | Default `--model` value selected during setup. |
 | `defaultThinkingLevel` | `string` | Default reasoning effort (`minimal` through `xhigh`) selected during setup. |
 | `codex` | `{ cyberAccessProgram?: "standard" \| "daybreak_blue" \| "daybreak_red" }` | Codex-only settings. `--cyber-access-program` overrides `cyberAccessProgram`. See [models](models.md#cyber-access-programs). |
@@ -55,7 +55,7 @@ ai: {
   baseUrl: "https://api.openai.com/v1",
 }
 
-// Pi-only custom provider
+// Custom provider (Pi and fx)
 ai: {
   mode: "custom",
   provider: "martian",
