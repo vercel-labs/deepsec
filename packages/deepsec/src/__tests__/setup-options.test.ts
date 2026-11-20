@@ -104,6 +104,47 @@ describe("headless setup route", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("checks a resumed route against the saved fx agent before saving it", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-resume-route-"));
+    const workspace = path.join(root, ".deepsec");
+    const customRoute = {
+      mode: "custom",
+      provider: "openai",
+      baseUrl: "https://llm.example.com/v1",
+      apiKeyEnv: "LLM_KEY",
+    } as const;
+    try {
+      await expect(
+        initCommand({
+          workspace,
+          targetRoot: root,
+          id: "app",
+          headless: true,
+          agent: "fx",
+          modelRoute: customRoute,
+        }),
+      ).rejects.toMatchObject({ code: "MODEL_SELECTION_REQUIRED" });
+      const setupDir = path.join(workspace, "data", "app", "setup");
+      fs.mkdirSync(setupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(setupDir, "setup-state.json"),
+        JSON.stringify({ version: 1, projectId: "app", phases: {}, agent: { type: "fx" } }),
+      );
+      await expect(
+        initCommand({
+          workspace,
+          targetRoot: root,
+          id: "app",
+          headless: true,
+          modelRoute: { mode: "local", provider: "local" },
+        }),
+      ).rejects.toThrow("--agent fx can't use the local model route");
+      expect(readWorkspaceConfigRoute(workspace)).toMatchObject(customRoute);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("interactive setup route selection", () => {

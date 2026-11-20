@@ -18,7 +18,11 @@ import type { SupportedPackageManager } from "../setup/install.js";
 import { shouldUseHeadlessMode } from "../setup/interaction.js";
 import { acquireSetupLock } from "../setup/lock.js";
 import { assertFxSetupRoute } from "../setup/options.js";
-import { persistedModelRoute, recordInitialModelRoute } from "../setup/persisted-route.js";
+import {
+  persistedModelRoute,
+  persistedSetupAgent,
+  recordInitialModelRoute,
+} from "../setup/persisted-route.js";
 import { buildSetupPlan } from "../setup/plan.js";
 import { deterministicVercelProjectName } from "../setup/project-name.js";
 import {
@@ -226,9 +230,13 @@ export async function initCommand(opts: InitOpts) {
       model = choice.model;
       thinkingLevel = choice.thinkingLevel;
     }
+    // A resume without --agent runs the saved agent, so check the route
+    // against it before saving anything.
+    const routeAgent =
+      agent ?? (resuming ? persistedSetupAgent(workspaceDir, registered.id) : undefined);
     // Saved after any interactive choice and before a headless run can stop
     // to ask for a profile, so resuming keeps the same route.
-    assertFxSetupRoute(agent, modelRoute);
+    assertFxSetupRoute(routeAgent, modelRoute);
     recordInitialModelRoute(workspaceDir, modelRoute);
     if (!model && !resuming && headless) {
       const profile = parseModelProfile(opts.modelProfile);
@@ -275,7 +283,7 @@ export async function initCommand(opts: InitOpts) {
     // route comes from the login checkpoint, or from the generated config when
     // setup was interrupted before login; the prompt above is first-run only.
     const linkRoute = modelRoute ?? persistedModelRoute(workspaceDir, registered.id);
-    assertFxSetupRoute(agent, linkRoute);
+    assertFxSetupRoute(routeAgent, linkRoute);
     if (
       linkRoute?.mode !== "local" &&
       !headless &&
