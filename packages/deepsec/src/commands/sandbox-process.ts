@@ -30,6 +30,8 @@ interface SandboxOpts {
  * e.g. extractFlag(["--limit", "50", "--force"], "--limit") => "50"
  */
 function extractFlag(args: string[], flag: string): string | undefined {
+  const inline = args.find((arg) => arg.startsWith(`${flag}=`));
+  if (inline) return inline.slice(flag.length + 1);
   const idx = args.indexOf(flag);
   if (idx === -1 || idx + 1 >= args.length) return undefined;
   const val = args[idx + 1];
@@ -156,6 +158,18 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   const projectId = resolveProjectId(opts.projectId);
   rejectCyberAccessProgram(opts.args ?? []);
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
+
+  if (config.agentType === "grok" || config.agentType === "grok-build") {
+    console.error(
+      `Sandbox mode does not support --agent grok yet.\n` +
+        `\n` +
+        `  Use a local process instead:\n` +
+        `    pnpm deepsec process --project-id ${projectId} --agent grok\n` +
+        `\n` +
+        `  Or pick a sandbox-capable harness: --agent codex | claude | pi`,
+    );
+    process.exit(1);
+  }
 
   if (!config.aiApiKeyEnv && !config.aiBaseUrl) {
     const resolved = await applyConfiguredModelRoute(config.agentType ?? "codex", process.env, {

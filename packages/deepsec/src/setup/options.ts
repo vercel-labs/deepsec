@@ -22,7 +22,9 @@ export function modelRouteFromCli(options: ModelRouteCliOptions): ModelRoute {
       ? "anthropic"
       : options.agent === "codex"
         ? "openai"
-        : undefined);
+        : options.agent === "grok" || options.agent === "grok-build"
+          ? "xai"
+          : undefined);
   if (!provider) throw new Error(`--model-auth ${mode} requires --ai-provider`);
   if (mode === "direct") {
     return {

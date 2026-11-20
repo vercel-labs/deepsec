@@ -48,6 +48,10 @@ const DEFAULTS: Record<string, { env: string; baseUrl: string }> = {
     env: "OPENAI_API_KEY",
     baseUrl: "https://api.openai.com/v1",
   },
+  xai: {
+    env: "XAI_API_KEY",
+    baseUrl: "https://api.x.ai/v1",
+  },
 };
 
 function checkedUrl(value: string, label: string): URL {
@@ -62,12 +66,20 @@ function checkedUrl(value: string, label: string): URL {
   return url;
 }
 
+export function isGrokAgent(agentType: string): boolean {
+  return agentType === "grok" || agentType === "grok-build";
+}
+
 export function modelRouteCompatibilityError(
   route: ModelRoute,
   agentType: string,
 ): string | undefined {
+  if (isGrokAgent(agentType)) return undefined;
   if (route.mode === "custom" && agentType !== "pi") {
     return `Custom model routes require --agent pi (received ${agentType})`;
+  }
+  if (route.mode === "direct" && route.provider === "xai" && agentType !== "pi") {
+    return `Direct xAI credentials require --agent grok or pi (received ${agentType})`;
   }
   if (route.mode === "direct" && route.provider === "anthropic" && agentType === "codex") {
     return "Direct Anthropic credentials are not compatible with --agent codex";
@@ -96,6 +108,11 @@ export async function resolveModelRoute(
   options: ResolveModelRouteOptions,
 ): Promise<ResolvedModelRoute> {
   const env = options.env ?? process.env;
+  if (isGrokAgent(options.agentType)) {
+    throw new Error(
+      "Grok Build authenticates through XAI_API_KEY or grok login and has no brokered model route",
+    );
+  }
   assertCompatible(route, options.agentType);
 
   if (route.mode === "local") {

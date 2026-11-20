@@ -7,7 +7,7 @@ import {
   promptForModelSelection,
   resolveModelProfile,
 } from "../auth/model-picker.js";
-import type { ModelRoute } from "../auth/model-route.js";
+import { isGrokAgent, type ModelRoute } from "../auth/model-route.js";
 import { promptForModelRoute } from "../auth/model-route-prompt.js";
 import { ensureVercelLink, readWorkspaceLink } from "../auth/vercel-link.js";
 import { BOLD, CYAN, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
@@ -211,6 +211,8 @@ export async function initCommand(opts: InitOpts) {
     let agent = opts.agent;
     let model = opts.model;
     let thinkingLevel = opts.thinkingLevel;
+    if (!modelRoute && agent && isGrokAgent(agent))
+      modelRoute = { mode: "local", provider: "local" };
     if (!modelRoute && !resuming && !headless && process.stdin.isTTY && process.stdout.isTTY) {
       const choice = await promptForModelRoute();
       modelRoute = choice.route;

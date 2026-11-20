@@ -527,6 +527,7 @@ async function createPiSession(projectRoot: string, cfg: PiAgentConfig): Promise
   const runtime = await ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
+    refreshOnCreate: false,
   });
   await configureRuntimeAuth(runtime, cfg);
 

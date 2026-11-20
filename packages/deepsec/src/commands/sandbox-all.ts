@@ -28,6 +28,8 @@ const VALID_COMMANDS: ReadonlySet<SandboxSubcommand> = new Set([
 ]);
 
 function extractFlag(args: string[], flag: string): string | undefined {
+  const inline = args.find((arg) => arg.startsWith(`${flag}=`));
+  if (inline) return inline.slice(flag.length + 1);
   const idx = args.indexOf(flag);
   if (idx === -1 || idx + 1 >= args.length) return undefined;
   const val = args[idx + 1];
@@ -94,6 +96,17 @@ export async function sandboxAllCommand(
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
   const timeout = opts.timeout ?? 5 * 60 * 60 * 1000;
   const agentType = resolveAgentType(extractFlag(passthrough, "--agent"));
+  if (agentType === "grok" || agentType === "grok-build") {
+    console.error(
+      `Sandbox mode does not support --agent grok yet.\n` +
+        `\n` +
+        `  Use a local process instead:\n` +
+        `    pnpm deepsec process --agent grok\n` +
+        `\n` +
+        `  Or pick a sandbox-capable harness: --agent codex | claude | pi`,
+    );
+    process.exit(1);
+  }
   const explicitAiApiKeyEnv = extractFlag(passthrough, "--ai-api-key-env");
   const explicitAiBaseUrl = extractFlag(passthrough, "--ai-base-url");
   const resolvedRoute =
