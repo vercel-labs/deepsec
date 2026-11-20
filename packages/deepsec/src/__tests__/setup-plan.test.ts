@@ -48,6 +48,26 @@ describe("headless setup plan", () => {
     expect(fs.existsSync(workspace)).toBe(false);
   });
 
+  it("keeps fx's default model with --yes, since DeepSecBench has no fx results", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-plan-"));
+    try {
+      const plan = await buildSetupPlan({
+        workspaceDir: path.join(root, ".deepsec"),
+        projectRoot: root,
+        projectId: "app",
+        agent: "fx",
+        yes: true,
+        deterministicProjectName: "deepsec-app-abcd1234",
+        env: {},
+        runCli: async () => ({ exitCode: 1, stdout: "", stderr: "" }),
+      });
+      expect(plan.model).toEqual({ agent: "fx", model: "openai/gpt-6.2-sol" });
+      expect(plan.missingInputs).not.toContain("model.profile");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("checks Vercel authentication in a private temporary directory", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-plan-"));
     fs.writeFileSync(path.join(root, "index.ts"), "export const value = 1;\n");

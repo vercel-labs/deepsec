@@ -265,14 +265,18 @@ export async function initCommand(opts: InitOpts) {
           ],
         });
       }
-      const choice = await resolveModelProfile({
-        profile: profile ?? "best",
-        route: modelRoute ?? { mode: "gateway", provider: "vercel" },
-        agent,
-      });
-      agent = choice.agent;
-      model = choice.model;
-      thinkingLevel = choice.thinkingLevel;
+      // DeepSecBench has no fx results to choose from, so --yes alone keeps
+      // fx's default model, which setup applies when no model is given.
+      if (profile || agent !== "fx") {
+        const choice = await resolveModelProfile({
+          profile: profile ?? "best",
+          route: modelRoute ?? { mode: "gateway", provider: "vercel" },
+          agent,
+        });
+        agent = choice.agent;
+        model = choice.model;
+        thinkingLevel = choice.thinkingLevel;
+      }
     }
     // Complete interactive project selection before Ink ever takes ownership
     // of the terminal. Besides producing a cleaner onboarding sequence, this
