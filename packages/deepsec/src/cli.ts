@@ -92,7 +92,7 @@ program
   .option("--scaffold-only", "Only create files; do not install, connect, scan, or process")
   .option("--skip-install", "Require dependencies to exist instead of running pnpm/npm install")
   .option("--package-manager <name>", "Installer to use: pnpm or npm", parsePackageManager)
-  .option("--agent <type>", "AI agent: codex, claude, or pi")
+  .option("--agent <type>", "AI agent: codex, claude, pi, or fx")
   .option("--model <model>", "Model for repository analysis and processing")
   .option("--model-profile <profile>", "Benchmark profile: best, value, or budget")
   .option("--thinking-level <level>", "Reasoning effort: minimal, low, medium, high, or xhigh")
@@ -187,7 +187,7 @@ program
   .option("--status", "Show resumable phase status without running setup")
   .option("--skip-install", "Require dependencies to exist instead of running pnpm/npm install")
   .option("--package-manager <name>", "Installer to use: pnpm or npm", parsePackageManager)
-  .option("--agent <type>", "AI agent: codex, claude, or pi")
+  .option("--agent <type>", "AI agent: codex, claude, pi, or fx")
   .option("--model <model>", "Model for repository analysis and processing")
   .option("--model-profile <profile>", "Benchmark profile: best, value, or budget")
   .option("--thinking-level <level>", "Reasoning effort: minimal, low, medium, high, or xhigh")
@@ -291,11 +291,11 @@ program
   .option("--run-id <id>", "Resume a specific processing run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex, claude, or pi (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, pi, or fx (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi)",
+    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi, openai/gpt-6.2-sol for fx)",
   )
   .option(
     "--ai-provider <provider>",
@@ -374,11 +374,11 @@ program
   .option("--run-id <id>", "Resume a specific revalidation run")
   .option(
     "--agent <type>",
-    "Agent plugin type: codex, claude, or pi (default: defaultAgent in deepsec.config.ts, else codex)",
+    "Agent plugin type: codex, claude, pi, or fx (default: defaultAgent in deepsec.config.ts, else codex)",
   )
   .option(
     "--model <model>",
-    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi)",
+    "Model to use (default: claude-opus-4-8 for claude, gpt-5.5 for codex, zai/glm-5.2 for pi, openai/gpt-6.2-sol for fx)",
   )
   .option(
     "--ai-provider <provider>",

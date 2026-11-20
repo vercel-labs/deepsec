@@ -231,7 +231,42 @@ function hasLocalPiAgent(): boolean {
 // via plugins (deepsec.config.ts → plugins: [{ agents: [...] }]) handle
 // their own credential resolution, so we skip the check for anything
 // other than these.
-const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi"]);
+const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi", "fx"]);
+
+/** Check the credential of the endpoint fx will actually select. */
+function assertFxCredential(
+  route: ModelRoute | undefined,
+  options: { inSandbox?: boolean; aiApiKeyEnv?: string; aiBaseUrl?: string },
+): void {
+  if (options.inSandbox) {
+    throw new Error(
+      "deepsec sandbox does not support --agent fx yet: the sandbox doesn't install fx or broker its credential.\n" +
+        "  Run `deepsec process --agent fx` locally instead.",
+    );
+  }
+  if (options.aiApiKeyEnv && !options.aiBaseUrl) {
+    throw new Error("--agent fx requires --ai-base-url with --ai-api-key-env");
+  }
+  if (!options.aiBaseUrl && route) {
+    const error = modelRouteCompatibilityError(route, "fx");
+    if (error) throw new Error(error);
+  }
+  const custom = options.aiBaseUrl || route?.mode === "custom";
+  const key = options.aiBaseUrl
+    ? options.aiApiKeyEnv
+    : route?.mode === "custom"
+      ? route.apiKeyEnv
+      : "AI_GATEWAY_API_KEY";
+  // Only an explicitly supplied endpoint without a credential requests anonymous access.
+  if (options.aiBaseUrl && !key) return;
+  if (!key || !process.env[key]) {
+    throw new Error(
+      custom
+        ? `Missing AI credentials for --agent fx: ${key ?? "apiKeyEnv"} is not set for the custom endpoint.`
+        : `Missing AI credentials for --agent fx: set AI_GATEWAY_API_KEY.\n  Setup: ${SETUP_DOC_URL}`,
+    );
+  }
+}
 
 /**
  * Verify the orchestrator has an AI credential the chosen agent can use.
@@ -250,7 +285,12 @@ const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi"]);
  */
 export function assertAgentCredential(
   agentType: string | undefined,
-  options: { inSandbox?: boolean; aiApiKeyEnv?: string; modelRoute?: ModelRoute } = {},
+  options: {
+    inSandbox?: boolean;
+    aiApiKeyEnv?: string;
+    aiBaseUrl?: string;
+    modelRoute?: ModelRoute;
+  } = {},
 ): void {
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
 
@@ -261,6 +301,10 @@ export function assertAgentCredential(
   // so fall through to the normal checks (an ambient AI_GATEWAY_API_KEY
   // still works there, and the standard actionable error fires otherwise).
   const selectedRoute = options.modelRoute ?? (getConfig()?.ai as ModelRoute | undefined);
+  if (agentType === "fx") {
+    assertFxCredential(selectedRoute, options);
+    return;
+  }
   if (selectedRoute?.mode === "local" && !options.inSandbox) return;
 
   const gateway = process.env.AI_GATEWAY_API_KEY;

@@ -1,5 +1,5 @@
 import type { ModelRoute } from "../auth/model-route.js";
-import { readSetupState } from "./state.js";
+import { readSetupState, type SetupState } from "./state.js";
 import { persistWorkspaceConfigRoute, readWorkspaceConfigRoute } from "./workspace-config.js";
 
 /**
@@ -28,13 +28,24 @@ export function persistedModelRoute(
   return checkpointRoute(workspaceDir, projectId) ?? readWorkspaceConfigRoute(workspaceDir);
 }
 
-/** Setup state paths resolve against the data root, which is relative to cwd. */
+/** Agent a resumed run reuses when `--agent` isn't repeated. */
+export function persistedSetupAgent(workspaceDir: string, projectId: string): string | undefined {
+  return readCheckpoint(workspaceDir, projectId)?.agent.type;
+}
+
 function checkpointRoute(workspaceDir: string, projectId: string): ModelRoute | undefined {
+  const connection = readCheckpoint(workspaceDir, projectId)?.connection as
+    | { route?: ModelRoute }
+    | undefined;
+  return connection?.route;
+}
+
+/** Setup state paths resolve against the data root, which is relative to cwd. */
+function readCheckpoint(workspaceDir: string, projectId: string): SetupState | undefined {
   const originalCwd = process.cwd();
   try {
     process.chdir(workspaceDir);
-    const connection = readSetupState(projectId)?.connection as { route?: ModelRoute } | undefined;
-    return connection?.route;
+    return readSetupState(projectId);
   } catch {
     return undefined;
   } finally {

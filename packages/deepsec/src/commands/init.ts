@@ -17,7 +17,12 @@ import { runSetupWorkflow, type SetupThrough } from "../setup/coordinator.js";
 import type { SupportedPackageManager } from "../setup/install.js";
 import { shouldUseHeadlessMode } from "../setup/interaction.js";
 import { acquireSetupLock } from "../setup/lock.js";
-import { persistedModelRoute, recordInitialModelRoute } from "../setup/persisted-route.js";
+import { assertFxSetupRoute } from "../setup/options.js";
+import {
+  persistedModelRoute,
+  persistedSetupAgent,
+  recordInitialModelRoute,
+} from "../setup/persisted-route.js";
 import { buildSetupPlan } from "../setup/plan.js";
 import { deterministicVercelProjectName } from "../setup/project-name.js";
 import {
@@ -216,7 +221,6 @@ export async function initCommand(opts: InitOpts) {
       modelRoute = choice.route;
       agent ??= choice.defaultAgent;
     }
-    recordInitialModelRoute(workspaceDir, modelRoute);
     if (!model && !resuming && !headless && process.stdin.isTTY && process.stdout.isTTY) {
       const choice = await promptForModelSelection({
         route: modelRoute ?? { mode: "gateway", provider: "vercel" },
@@ -226,6 +230,14 @@ export async function initCommand(opts: InitOpts) {
       model = choice.model;
       thinkingLevel = choice.thinkingLevel;
     }
+    // A resume without --agent runs the saved agent, so check the route
+    // against it before saving anything.
+    const routeAgent =
+      agent ?? (resuming ? persistedSetupAgent(workspaceDir, registered.id) : undefined);
+    // Saved after any interactive choice and before a headless run can stop
+    // to ask for a profile, so resuming keeps the same route.
+    assertFxSetupRoute(routeAgent, modelRoute);
+    recordInitialModelRoute(workspaceDir, modelRoute);
     if (!model && !resuming && headless) {
       const profile = parseModelProfile(opts.modelProfile);
       if (!profile && !opts.yes) {
@@ -253,14 +265,18 @@ export async function initCommand(opts: InitOpts) {
           ],
         });
       }
-      const choice = await resolveModelProfile({
-        profile: profile ?? "best",
-        route: modelRoute ?? { mode: "gateway", provider: "vercel" },
-        agent,
-      });
-      agent = choice.agent;
-      model = choice.model;
-      thinkingLevel = choice.thinkingLevel;
+      // DeepSecBench has no fx results to choose from, so --yes alone keeps
+      // fx's default model, which setup applies when no model is given.
+      if (profile || agent !== "fx") {
+        const choice = await resolveModelProfile({
+          profile: profile ?? "best",
+          route: modelRoute ?? { mode: "gateway", provider: "vercel" },
+          agent,
+        });
+        agent = choice.agent;
+        model = choice.model;
+        thinkingLevel = choice.thinkingLevel;
+      }
     }
     // Complete interactive project selection before Ink ever takes ownership
     // of the terminal. Besides producing a cleaner onboarding sequence, this
@@ -271,6 +287,7 @@ export async function initCommand(opts: InitOpts) {
     // route comes from the login checkpoint, or from the generated config when
     // setup was interrupted before login; the prompt above is first-run only.
     const linkRoute = modelRoute ?? persistedModelRoute(workspaceDir, registered.id);
+    assertFxSetupRoute(routeAgent, linkRoute);
     if (
       linkRoute?.mode !== "local" &&
       !headless &&

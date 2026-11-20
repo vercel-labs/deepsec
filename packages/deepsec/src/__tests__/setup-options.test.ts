@@ -1,9 +1,22 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import * as picker from "../auth/model-picker.js";
+import * as routePrompt from "../auth/model-route-prompt.js";
+import { initCommand } from "../commands/init.js";
 import { modelRouteFromCli } from "../setup/options.js";
+import { readWorkspaceConfigRoute } from "../setup/workspace-config.js";
 
 describe("modelRouteFromCli", () => {
   it("defaults to the Vercel gateway", () => {
     expect(modelRouteFromCli({})).toEqual({ mode: "gateway", provider: "vercel" });
+  });
+
+  it.each(["local", "direct"] as const)("rejects an explicit %s route with fx", (mode) => {
+    expect(() => modelRouteFromCli({ modelAuth: mode, aiProvider: "openai", agent: "fx" })).toThrow(
+      `--agent fx can't use the ${mode} model route`,
+    );
   });
 
   it("supports local subscriptions with no credential wiring", () => {
@@ -59,5 +72,108 @@ describe("modelRouteFromCli", () => {
     expect(
       modelRouteFromCli({ ...base, aiCredentialHeader: "x-api-key" }).credentialHeader,
     ).toEqual({ name: "x-api-key", scheme: "raw" });
+  });
+});
+
+describe("headless setup route", () => {
+  it("is saved before setup stops to ask for a model profile", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-headless-route-"));
+    const workspace = path.join(root, ".deepsec");
+    try {
+      await expect(
+        initCommand({
+          workspace,
+          targetRoot: root,
+          id: "app",
+          headless: true,
+          agent: "fx",
+          modelRoute: {
+            mode: "custom",
+            provider: "openai",
+            baseUrl: "https://llm.example.com/v1",
+            apiKeyEnv: "LLM_KEY",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "MODEL_SELECTION_REQUIRED" });
+      // Resuming with only --model-profile must not fall back to Gateway.
+      expect(readWorkspaceConfigRoute(workspace)).toMatchObject({
+        mode: "custom",
+        baseUrl: "https://llm.example.com/v1",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("checks a resumed route against the saved fx agent before saving it", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-resume-route-"));
+    const workspace = path.join(root, ".deepsec");
+    const customRoute = {
+      mode: "custom",
+      provider: "openai",
+      baseUrl: "https://llm.example.com/v1",
+      apiKeyEnv: "LLM_KEY",
+    } as const;
+    try {
+      await expect(
+        initCommand({
+          workspace,
+          targetRoot: root,
+          id: "app",
+          headless: true,
+          agent: "fx",
+          modelRoute: customRoute,
+        }),
+      ).rejects.toMatchObject({ code: "MODEL_SELECTION_REQUIRED" });
+      const setupDir = path.join(workspace, "data", "app", "setup");
+      fs.mkdirSync(setupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(setupDir, "setup-state.json"),
+        JSON.stringify({ version: 1, projectId: "app", phases: {}, agent: { type: "fx" } }),
+      );
+      await expect(
+        initCommand({
+          workspace,
+          targetRoot: root,
+          id: "app",
+          headless: true,
+          modelRoute: { mode: "local", provider: "local" },
+        }),
+      ).rejects.toThrow("--agent fx can't use the local model route");
+      expect(readWorkspaceConfigRoute(workspace)).toMatchObject(customRoute);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("interactive setup route selection", () => {
+  it("does not persist a local route when the final harness choice is fx", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-init-"));
+    const workspace = path.join(root, ".deepsec");
+    const streams = [process.stdin, process.stdout];
+    const descriptors = streams.map((s) => Object.getOwnPropertyDescriptor(s, "isTTY"));
+    try {
+      for (const stream of streams)
+        Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
+      vi.spyOn(routePrompt, "promptForModelRoute").mockResolvedValue({
+        route: { mode: "local", provider: "local" },
+      });
+      const select = vi
+        .spyOn(picker, "promptForModelSelection")
+        .mockResolvedValue({ agent: "fx", model: "test" });
+      await expect(initCommand({ workspace, targetRoot: root, id: "app" })).rejects.toThrow(
+        "--agent fx can't use the local model route",
+      );
+      expect(select).toHaveBeenCalledOnce();
+      expect(readWorkspaceConfigRoute(workspace)?.mode).not.toBe("local");
+    } finally {
+      vi.restoreAllMocks();
+      for (const [i, stream] of streams.entries()) {
+        if (descriptors[i]) Object.defineProperty(stream, "isTTY", descriptors[i]!);
+        else Reflect.deleteProperty(stream, "isTTY");
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

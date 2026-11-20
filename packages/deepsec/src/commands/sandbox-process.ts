@@ -26,15 +26,30 @@ interface SandboxOpts {
 }
 
 /**
- * Extract a value for a named flag from the passthrough args array.
+ * Split passthrough args into the tokens the sandbox worker's CLI receives.
+ * The orchestrator splits every arg on whitespace, so the host must read
+ * the same tokens or it can validate one agent while the worker runs another.
+ */
+export function normalizePassthroughArgs(args: string[]): string[] {
+  return args.flatMap((arg) => arg.split(/\s+/).filter(Boolean));
+}
+
+/**
+ * Extract a flag's value the way the worker's commander parser does: both
+ * `--flag value` and `--flag=value`, last occurrence wins.
  * e.g. extractFlag(["--limit", "50", "--force"], "--limit") => "50"
  */
-function extractFlag(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  const val = args[idx + 1];
-  if (val.startsWith("--")) return undefined;
-  return val;
+export function extractFlag(args: string[], flag: string): string | undefined {
+  let value: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith(`${flag}=`)) {
+      value = arg.slice(flag.length + 1);
+    } else if (arg === flag && i + 1 < args.length && !args[i + 1].startsWith("--")) {
+      value = args[++i];
+    }
+  }
+  return value;
 }
 
 function hasFlag(args: string[], flag: string): boolean {
@@ -71,7 +86,7 @@ function buildConfig(
   projectId: string,
   opts: SandboxOpts,
 ): SandboxConfig {
-  const args = opts.args ?? [];
+  const args = normalizePassthroughArgs(opts.args ?? []);
   const concurrency = parseInt(extractFlag(args, "--concurrency") ?? "4", 10) || 4;
   // Auto-derive vCPUs from concurrency if not explicitly set (max 8, must be even)
   const vcpus = opts.vcpus ?? Math.min(Math.ceil(concurrency / 2) * 2, 8);
@@ -154,7 +169,7 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   }
 
   const projectId = resolveProjectId(opts.projectId);
-  rejectCyberAccessProgram(opts.args ?? []);
+  rejectCyberAccessProgram(normalizePassthroughArgs(opts.args ?? []));
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
 
   if (!config.aiApiKeyEnv && !config.aiBaseUrl) {

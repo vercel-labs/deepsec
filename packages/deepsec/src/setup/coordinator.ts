@@ -10,6 +10,7 @@ import {
 } from "@deepsec/core";
 import {
   type AgentProgress,
+  fxCostLimitError,
   type ProcessProgress,
   process as processCandidates,
 } from "@deepsec/processor";
@@ -47,6 +48,7 @@ import {
   writeGeneratedMatchers,
 } from "./generated-matchers.js";
 import { ensureWorkspaceInstall, type SupportedPackageManager } from "./install.js";
+import { assertFxSetupRoute } from "./options.js";
 import { SetupProtocolError } from "./protocol.js";
 import { phaseLabel, type SetupReporter } from "./reporter.js";
 import {
@@ -378,6 +380,9 @@ export async function runSetupWorkflow(
   try {
     const existingState = readSetupState(options.projectId);
     const agentType = resolveAgentType(options.agent ?? existingState?.agent.type);
+    const checkpointRoute = (existingState?.connection as { route?: ModelRoute } | undefined)
+      ?.route;
+    assertFxSetupRoute(agentType, options.modelRoute ?? checkpointRoute);
     const previousModel =
       existingState?.agent.type === agentType ? existingState.agent.model : undefined;
     const model = options.model ?? previousModel ?? defaultModelForAgent(agentType);
@@ -435,7 +440,6 @@ export async function runSetupWorkflow(
     assertWithinDuration();
     if (options.through === "install") return workflowResult(state, "install");
 
-    const checkpointRoute = (state.connection as { route?: ModelRoute } | undefined)?.route;
     const existingConfig =
       !options.modelRoute && !checkpointRoute ? await loadConfig(workspaceDir) : undefined;
     const route = options.modelRoute ??
@@ -444,8 +448,19 @@ export async function runSetupWorkflow(
         mode: "gateway",
         provider: "vercel",
       };
+    assertFxSetupRoute(agentType, route);
     reconcileAiGatewayDefaultsForRoute(route);
     const agentConfig = buildAgentConfig({ agentType, model, thinkingLevel, modelRoute: route });
+    if (agentType === "fx" && options.maxCostUsd !== undefined) {
+      const message = await fxCostLimitError(model, agentConfig.aiBaseUrl as string | undefined);
+      if (message) {
+        throw new SetupProtocolError({
+          code: "COST_LIMIT_UNENFORCEABLE",
+          kind: "failure",
+          message,
+        });
+      }
+    }
     reconcileWorkspaceConfig(workspaceDir, route, agentType, model, thinkingLevel);
 
     const loaded = await loadConfig(workspaceDir);
