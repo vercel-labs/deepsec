@@ -218,6 +218,99 @@ export class QuotaExhaustedError extends Error {
   }
 }
 
+// --- Policy refusal --------------------------------------------------------
+
+/**
+ * Hard provider refusals (safety policy), distinct from quota: the provider
+ * declined the request itself, so the agent never produced findings JSON.
+ *   - `anthropic-usage-policy` — Claude Code usage-policy (AUP) block
+ *   - `openai-safety-system`   — OpenAI `invalid_prompt` / safety-system prose
+ *   - `content-policy`         — generic `content_policy_violation` envelope
+ */
+type RefusalSource = "anthropic-usage-policy" | "openai-safety-system" | "content-policy";
+
+/**
+ * Classify agent output as a hard provider policy refusal, or `undefined`.
+ *
+ * Matching is intentionally strict — the opposite trade-off from
+ * `classifyQuotaError`: a false positive here would relabel ordinary
+ * malformed JSON as "the model declined" (zero coverage over the batch),
+ * which is worse than the status quo. Misses fall through to the existing
+ * fail-loud parse error, which stays accurate.
+ */
+export function classifyPolicyRefusal(msg: string): RefusalSource | undefined {
+  if (!msg) return undefined;
+  const payload = extractAgentJsonPayload(msg).replace(
+    /^(?:API )?Error:\s*(?:\d{3}\s+)?(?=\{)/i,
+    "",
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    // Finding evidence is data; classify only prose outside JSON candidates.
+    if (payload.startsWith("{")) return undefined;
+    const candidate = extractArrayCandidateForRepair(payload);
+    const prose = candidate.startsWith("[") ? payload.slice(0, payload.indexOf(candidate)) : msg;
+    return classifyPolicyRefusalMessage(prose);
+  }
+
+  if (typeof parsed === "string") return classifyPolicyRefusalMessage(parsed);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !("error" in parsed)) {
+    return undefined;
+  }
+  const error = parsed.error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return undefined;
+  const fields = error as Record<string, unknown>;
+  if (fields.code === "invalid_prompt" || fields.type === "invalid_prompt") {
+    return "openai-safety-system";
+  }
+  if (fields.code === "content_policy_violation" || fields.type === "content_policy_violation") {
+    return "content-policy";
+  }
+  return typeof fields.message === "string"
+    ? classifyPolicyRefusalMessage(fields.message)
+    : undefined;
+}
+
+function classifyPolicyRefusalMessage(msg: string): RefusalSource | undefined {
+  const m = msg.toLowerCase();
+
+  // Claude Code usage-policy block:
+  //   "API Error: Claude Code is unable to respond to this request, which
+  //   appears to violate our Usage Policy (https://www.anthropic.com/legal/aup)."
+  if (/unable to respond to this request/.test(m) && /usage polic/.test(m)) {
+    return "anthropic-usage-policy";
+  }
+
+  if (/rejected as a result of our safety system/.test(m)) {
+    return "openai-safety-system";
+  }
+
+  return undefined;
+}
+
+/**
+ * Thrown when the provider refused the request on policy grounds instead of
+ * producing findings JSON. Unlike `QuotaExhaustedError` this does NOT abort
+ * the run: a refusal depends on the batch's content, so other batches can
+ * proceed — but this batch must surface as errored, and must skip the
+ * JSON-repair follow-up (which would otherwise ask a declining model to
+ * re-emit conclusions it never produced, and accepts an empty findings
+ * array as a valid answer).
+ */
+export class AgentPolicyRefusalError extends Error {
+  readonly source: RefusalSource;
+  readonly rawMessage: string;
+
+  constructor(source: RefusalSource, rawMessage: string) {
+    super(`Agent refused the request on policy grounds (${source}): ${rawMessage.slice(0, 300)}`);
+    this.name = "AgentPolicyRefusalError";
+    this.source = source;
+    this.rawMessage = rawMessage;
+  }
+}
+
 /**
  * Vercel AI Gateway endpoints — duplicated from preflight.ts on purpose:
  * processor doesn't depend on the deepsec CLI package. Keep these in sync
@@ -745,6 +838,10 @@ function parseAgentJsonArray(params: {
   try {
     parsed = JSON.parse(jsonPayload);
   } catch (strictErr) {
+    const refusalSource = classifyPolicyRefusal(resultText);
+    if (refusalSource) {
+      throw new AgentPolicyRefusalError(refusalSource, resultText);
+    }
     const repairCandidate = extractArrayCandidateForRepair(jsonPayload);
     try {
       parsed = JSON.parse(jsonrepair(repairCandidate));
@@ -758,6 +855,10 @@ function parseAgentJsonArray(params: {
     }
 
     if (!Array.isArray(parsed)) {
+      const refusalSource = classifyPolicyRefusal(JSON.stringify(parsed));
+      if (refusalSource) {
+        throw new AgentPolicyRefusalError(refusalSource, resultText);
+      }
       const excerpt = resultText.slice(0, 400).replace(/\s+/g, " ");
       throw new Error(
         `${parseFailurePrefix}: ${strictErr instanceof Error ? strictErr.message : strictErr}. ` +
@@ -770,6 +871,10 @@ function parseAgentJsonArray(params: {
   }
 
   if (!Array.isArray(parsed)) {
+    const refusalSource = classifyPolicyRefusal(jsonPayload);
+    if (refusalSource) {
+      throw new AgentPolicyRefusalError(refusalSource, resultText);
+    }
     throw new Error(nonArrayMessage(parsed));
   }
 

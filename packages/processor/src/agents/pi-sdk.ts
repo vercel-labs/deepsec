@@ -18,6 +18,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
+  AgentPolicyRefusalError,
   attributionHeaders,
   backoff,
   buildInvestigateJsonRepairPrompt,
@@ -957,6 +958,18 @@ export class PiAgentPlugin implements AgentPlugin {
     try {
       parsed = parseInvestigateResults(resultText, batch);
     } catch (err) {
+      if (err instanceof AgentPolicyRefusalError) {
+        writeParseFailureDebug({
+          projectId,
+          phase: "investigate",
+          agentType: this.type,
+          resultText,
+          error: err,
+          batch,
+        });
+        session?.dispose();
+        throw err;
+      }
       yield {
         type: "thinking",
         message: "Pi returned non-JSON investigation output; requesting JSON-only repair",
@@ -1134,6 +1147,18 @@ export class PiAgentPlugin implements AgentPlugin {
     try {
       verdicts = parseRevalidateVerdicts(resultText);
     } catch (err) {
+      if (err instanceof AgentPolicyRefusalError) {
+        writeParseFailureDebug({
+          projectId,
+          phase: "revalidate",
+          agentType: this.type,
+          resultText,
+          error: err,
+          batch,
+        });
+        session?.dispose();
+        throw err;
+      }
       yield {
         type: "thinking",
         message: "Pi returned non-JSON revalidation output; requesting JSON-only repair",
