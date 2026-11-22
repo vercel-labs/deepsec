@@ -20,8 +20,10 @@ import {
   buildInvestigatePrompt,
   buildRevalidateJsonRepairPrompt,
   buildRevalidatePrompt,
+  ContentFilteredError,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  isContentFilterBlock,
   isGatewayBaseUrl,
   isTransientError,
   jsonRepairFailureError,
@@ -917,6 +919,11 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         if (signal?.aborted) {
           throw signal.reason instanceof Error ? signal.reason : new Error("Codex batch aborted");
         }
+        // A provider content filter ended the turn. Retrying the same batch
+        // right away tends to hit the same filter; the processor pauses and
+        // retries the files in smaller groups instead.
+        const filterBlock = [turnFailure, lastError].find((m) => isContentFilterBlock(m));
+        if (filterBlock) throw new ContentFilteredError(filterBlock);
         incompleteTurn = codexIncompleteTurnReason({
           agentMessages: agentMessages.length,
           turnCompleted,
@@ -1262,6 +1269,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         if (signal?.aborted) {
           throw signal.reason instanceof Error ? signal.reason : new Error("Codex batch aborted");
         }
+        // Same as investigate(): a content-filter block goes back to the
+        // processor, which pauses and retries the files one at a time.
+        const revalFilterBlock = [turnFailure, lastError].find((m) => isContentFilterBlock(m));
+        if (revalFilterBlock) throw new ContentFilteredError(revalFilterBlock);
         incompleteTurn = codexIncompleteTurnReason({
           agentMessages: agentMessages.length,
           turnCompleted,

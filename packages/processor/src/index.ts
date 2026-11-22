@@ -24,7 +24,12 @@ import { ClaudeAgentSdkPlugin } from "./agents/claude-agent-sdk.js";
 import { CodexAgentSdkPlugin } from "./agents/codex-sdk.js";
 import { PiAgentPlugin } from "./agents/pi-sdk.js";
 import { AgentRegistry } from "./agents/registry.js";
-import { QuotaExhaustedError, type QuotaSource } from "./agents/shared.js";
+import {
+  ContentFilterBrake,
+  ContentFilteredError,
+  QuotaExhaustedError,
+  type QuotaSource,
+} from "./agents/shared.js";
 import type {
   AgentPlugin,
   AgentProgress,
@@ -104,6 +109,14 @@ export interface ProcessProgress {
   batchIndex?: number;
   totalBatches?: number;
   agentProgress?: AgentProgress;
+}
+
+/** Attempts per file after a content-filter block split its batch. */
+const CONTENT_FILTER_FILE_ATTEMPTS = 2;
+
+function envMs(name: string, fallback: number): number {
+  const v = Number(globalThis.process.env[name]);
+  return Number.isFinite(v) && v >= 0 ? v : fallback;
 }
 
 export async function process(params: {
@@ -600,6 +613,280 @@ export async function process(params: {
     });
     let quotaExhausted: { source: QuotaSource; rawMessage: string } | undefined;
     let costLimitReached: { limitUsd: number; actualUsd: number } | undefined;
+    const contentFilterBrake = new ContentFilterBrake(
+      envMs("DEEPSEC_CONTENT_FILTER_PAUSE_MS", 30_000),
+      envMs("DEEPSEC_CONTENT_FILTER_MAX_PAUSE_MS", 5 * 60_000),
+    );
+    let contentFilterBlocks = 0;
+    const contentFilterChunk = Math.max(
+      1,
+      Number(globalThis.process.env.DEEPSEC_CONTENT_FILTER_CHUNK) || 5,
+    );
+
+    // Runs the agent over `batch` and persists its results. Throws on agent
+    // failure; files the agent left out of its results are marked `error`.
+    async function runInvestigation(
+      batch: FileRecord[],
+      i: number,
+    ): Promise<{ analyses: number; findings: number }> {
+      // When using the modular assembled prompt, INFO.md is already
+      // injected by `assemblePrompt()` (between `---` separators after
+      // the threat highlights). Pass `""` to the agent layer to avoid a
+      // second `## Project Context` block being appended on top of it.
+      // Custom-template callers don't go through the assembler, so they
+      // still need the agent layer to inject INFO.md for them.
+      const projectInfoForAgent = customPromptTemplate === undefined ? "" : projectInfo;
+      const gen = agent.investigate({
+        batch,
+        projectRoot: effectiveRootPath,
+        promptTemplate: buildBatchPrompt(batch),
+        projectInfo: projectInfoForAgent,
+        config,
+        signal: quotaAbort.signal,
+        projectId,
+      });
+
+      let result = await gen.next();
+      while (!result.done) {
+        emitProgress({
+          type: "agent_progress",
+          message: (result.value as AgentProgress).message,
+          batchIndex: i,
+          totalBatches: batches.length,
+          agentProgress: result.value as AgentProgress,
+        });
+        result = await gen.next();
+      }
+
+      const output = result.value as InvestigateOutput;
+      const { results, meta: batchMeta } = output;
+
+      // Accumulate run-level stats
+      totalCostUsd += batchMeta.costUsd ?? 0;
+      totalInputTokens += batchMeta.usage?.inputTokens ?? 0;
+      totalOutputTokens += batchMeta.usage?.outputTokens ?? 0;
+      totalDurationMs += batchMeta.durationMs;
+
+      // Cost / tokens / duration / turns are batch-level — one agent call
+      // covers all files in the batch. Stamping the batch total onto every
+      // file's analysisHistory entry inflates `metrics` totals by ~batch
+      // size. Divide evenly so summing per-file entries gives the correct
+      // run total. We split by the count of records that will actually
+      // get an entry (results that match a record in the batch) — silent
+      // skips don't dilute the share.
+      const validResultCount = results.reduce(
+        (n, r) => n + (batch.some((b) => b.filePath === r.filePath) ? 1 : 0),
+        0,
+      );
+      const splitN = Math.max(1, validResultCount);
+      const perFileCost = batchMeta.costUsd != null ? batchMeta.costUsd / splitN : undefined;
+      const perFileUsage = batchMeta.usage
+        ? {
+            inputTokens: batchMeta.usage.inputTokens / splitN,
+            outputTokens: batchMeta.usage.outputTokens / splitN,
+            cacheReadInputTokens: batchMeta.usage.cacheReadInputTokens / splitN,
+            cacheCreationInputTokens: batchMeta.usage.cacheCreationInputTokens / splitN,
+          }
+        : undefined;
+      const perFileDurationMs = batchMeta.durationMs / splitN;
+      const perFileDurationApiMs =
+        batchMeta.durationApiMs != null ? batchMeta.durationApiMs / splitN : undefined;
+      const perFileNumTurns = batchMeta.numTurns != null ? batchMeta.numTurns / splitN : undefined;
+
+      // Update file records with results + metadata.
+      //
+      // Re-investigation always *merges* — existing findings are preserved
+      // and only the agent's net-new findings (signature not already on the
+      // file) get appended. Signature: vulnSlug + normalized title
+      // (lowercase, trimmed). This tolerates minor wording drift while still
+      // suppressing duplicates from re-runs. The first analysis on a file
+      // (no prior findings) lands as-is.
+      for (const res of results) {
+        const record = batch.find((r) => r.filePath === res.filePath);
+        if (!record) continue;
+
+        const sig = (slug: string | undefined, title: string | undefined) =>
+          `${slug ?? ""}::${(title ?? "").trim().toLowerCase()}`;
+        const existing = new Set((record.findings ?? []).map((f) => sig(f.vulnSlug, f.title)));
+        const newFindings = res.findings
+          .filter((f) => !existing.has(sig(f.vulnSlug, f.title)))
+          // Stamp the originating run so PR comments and post-run
+          // tooling can filter to net-new findings only. Findings from
+          // earlier runs keep their (older) producedByRunId — or
+          // undefined for findings written before this field existed.
+          .map((f) => ({ ...f, producedByRunId: runId }));
+        record.findings = [...(record.findings ?? []), ...newFindings];
+        // Stamp stable findingIds on the appended findings at creation
+        // time (existing findings already have theirs from load).
+        ensureFindingIds(record);
+        const findingsForHistoryCount = newFindings.length;
+
+        record.analysisHistory.push({
+          runId,
+          investigatedAt: new Date().toISOString(),
+          durationMs: perFileDurationMs,
+          durationApiMs: perFileDurationApiMs,
+          agentType,
+          model,
+          modelConfig: config,
+          agentSessionId: batchMeta.agentSessionId,
+          findingCount: findingsForHistoryCount,
+          numTurns: perFileNumTurns,
+          phase: "process",
+          costUsd: perFileCost,
+          usage: perFileUsage,
+          refusal: batchMeta.refusal,
+          codexStderr: batchMeta.codexStderr,
+          reinvestigateMarker: typeof reinvestigate === "number" ? reinvestigate : undefined,
+        });
+        record.status = "analyzed";
+        record.lockedByRunId = undefined;
+        record.lockedAt = undefined;
+        try {
+          enrichFileRecord(record, effectiveRootPath);
+        } catch (e) {
+          console.error(
+            `[deepsec] enrich failed for ${record.filePath}: ${e instanceof Error ? e.message : e}`,
+          );
+        }
+        writeFileRecord(record);
+
+        totalAnalyses++;
+        // Count net-new only — re-runs of analyzed files that produce
+        // duplicates of existing findings shouldn't inflate the run
+        // total (and shouldn't fail the CLI exit gate in direct mode).
+        totalFindings += newFindings.length;
+      }
+
+      // Mark any files not in results as error
+      for (const record of batch) {
+        if (!results.some((r) => r.filePath === record.filePath)) {
+          record.status = "error";
+          record.lockedByRunId = undefined;
+          record.lockedAt = undefined;
+          writeFileRecord(record);
+        }
+      }
+      return {
+        analyses: results.length,
+        findings: results.reduce((s, r) => s + r.findings.length, 0),
+      };
+    }
+
+    function markError(records: FileRecord[]): void {
+      for (const record of records) {
+        record.status = "error";
+        record.lockedByRunId = undefined;
+        record.lockedAt = undefined;
+        writeFileRecord(record);
+      }
+    }
+
+    // A content-filter block on a multi-file batch: retry each file on its
+    // own after the brake's pause, so one file's content can't fail the
+    // others. Files still blocked after CONTENT_FILTER_FILE_ATTEMPTS become
+    // `error` and are picked up again by the next run.
+    async function retryFilesOneAtATime(
+      batch: FileRecord[],
+      i: number,
+    ): Promise<{ analyses: number; findings: number; blocked: number }> {
+      let analyses = 0;
+      let findings = 0;
+      let blocked = 0;
+      for (const file of batch) {
+        let done = false;
+        for (let attempt = 1; attempt <= CONTENT_FILTER_FILE_ATTEMPTS && !done; attempt++) {
+          await contentFilterBrake.wait(quotaAbort.signal);
+          if (quotaAbort.signal.aborted) break;
+          try {
+            const r = await runInvestigation([file], i);
+            analyses += r.analyses;
+            findings += r.findings;
+            done = true;
+          } catch (err) {
+            if (!(err instanceof ContentFilteredError)) {
+              markError([file]);
+              emitProgress({
+                type: "batch_complete",
+                message: `Batch ${i + 1}/${batches.length}: ${file.filePath} failed: ${err instanceof Error ? err.message : String(err)}`,
+                batchIndex: i,
+                totalBatches: batches.length,
+              });
+              done = true;
+              break;
+            }
+            noteContentFilterBlock(
+              i,
+              `${file.filePath}, attempt ${attempt}/${CONTENT_FILTER_FILE_ATTEMPTS}`,
+            );
+          }
+        }
+        if (!done) {
+          blocked++;
+          markError([file]);
+        }
+      }
+      return { analyses, findings, blocked };
+    }
+
+    // Big blocked batches go through chunks first: one problem file in a
+    // batch of 20 then costs 4 chunk runs + 5 single-file runs instead of
+    // 20 serial single-file runs. Chunks that are blocked again fall back
+    // to one file at a time.
+    async function retryFilesAfterContentFilter(
+      batch: FileRecord[],
+      i: number,
+    ): Promise<{ analyses: number; findings: number; blocked: number }> {
+      if (batch.length <= contentFilterChunk) return retryFilesOneAtATime(batch, i);
+      const total = { analyses: 0, findings: 0, blocked: 0 };
+      for (let start = 0; start < batch.length; start += contentFilterChunk) {
+        const chunk = batch.slice(start, start + contentFilterChunk);
+        await contentFilterBrake.wait(quotaAbort.signal);
+        if (quotaAbort.signal.aborted) {
+          markError(chunk);
+          continue;
+        }
+        try {
+          const r = await runInvestigation(chunk, i);
+          total.analyses += r.analyses;
+          total.findings += r.findings;
+        } catch (err) {
+          if (!(err instanceof ContentFilteredError)) {
+            markError(chunk);
+            emitProgress({
+              type: "batch_complete",
+              message: `Batch ${i + 1}/${batches.length}: chunk of ${chunk.length} failed: ${err instanceof Error ? err.message : String(err)}`,
+              batchIndex: i,
+              totalBatches: batches.length,
+            });
+            continue;
+          }
+          noteContentFilterBlock(i, `chunk of ${chunk.length} file(s)`);
+          emitProgress({
+            type: "batch_complete",
+            message: `Batch ${i + 1}/${batches.length}: retrying ${chunk.length} files one at a time`,
+            batchIndex: i,
+            totalBatches: batches.length,
+          });
+          const r = await retryFilesOneAtATime(chunk, i);
+          total.analyses += r.analyses;
+          total.findings += r.findings;
+          total.blocked += r.blocked;
+        }
+      }
+      return total;
+    }
+
+    function noteContentFilterBlock(i: number, what: string): void {
+      contentFilterBlocks++;
+      const pauseMs = contentFilterBrake.noteBlock();
+      emitProgress({
+        type: "batch_complete",
+        message: `Batch ${i + 1}/${batches.length}: blocked by provider content filter (${what}); pausing new work for ${Math.round(pauseMs / 1000)}s`,
+        batchIndex: i,
+        totalBatches: batches.length,
+      });
+    }
 
     async function processBatch(batch: FileRecord[], i: number) {
       batchesInFlight++;
@@ -611,144 +898,26 @@ export async function process(params: {
       });
 
       try {
-        // When using the modular assembled prompt, INFO.md is already
-        // injected by `assemblePrompt()` (between `---` separators after
-        // the threat highlights). Pass `""` to the agent layer to avoid a
-        // second `## Project Context` block being appended on top of it.
-        // Custom-template callers don't go through the assembler, so they
-        // still need the agent layer to inject INFO.md for them.
-        const projectInfoForAgent = customPromptTemplate === undefined ? "" : projectInfo;
-        const gen = agent.investigate({
-          batch,
-          projectRoot: effectiveRootPath,
-          promptTemplate: buildBatchPrompt(batch),
-          projectInfo: projectInfoForAgent,
-          config,
-          signal: quotaAbort.signal,
-          projectId,
-        });
-
-        let result = await gen.next();
-        while (!result.done) {
-          emitProgress({
-            type: "agent_progress",
-            message: (result.value as AgentProgress).message,
-            batchIndex: i,
-            totalBatches: batches.length,
-            agentProgress: result.value as AgentProgress,
-          });
-          result = await gen.next();
-        }
-
-        const output = result.value as InvestigateOutput;
-        const { results, meta: batchMeta } = output;
-
-        // Accumulate run-level stats
-        totalCostUsd += batchMeta.costUsd ?? 0;
-        totalInputTokens += batchMeta.usage?.inputTokens ?? 0;
-        totalOutputTokens += batchMeta.usage?.outputTokens ?? 0;
-        totalDurationMs += batchMeta.durationMs;
-
-        // Cost / tokens / duration / turns are batch-level — one agent call
-        // covers all files in the batch. Stamping the batch total onto every
-        // file's analysisHistory entry inflates `metrics` totals by ~batch
-        // size. Divide evenly so summing per-file entries gives the correct
-        // run total. We split by the count of records that will actually
-        // get an entry (results that match a record in the batch) — silent
-        // skips don't dilute the share.
-        const validResultCount = results.reduce(
-          (n, r) => n + (batch.some((b) => b.filePath === r.filePath) ? 1 : 0),
-          0,
-        );
-        const splitN = Math.max(1, validResultCount);
-        const perFileCost = batchMeta.costUsd != null ? batchMeta.costUsd / splitN : undefined;
-        const perFileUsage = batchMeta.usage
-          ? {
-              inputTokens: batchMeta.usage.inputTokens / splitN,
-              outputTokens: batchMeta.usage.outputTokens / splitN,
-              cacheReadInputTokens: batchMeta.usage.cacheReadInputTokens / splitN,
-              cacheCreationInputTokens: batchMeta.usage.cacheCreationInputTokens / splitN,
-            }
-          : undefined;
-        const perFileDurationMs = batchMeta.durationMs / splitN;
-        const perFileDurationApiMs =
-          batchMeta.durationApiMs != null ? batchMeta.durationApiMs / splitN : undefined;
-        const perFileNumTurns =
-          batchMeta.numTurns != null ? batchMeta.numTurns / splitN : undefined;
-
-        // Update file records with results + metadata.
-        //
-        // Re-investigation always *merges* — existing findings are preserved
-        // and only the agent's net-new findings (signature not already on the
-        // file) get appended. Signature: vulnSlug + normalized title
-        // (lowercase, trimmed). This tolerates minor wording drift while still
-        // suppressing duplicates from re-runs. The first analysis on a file
-        // (no prior findings) lands as-is.
-        for (const res of results) {
-          const record = batch.find((r) => r.filePath === res.filePath);
-          if (!record) continue;
-
-          const sig = (slug: string | undefined, title: string | undefined) =>
-            `${slug ?? ""}::${(title ?? "").trim().toLowerCase()}`;
-          const existing = new Set((record.findings ?? []).map((f) => sig(f.vulnSlug, f.title)));
-          const newFindings = res.findings
-            .filter((f) => !existing.has(sig(f.vulnSlug, f.title)))
-            // Stamp the originating run so PR comments and post-run
-            // tooling can filter to net-new findings only. Findings from
-            // earlier runs keep their (older) producedByRunId — or
-            // undefined for findings written before this field existed.
-            .map((f) => ({ ...f, producedByRunId: runId }));
-          record.findings = [...(record.findings ?? []), ...newFindings];
-          // Stamp stable findingIds on the appended findings at creation
-          // time (existing findings already have theirs from load).
-          ensureFindingIds(record);
-          const findingsForHistoryCount = newFindings.length;
-
-          record.analysisHistory.push({
-            runId,
-            investigatedAt: new Date().toISOString(),
-            durationMs: perFileDurationMs,
-            durationApiMs: perFileDurationApiMs,
-            agentType,
-            model,
-            modelConfig: config,
-            agentSessionId: batchMeta.agentSessionId,
-            findingCount: findingsForHistoryCount,
-            numTurns: perFileNumTurns,
-            phase: "process",
-            costUsd: perFileCost,
-            usage: perFileUsage,
-            refusal: batchMeta.refusal,
-            codexStderr: batchMeta.codexStderr,
-            reinvestigateMarker: typeof reinvestigate === "number" ? reinvestigate : undefined,
-          });
-          record.status = "analyzed";
-          record.lockedByRunId = undefined;
-          record.lockedAt = undefined;
-          try {
-            enrichFileRecord(record, effectiveRootPath);
-          } catch (e) {
-            console.error(
-              `[deepsec] enrich failed for ${record.filePath}: ${e instanceof Error ? e.message : e}`,
-            );
+        let counts: { analyses: number; findings: number };
+        try {
+          counts = await runInvestigation(batch, i);
+        } catch (err) {
+          if (!(err instanceof ContentFilteredError)) throw err;
+          noteContentFilterBlock(i, `${batch.length} file(s)`);
+          if (batch.length > 1) {
+            emitProgress({
+              type: "batch_complete",
+              message:
+                batch.length > contentFilterChunk
+                  ? `Batch ${i + 1}/${batches.length}: retrying ${batch.length} files in chunks of ${contentFilterChunk}`
+                  : `Batch ${i + 1}/${batches.length}: retrying ${batch.length} files one at a time`,
+              batchIndex: i,
+              totalBatches: batches.length,
+            });
           }
-          writeFileRecord(record);
-
-          totalAnalyses++;
-          // Count net-new only — re-runs of analyzed files that produce
-          // duplicates of existing findings shouldn't inflate the run
-          // total (and shouldn't fail the CLI exit gate in direct mode).
-          totalFindings += newFindings.length;
-        }
-
-        // Mark any files not in results as error
-        for (const record of batch) {
-          if (!results.some((r) => r.filePath === record.filePath)) {
-            record.status = "error";
-            record.lockedByRunId = undefined;
-            record.lockedAt = undefined;
-            writeFileRecord(record);
-          }
+          const r = await retryFilesAfterContentFilter(batch, i);
+          if (r.analyses === 0) throw err;
+          counts = r;
         }
 
         batchesInFlight--;
@@ -763,7 +932,7 @@ export async function process(params: {
         }
         emitProgress({
           type: "batch_complete",
-          message: `Batch ${i + 1}/${batches.length} complete: ${results.length} analyses, ${results.reduce((s, r) => s + r.findings.length, 0)} findings (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
+          message: `Batch ${i + 1}/${batches.length} complete: ${counts.analyses} analyses, ${counts.findings} findings (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
           batchIndex: i,
           totalBatches: batches.length,
         });
@@ -801,6 +970,8 @@ export async function process(params: {
         // Stop pulling new batches once any earlier batch has tripped quota
         // — the credential is empty for the whole run.
         if (quotaAbort.signal.aborted) break;
+        await contentFilterBrake.wait(quotaAbort.signal);
+        if (quotaAbort.signal.aborted) break;
         await processBatch(batches[i], i);
       }
     } else {
@@ -809,6 +980,8 @@ export async function process(params: {
       async function worker() {
         while (nextIdx < batches.length) {
           if (quotaAbort.signal.aborted) return;
+          await contentFilterBrake.wait(quotaAbort.signal);
+          if (quotaAbort.signal.aborted || nextIdx >= batches.length) return;
           const idx = nextIdx++;
           await processBatch(batches[idx], idx);
         }
@@ -1093,6 +1266,21 @@ export async function revalidate(params: {
 
     // Same quota-cancellation pattern as process(); see that block for why.
     const quotaAbort = new AbortController();
+    // Same policy as process(): a content-filter block pauses new work for
+    // the whole worker and the blocked files are retried one at a time.
+    const revalBrake = new ContentFilterBrake(
+      envMs("DEEPSEC_CONTENT_FILTER_PAUSE_MS", 30_000),
+      envMs("DEEPSEC_CONTENT_FILTER_MAX_PAUSE_MS", 5 * 60_000),
+    );
+    const noteRevalBlock = (idx: number, what: string) => {
+      const pauseMs = revalBrake.noteBlock();
+      emitProgress({
+        type: "batch_complete",
+        message: `Batch ${idx + 1}/${batches.length}: blocked by provider content filter (${what}); pausing new work for ${Math.round(pauseMs / 1000)}s`,
+        batchIndex: idx,
+        totalBatches: batches.length,
+      });
+    };
     let quotaExhausted: { source: QuotaSource; rawMessage: string } | undefined;
 
     // Every agent invocation (initial batch, per-file retry, per-finding
@@ -1403,7 +1591,19 @@ export async function revalidate(params: {
       fallbackUnresolved: ExpectedFinding[];
     }): Promise<InvocationResult> {
       try {
-        return await runRevalidateInvocation(inv);
+        for (let attempt = 1; ; attempt++) {
+          await revalBrake.wait(quotaAbort.signal);
+          try {
+            return await runRevalidateInvocation(inv);
+          } catch (err) {
+            if (!(err instanceof ContentFilteredError) || attempt >= CONTENT_FILTER_FILE_ATTEMPTS)
+              throw err;
+            noteRevalBlock(
+              inv.batchIdx,
+              `${inv.label}, attempt ${attempt}/${CONTENT_FILTER_FILE_ATTEMPTS}`,
+            );
+          }
+        }
       } catch (err) {
         if (err instanceof QuotaExhaustedError) throw err;
         emitProgress({
@@ -1438,11 +1638,26 @@ export async function revalidate(params: {
       });
 
       try {
-        const first = await runRevalidateInvocation({
-          files: batch,
-          batchIdx: idx,
-          label: "initial",
-        });
+        let first: InvocationResult;
+        try {
+          first = await runRevalidateInvocation({
+            files: batch,
+            batchIdx: idx,
+            label: "initial",
+          });
+        } catch (err) {
+          if (!(err instanceof ContentFilteredError)) throw err;
+          // Nothing from this turn is usable; hand every requested finding
+          // to the per-file stage below.
+          noteRevalBlock(idx, `${batch.length} file(s)`);
+          first = {
+            expectedCount: requested.length,
+            returnedCount: 0,
+            matchedCount: 0,
+            persistedCount: 0,
+            unresolved: requested,
+          };
+        }
         let persisted = first.persistedCount;
         let unresolved = first.unresolved;
 
@@ -1566,6 +1781,8 @@ export async function revalidate(params: {
     if (concurrency <= 1) {
       for (let i = 0; i < batches.length; i++) {
         if (quotaAbort.signal.aborted) break;
+        await revalBrake.wait(quotaAbort.signal);
+        if (quotaAbort.signal.aborted) break;
         await revalidateBatch(batches[i], i);
       }
     } else {
@@ -1573,6 +1790,8 @@ export async function revalidate(params: {
       async function worker() {
         while (nextIdx < batches.length) {
           if (quotaAbort.signal.aborted) return;
+          await revalBrake.wait(quotaAbort.signal);
+          if (quotaAbort.signal.aborted || nextIdx >= batches.length) return;
           const idx = nextIdx++;
           await revalidateBatch(batches[idx], idx);
         }

@@ -41,7 +41,7 @@ vi.mock("../agents/shared.js", async (importOriginal) => {
 });
 
 const { CodexAgentSdkPlugin, codexIncompleteTurnReason } = await import("../agents/codex-sdk.js");
-const { REFUSAL_FOLLOWUP_PROMPT } = await import("../agents/shared.js");
+const { REFUSAL_FOLLOWUP_PROMPT, ContentFilteredError } = await import("../agents/shared.js");
 
 const FLAGGED =
   "This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request.";
@@ -51,6 +51,15 @@ const batch = [
 ];
 const resultsJson =
   '```json\n[{"filePath":"a.ts","findings":[]},{"filePath":"b.ts","findings":[]}]\n```';
+
+function progressThenFailure(message: string): Array<Record<string, unknown>> {
+  return [
+    { type: "thread.started", thread_id: "thread-1" },
+    { type: "turn.started" },
+    { type: "item.completed", item: { type: "agent_message", text: "Checking the caller next." } },
+    { type: "turn.failed", error: { message } },
+  ];
+}
 
 function progressThenFlag(): Array<Record<string, unknown>> {
   return [
@@ -119,10 +128,17 @@ describe("codex investigate with an incomplete turn", () => {
     for (const dir of created.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("retries a turn blocked mid-investigation instead of parsing its progress notes", async () => {
+  it("hands a content-filter block to the processor instead of parsing progress notes", async () => {
     scripts.push(progressThenFlag(), completedTurn());
-    const { progress, output } = await drain(investigate());
+    await expect(drain(investigate())).rejects.toBeInstanceOf(ContentFilteredError);
+    // No same-batch retry and no JSON repair or refusal follow-up.
+    expect(scripts).toHaveLength(1);
+    expect(followUps).toEqual([]);
+  });
 
+  it("retries other incomplete turns on the same batch", async () => {
+    scripts.push(progressThenFailure("upstream stream reset"), completedTurn());
+    const { progress, output } = await drain(investigate());
     expect(output.results).toEqual([
       { filePath: "a.ts", findings: [] },
       { filePath: "b.ts", findings: [] },
@@ -132,8 +148,12 @@ describe("codex investigate with an incomplete turn", () => {
     expect(followUps).toEqual([REFUSAL_FOLLOWUP_PROMPT]);
   });
 
-  it("fails the batch when every attempt is blocked", async () => {
-    scripts.push(progressThenFlag(), progressThenFlag(), progressThenFlag());
+  it("fails the batch when every attempt ends incomplete", async () => {
+    scripts.push(
+      progressThenFailure("upstream stream reset"),
+      progressThenFailure("upstream stream reset"),
+      progressThenFailure("upstream stream reset"),
+    );
     await expect(drain(investigate())).rejects.toThrow(/did not complete after 3 attempt/);
     expect(scripts).toHaveLength(0);
   });
