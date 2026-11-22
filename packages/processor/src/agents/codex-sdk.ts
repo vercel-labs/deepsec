@@ -317,8 +317,8 @@ export function buildGatewayProviderConfig(
 /**
  * Decide between gateway mode (orchestrator has an API token, we route
  * through Vercel AI Gateway via a custom provider) and subscription mode
- * (no token but the user has run `codex login` on this machine — let
- * codex use its default openai provider against their session). Sandbox
+ * (no token but the user has logged in with the codex CLI on this machine —
+ * let codex use its default openai provider against their session). Sandbox
  * workers always go gateway; the preflight ensures a token is present
  * before we ever get here in that path.
  */
@@ -328,9 +328,35 @@ export function findCodexSubscriptionHome(): string | null {
 }
 
 export function buildCodexInvocation(
-  requestedCyberAccessProgram: CyberAccessProgram | undefined,
+  agentConfigOrProgram: Record<string, unknown> | CyberAccessProgram = {},
 ): CodexInvocation {
-  const subscriptionHome = findCodexSubscriptionHome();
+  // Decide between gateway mode (orchestrator has an API token, we route
+  // through Vercel AI Gateway via a custom provider) and subscription mode
+  // (no token but the user has logged in with the codex CLI on this machine —
+  // let codex use its default openai provider against their session). Sandbox
+  // workers always go gateway; the preflight ensures a token is present
+  // before we ever get here in that path.
+  //
+  // A saved local-subscription route is an explicit choice, so it outranks
+  // ambient OPENAI_API_KEY / ANTHROPIC_AUTH_TOKEN values, such as the ones a
+  // direnv setup exports for other tools. Sandbox workers are exempt: they
+  // have no machine-wide login and receive a brokered key instead.
+  const agentConfig = typeof agentConfigOrProgram === "string" ? {} : agentConfigOrProgram;
+  const requestedCyberAccessProgram =
+    typeof agentConfigOrProgram === "string"
+      ? agentConfigOrProgram
+      : (agentConfig.cyberAccessProgram as CyberAccessProgram | undefined);
+  const localRoute =
+    process.env.DEEPSEC_INSIDE_SANDBOX !== "1" && agentConfig.modelAuth === "local";
+  const haveApiToken = localRoute
+    ? false
+    : !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  const subscriptionHome = haveApiToken ? null : findCodexSubscriptionAuth();
+  if (localRoute && !subscriptionHome) {
+    throw new Error(
+      "Local-subscription model route selected, but no Codex login was found (expected auth.json in CODEX_HOME or ~/.codex). Run the codex login command, or choose a credential route during setup.",
+    );
+  }
 
   const codexHome = makeCodexHome();
   if (subscriptionHome) {
@@ -698,9 +724,7 @@ async function runToollessFollowUp(
 export async function runCodexSetupTask(params: SetupTaskParams): Promise<string> {
   const model = (params.config.model as string) ?? DEFAULT_MODEL;
   const effort = (params.config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
-  const invocation = buildCodexInvocation(
-    params.config.cyberAccessProgram as CyberAccessProgram | undefined,
-  );
+  const invocation = buildCodexInvocation(params.config);
   const { cyberAccessProgram } = invocation;
   const codex = new Codex(invocation.options);
   const messages: string[] = [];
@@ -790,9 +814,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
 
     const basePrompt = buildInvestigatePrompt({ promptTemplate, projectInfo, batch });
     const prompt = `${codexEnvironmentPreamble(projectRoot)}\n\n${basePrompt}`;
-    const invocation = buildCodexInvocation(
-      config.cyberAccessProgram as CyberAccessProgram | undefined,
-    );
+    const invocation = buildCodexInvocation(config);
     const { cyberAccessProgram } = invocation;
     // Idempotent cleanup the finally block runs whether we exit via return,
     // throw, or generator close. Each helper swallows missing-target errors,
@@ -1156,9 +1178,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       message: `Revalidating ${totalFindings} finding(s) across ${batch.length} file(s) with Codex SDK (${model})`,
     };
 
-    const invocation = buildCodexInvocation(
-      config.cyberAccessProgram as CyberAccessProgram | undefined,
-    );
+    const invocation = buildCodexInvocation(config);
     const { cyberAccessProgram } = invocation;
     let cleanedUp = false;
     const cleanup = (): void => {

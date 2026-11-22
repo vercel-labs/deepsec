@@ -49,6 +49,41 @@ describe("buildAgentConfig", () => {
     });
   });
 
+  it("records the saved model-auth mode for agent backends", () => {
+    setLoadedConfig(defineConfig({ projects: [], ai: { mode: "local", provider: "local" } }));
+    expect(buildAgentConfig({ agentType: "codex", model: "gpt-5.5" })).toMatchObject({
+      modelAuth: "local",
+    });
+    expect(
+      buildAgentConfig({
+        agentType: "codex",
+        model: "gpt-5.5",
+        modelRoute: { mode: "direct", provider: "openai", apiKeyEnv: "OPENAI_API_KEY" },
+      }),
+    ).toMatchObject({ modelAuth: "direct" });
+  });
+
+  it("does not inherit the saved local mode when --ai-* overrides are present", () => {
+    setLoadedConfig(defineConfig({ projects: [], ai: { mode: "local", provider: "local" } }));
+    expect(
+      buildAgentConfig({
+        agentType: "codex",
+        model: "openai/gpt-5.5",
+        aiApiKeyEnv: "MY_MODEL_KEY",
+      }),
+    ).not.toHaveProperty("modelAuth");
+    expect(
+      buildAgentConfig({
+        agentType: "codex",
+        model: "openai/gpt-5.5",
+        aiBaseUrl: "https://my-gateway.test/v1",
+      }),
+    ).not.toHaveProperty("modelAuth");
+    expect(buildAgentConfig({ agentType: "codex", model: "gpt-5.5" })).toMatchObject({
+      modelAuth: "local",
+    });
+  });
+
   it("maps --thinking-level to both harness config keys", () => {
     expect(
       buildAgentConfig({ agentType: "pi", model: "openai/gpt-5.5", thinkingLevel: "medium" }),
