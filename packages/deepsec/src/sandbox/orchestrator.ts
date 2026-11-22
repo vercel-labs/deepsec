@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dataDir, getConfigPath, getDataRoot, readProjectConfig } from "@deepsec/core";
+import {
+  dataDir,
+  getConfigPath,
+  getDataRoot,
+  readFileRecord,
+  readProjectConfig,
+  writeFileRecord,
+} from "@deepsec/core";
 import { Sandbox } from "@vercel/sandbox";
 import { downloadResults } from "./download.js";
 import { partitionFiles } from "./partitioner.js";
@@ -20,6 +27,7 @@ import {
   listRunStates,
   loadRunState,
   saveRunState,
+  updateRunState,
 } from "./state.js";
 import type { SandboxConfig, SandboxInstance, SandboxResult, SandboxRunState } from "./types.js";
 import {
@@ -117,43 +125,69 @@ function unregisterLogAborter(aborter: AbortController): void {
   }
 }
 
-async function streamLogsCapped(
+// The Sandbox API sometimes closes a command's log stream long before the
+// command exits. Each reconnect replays the log from the start, so already
+// shown lines are skipped by count.
+const MAX_LOG_RECONNECTS = 100;
+
+export async function streamLogsCapped(
   cmd: LoggableCommand,
   prefix: string,
   onLog: (msg: string) => void,
   onRawLine?: (line: string) => void,
+  isFinished?: () => Promise<boolean>,
 ): Promise<void> {
   const aborter = new AbortController();
   registerLogAborter(aborter);
   let remaining = MAX_LOG_BYTES_PER_SANDBOX;
+  let emitted = 0;
+  let exhausted = false;
+  const emit = (line: string) => {
+    remaining -= Buffer.byteLength(line) + 1;
+    onRawLine?.(line);
+    const shown =
+      line.length > MAX_LOG_LINE_CHARS
+        ? `${line.slice(0, MAX_LOG_LINE_CHARS)}… [line truncated]`
+        : line;
+    onLog(`${prefix} ${shown}`);
+  };
   try {
-    for await (const log of cmd.logs({ signal: aborter.signal })) {
-      remaining -= Buffer.byteLength(log.data);
-      const lines = log.data.trim();
-      if (lines) {
-        for (const line of lines.split("\n")) {
-          onRawLine?.(line);
-          const shown =
-            line.length > MAX_LOG_LINE_CHARS
-              ? `${line.slice(0, MAX_LOG_LINE_CHARS)}… [line truncated]`
-              : line;
-          onLog(`${prefix} ${shown}`);
+    for (let attempt = 0; attempt <= MAX_LOG_RECONNECTS; attempt++) {
+      let index = 0;
+      let partial = "";
+      try {
+        for await (const log of cmd.logs({ signal: aborter.signal })) {
+          const parts = (partial + log.data).split("\n");
+          partial = parts.pop() ?? "";
+          for (const line of parts) {
+            if (index++ < emitted) continue;
+            emitted++;
+            if (line.trim()) emit(line);
+          }
+          if (remaining <= 0) {
+            exhausted = true;
+            onLog(
+              `${prefix} [log stream exceeded ${Math.round(MAX_LOG_BYTES_PER_SANDBOX / 1024 / 1024)}MiB; further output suppressed]`,
+            );
+            aborter.abort();
+            break;
+          }
         }
+      } catch {
+        // Stream errors (including our own abort) are non-fatal here.
       }
-      if (remaining <= 0) {
-        onLog(
-          `${prefix} [log stream exceeded ${Math.round(MAX_LOG_BYTES_PER_SANDBOX / 1024 / 1024)}MiB; further output suppressed]`,
-        );
-        aborter.abort();
-        break;
+      if (partial.trim() && index++ >= emitted) {
+        emitted++;
+        emit(partial);
       }
+      if (aborter.signal.aborted || exhausted || !isFinished) break;
+      if (await isFinished()) break;
+      if (attempt === 0) onLog(`${prefix} [log stream closed early; reconnecting]`);
     }
-  } catch {
-    // Stream errors (including our own abort) are non-fatal here.
   } finally {
     unregisterLogAborter(aborter);
   }
-  if (aborter.signal.aborted && remaining > 0) {
+  if (aborter.signal.aborted && !exhausted) {
     onLog(`${prefix} [log stream aborted under memory pressure; further output suppressed]`);
   }
 }
@@ -282,7 +316,8 @@ async function prepareUploads(
 // --- Partition + bootstrap + spawn N workers ---
 
 interface BootstrapAndSpawnResult {
-  instances: SandboxInstance[];
+  /** One promise per partition, resolving when that sandbox is ready (or failed). */
+  spawns: Promise<SandboxInstance>[];
   partitions: string[][];
   totalFiles: number;
   snapshotId: string | null;
@@ -314,7 +349,7 @@ async function bootstrapAndSpawn(
 
     if (totalFiles === 0) {
       onLog("No files to process.");
-      return { instances: [], partitions: [], totalFiles: 0, snapshotId: null, mode: ctx.mode };
+      return { spawns: [], partitions: [], totalFiles: 0, snapshotId: null, mode: ctx.mode };
     }
 
     onLog(
@@ -358,11 +393,20 @@ async function bootstrapAndSpawn(
     onLog(`Using provided snapshot: ${snapshotId}`);
   }
 
-  // Step 2: spawn N worker sandboxes from the snapshot in parallel
-  onLog(`Spawning ${partitions.length} worker sandbox(es) from snapshot ${snapshotId}...`);
+  // Step 2: spawn N worker sandboxes from the snapshot, staggered so a big
+  // run doesn't hit the Sandbox API and the model provider all at once.
+  const delays = spawnDelays(partitions.length, config.spawnRate);
+  const ramp = Math.max(0, ...delays);
+  onLog(
+    `Spawning ${partitions.length} worker sandbox(es) from snapshot ${snapshotId}` +
+      (ramp > 0
+        ? ` at up to ${config.spawnRate}/min (over ~${Math.ceil(ramp / 60_000)} min)...`
+        : "..."),
+  );
 
-  const spawnPromises = partitions.map(async (partition, idx): Promise<SandboxInstance> => {
+  const spawns = partitions.map(async (partition, idx): Promise<SandboxInstance> => {
     try {
+      if (delays[idx] > 0) await new Promise((r) => setTimeout(r, delays[idx]));
       const sandbox = await spawnFromSnapshot({
         snapshotId: snapshotId!,
         agentType: config.agentType,
@@ -403,8 +447,23 @@ async function bootstrapAndSpawn(
     }
   });
 
-  const instances = await Promise.all(spawnPromises);
-  return { instances, partitions, totalFiles, snapshotId, mode: ctx.mode };
+  return { spawns, partitions, totalFiles, snapshotId, mode: ctx.mode };
+}
+
+/**
+ * Start offsets (ms) for `count` sandboxes at up to `perMinute` per minute:
+ * sandbox i gets slot i of width 60s/perMinute and a random point inside
+ * it, so any 60s window sees at most perMinute + 1 starts. Runs no larger
+ * than one minute's budget start at once.
+ */
+export function spawnDelays(
+  count: number,
+  perMinute?: number,
+  random: () => number = Math.random,
+): number[] {
+  if (!perMinute || perMinute <= 0 || count <= perMinute) return new Array(count).fill(0);
+  const slot = 60_000 / perMinute;
+  return Array.from({ length: count }, (_, i) => Math.floor(i * slot + random() * slot));
 }
 
 // --- Dispatch: kick off command on a sandbox, return cmdId ---
@@ -445,12 +504,8 @@ async function dispatchOnSandbox(
 // --- Launch (detached) ---
 
 export async function launch(config: SandboxConfig, onLog: (msg: string) => void): Promise<string> {
-  const {
-    instances,
-    partitions: _p,
-    totalFiles: _t,
-    mode,
-  } = await bootstrapAndSpawn(config, onLog);
+  const { spawns, mode } = await bootstrapAndSpawn(config, onLog);
+  const instances = await Promise.all(spawns);
 
   if (instances.length === 0) {
     throw new Error("No sandboxes to launch (no files to process?)");
@@ -545,6 +600,55 @@ export async function checkStatus(
 
 // --- Collect: reconnect to completed sandboxes, pull results, stop ---
 
+/**
+ * `cmd.wait()` is one long HTTP request; a dropped connection makes it
+ * throw while the worker keeps running. Re-fetch the command and wait
+ * again instead of treating a network blip as a failed worker (which
+ * used to stop the sandbox mid-run).
+ */
+/**
+ * The Sandbox API answers 410 once a sandbox is gone (timed out or
+ * stopped). Nothing on it can be reached again, so retrying is pointless
+ * and "leave it for collect" is wrong.
+ */
+export function isSandboxGone(err: unknown): boolean {
+  const e = err as
+    | { status?: number; response?: { status?: number }; message?: string }
+    | undefined;
+  if (e?.status === 410 || e?.response?.status === 410) return true;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /\bStatus code 410\b|\bsandbox_stopped\b|no longer available/i.test(msg);
+}
+
+export async function waitForCommand<C extends { wait(): Promise<unknown> }>(
+  first: C,
+  refetch: () => Promise<C>,
+  label: string,
+  onLog: (msg: string) => void,
+  opts: { attempts?: number; delayMs?: number } = {},
+): Promise<Awaited<ReturnType<C["wait"]>>> {
+  const attempts = opts.attempts ?? 60;
+  const delayMs = opts.delayMs ?? 10_000;
+  let cmd = first;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return (await cmd.wait()) as Awaited<ReturnType<C["wait"]>>;
+    } catch (err) {
+      if (attempt >= attempts || isSandboxGone(err)) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      onLog(
+        `${label} waiting for the command failed (${msg}); retrying in ${Math.round(delayMs / 1000)}s (${attempt}/${attempts})`,
+      );
+      await new Promise((r) => setTimeout(r, delayMs));
+      try {
+        cmd = await refetch();
+      } catch {
+        // keep the old handle; the next wait() may still work
+      }
+    }
+  }
+}
+
 export async function collect(
   projectId: string,
   runId: string,
@@ -553,6 +657,26 @@ export async function collect(
   const state = loadRunState(projectId, runId);
   onLog(`Collecting run ${runId}: ${state.command} (${state.sandboxes.length} sandboxes)`);
 
+  // A worker that exited non-zero still has its successful batches'
+  // results on disk. Returns false when the download failed, so the
+  // sandbox is left running for another collect attempt.
+  const salvageResults = async (
+    sandbox: Sandbox,
+    index: number,
+    manifest: string[],
+  ): Promise<boolean> => {
+    try {
+      await downloadResults(sandbox, index, projectId, onLog);
+      releaseUnfinished({ manifest, index }, projectId, onLog);
+      return true;
+    } catch (err) {
+      onLog(
+        `[sandbox-${index}] Download after failure did not complete: ${err instanceof Error ? err.message : String(err)}; leaving the sandbox running`,
+      );
+      return false;
+    }
+  };
+
   const resultPromises = state.sandboxes.map(async (entry): Promise<SandboxResult> => {
     try {
       const sandbox = await Sandbox.get({ sandboxId: entry.sandboxId });
@@ -560,14 +684,66 @@ export async function collect(
 
       if (cmd.exitCode === null) {
         onLog(`[sandbox-${entry.index}] Still running, waiting...`);
-        await streamLogsCapped(cmd, `[sandbox-${entry.index}]`, onLog);
-        const finished = await cmd.wait();
+        const waitPromise = waitForCommand(
+          cmd,
+          () => sandbox.getCommand(entry.cmdId),
+          `[sandbox-${entry.index}]`,
+          onLog,
+        );
+        waitPromise.catch(() => {});
+        // Keep syncing results while we wait, as an attached run does, so a
+        // reattached run doesn't hold everything until the worker exits.
+        const stopPoller = { flag: false };
+        const nudge = makeNudge();
+        const pollerPromise = streamDownloadLoop(
+          {
+            sandbox,
+            index: entry.index,
+            sandboxId: entry.sandboxId,
+            status: "running",
+            manifest: entry.manifest,
+          },
+          projectId,
+          onLog,
+          stopPoller,
+          nudge,
+        );
+        let finished: Awaited<typeof waitPromise>;
+        try {
+          await streamLogsCapped(
+            cmd,
+            `[sandbox-${entry.index}]`,
+            onLog,
+            (line) => {
+              if (BATCH_COMPLETE_RE.test(line)) nudge.signal();
+            },
+            async () => {
+              const timeout = new Promise<boolean>((resolve) =>
+                setTimeout(() => resolve(false), 3000),
+              );
+              return Promise.race([
+                waitPromise.then(
+                  () => true,
+                  () => true,
+                ),
+                timeout,
+              ]);
+            },
+          );
+          finished = await waitPromise;
+        } finally {
+          stopPoller.flag = true;
+          nudge.signal();
+          await pollerPromise;
+        }
         if (finished.exitCode !== 0) {
           const stderr = await readStderrCapped(finished, 500);
           onLog(`[sandbox-${entry.index}] Failed (exit ${finished.exitCode})`);
-          try {
-            await sandbox.stop();
-          } catch {}
+          if (await salvageResults(sandbox, entry.index, entry.manifest)) {
+            try {
+              await sandbox.stop();
+            } catch {}
+          }
           return {
             sandboxIndex: entry.index,
             sandboxId: entry.sandboxId,
@@ -579,9 +755,11 @@ export async function collect(
       } else if (cmd.exitCode !== 0) {
         const stderr = await readStderrCapped(cmd, 500);
         onLog(`[sandbox-${entry.index}] Was failed (exit ${cmd.exitCode})`);
-        try {
-          await sandbox.stop();
-        } catch {}
+        if (await salvageResults(sandbox, entry.index, entry.manifest)) {
+          try {
+            await sandbox.stop();
+          } catch {}
+        }
         return {
           sandboxIndex: entry.index,
           sandboxId: entry.sandboxId,
@@ -594,6 +772,7 @@ export async function collect(
       onLog(`[sandbox-${entry.index}] Complete, downloading results...`);
       try {
         await downloadResults(sandbox, entry.index, projectId, onLog);
+        releaseUnfinished(entry, projectId, onLog);
       } catch (err) {
         // The sandbox is the trust boundary; a download failure means we
         // either don't have the analysis output or it was rejected. Either
@@ -624,7 +803,13 @@ export async function collect(
       };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      onLog(`[sandbox-${entry.index}] Unreachable: ${errMsg}`);
+      if (isSandboxGone(err)) {
+        // Nothing left to collect; give its unfinished files back.
+        onLog(`[sandbox-${entry.index}] Sandbox is gone (timed out or stopped): ${errMsg}`);
+        releaseUnfinished(entry, projectId, onLog);
+      } else {
+        onLog(`[sandbox-${entry.index}] Unreachable: ${errMsg}`);
+      }
       return {
         sandboxIndex: entry.index,
         sandboxId: entry.sandboxId,
@@ -654,19 +839,99 @@ export async function collect(
   return results;
 }
 
+/**
+ * After a worker's results are downloaded, any of its files still marked
+ * `processing` here never came back (the worker failed, or exited before
+ * syncing them). Their locks name a run on the sandbox's host, so no later
+ * local run would reclaim them; mark them `error` so the next run retries.
+ */
+export function releaseUnfinished(
+  inst: { manifest: string[]; index: number },
+  projectId: string,
+  onLog: (msg: string) => void,
+): void {
+  let released = 0;
+  for (const filePath of inst.manifest) {
+    try {
+      const record = readFileRecord(projectId, filePath);
+      if (!record || record.status !== "processing") continue;
+      record.status = "error";
+      record.lockedByRunId = undefined;
+      record.lockedAt = undefined;
+      writeFileRecord(record);
+      released++;
+    } catch {}
+  }
+  if (released > 0) {
+    onLog(
+      `[sandbox-${inst.index}] ${released} file(s) did not finish; marked error for the next run`,
+    );
+  }
+}
+
 // --- Orchestrate (attached): bootstrap → spawn → run → download → stop ---
 
 export async function orchestrate(
   config: SandboxConfig,
   onLog: (msg: string) => void,
 ): Promise<SandboxResult[]> {
-  const { instances, mode } = await bootstrapAndSpawn(config, onLog);
+  const { spawns, mode } = await bootstrapAndSpawn(config, onLog);
 
-  if (instances.length === 0) return [];
+  if (spawns.length === 0) return [];
 
-  onLog(`Dispatching '${config.command}' commands...`);
+  onLog(`Dispatching '${config.command}' commands as sandboxes become ready...`);
+  const instances: SandboxInstance[] = [];
 
-  const runPromises = instances.map(async (inst) => {
+  // Attached runs also save run state, so `sandbox collect` can reattach
+  // if this process dies mid-run. Sandboxes leave the state once their
+  // results are safely downloaded; a clean run ends with no state.
+  const runId = generateRunId();
+  const runState: SandboxRunState = {
+    runId,
+    projectId: config.projectId,
+    command: config.command,
+    vcpus: config.vcpus,
+    launchedAt: new Date().toISOString(),
+    sandboxes: [],
+  };
+  // Written at the first dispatch and updated on every later one, so a
+  // crash during a staggered ramp still leaves every started worker
+  // recoverable by `collect`.
+  let stateSaved = false;
+  const recordDispatch = (inst: SandboxInstance) => {
+    if (!inst.cmdId || inst.collected) return;
+    runState.sandboxes.push({
+      sandboxId: inst.sandboxId,
+      cmdId: inst.cmdId,
+      index: inst.index,
+      manifest: inst.manifest,
+    });
+    try {
+      if (stateSaved) {
+        updateRunState(runState);
+        return;
+      }
+      saveRunState(runState);
+      stateSaved = true;
+      onLog(
+        `Run state ${runId} saved. If this process stops, recover with: pnpm deepsec sandbox collect --project-id ${config.projectId} --run-id ${runId}`,
+      );
+    } catch (err) {
+      onLog(`Could not save run state: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  const dropFromState = (index: number) => {
+    if (!stateSaved) return;
+    runState.sandboxes = runState.sandboxes.filter((e) => e.index !== index);
+    try {
+      if (runState.sandboxes.length === 0) deleteRunState(config.projectId, runId);
+      else updateRunState(runState);
+    } catch {}
+  };
+
+  const runPromises = spawns.map(async (spawn) => {
+    const inst = await spawn;
+    instances.push(inst);
     // Start a background poller that streams deltas from the sandbox while
     // the worker runs. A nudge lets runOnSandboxAttached kick the poller as
     // soon as it sees "Batch N/M complete:" in the log.
@@ -677,7 +942,9 @@ export async function orchestrate(
         ? Promise.resolve()
         : streamDownloadLoop(inst, config.projectId, onLog, stopPoller, nudge);
 
-    const result = await runOnSandboxAttached(inst, config, mode, onLog, nudge);
+    const result = await runOnSandboxAttached(inst, config, mode, onLog, nudge, () =>
+      recordDispatch(inst),
+    );
     const tRun = Date.now();
 
     // Stop the poller and wait for it to wind down (it may be mid-download).
@@ -696,10 +963,33 @@ export async function orchestrate(
     // boundary, so a failed download means the host didn't actually receive
     // the run's output — flip the result to failure rather than masquerading
     // as a clean run with empty findings.
-    if (inst.status !== "error") {
+    // Download even when the worker exited non-zero: `process` exits 1
+    // when any batch errored, and the other batches' results are still on
+    // the sandbox. Skip only sandboxes that never started the worker.
+    // A failed result can also mean the host lost track of a worker that
+    // is still running. Never download-release-stop such a sandbox; leave
+    // it for `collect`. When its state can't be read, assume running.
+    let stillRunning = false;
+    let gone = isSandboxGone(result.error);
+    if (inst.cmdId && !result.success && !gone) {
+      try {
+        stillRunning = (await inst.sandbox.getCommand(inst.cmdId)).exitCode == null;
+      } catch (err) {
+        gone = isSandboxGone(err);
+        stillRunning = !gone;
+      }
+    }
+    if (gone) {
+      onLog(
+        `[sandbox-${inst.index}] Sandbox is gone (timed out or stopped); results after its last sync are lost`,
+      );
+    }
+    let downloadFailed = false;
+    if (inst.cmdId && !stillRunning && !gone) {
       try {
         await downloadResults(inst.sandbox, inst.index, config.projectId, onLog);
       } catch (err) {
+        downloadFailed = true;
         const errMsg = err instanceof Error ? err.message : String(err);
         onLog(`[sandbox-${inst.index}] Final download failed: ${errMsg}`);
         if (result.success) {
@@ -713,13 +1003,27 @@ export async function orchestrate(
       onLog(`[sandbox-${inst.index}] [debug] final downloadResults took ${tDownload - tPoller}ms`);
     }
 
-    // Stop the sandbox immediately — no reason to keep it around.
-    if (!config.keepAlive && inst.sandboxId) {
-      try {
-        await inst.sandbox.stop();
-        onLog(`[sandbox-${inst.index}] Stopped.`);
-      } catch {}
+    // Stopping deletes the sandbox's files. If its results never made it
+    // here, leave it running (until its timeout) so `collect` can still
+    // fetch them.
+    if ((downloadFailed || stillRunning) && inst.cmdId) {
       untrackSandbox(inst.sandbox);
+      onLog(
+        `[sandbox-${inst.index}] ${stillRunning ? "Worker is still running; left" : "Left"} running so its results can be collected: pnpm deepsec sandbox collect --project-id ${config.projectId} --run-id ${runId}`,
+      );
+    } else {
+      releaseUnfinished(inst, config.projectId, onLog);
+      inst.collected = true;
+      dropFromState(inst.index);
+      if (gone) {
+        untrackSandbox(inst.sandbox);
+      } else if (!config.keepAlive && inst.sandboxId) {
+        try {
+          await inst.sandbox.stop();
+          onLog(`[sandbox-${inst.index}] Stopped.`);
+        } catch {}
+        untrackSandbox(inst.sandbox);
+      }
     }
     const tStop = Date.now();
     if (tStop - tDownload > 500) {
@@ -808,6 +1112,10 @@ async function streamDownloadLoop(
       onLog(
         `[sandbox-${inst.index}] periodic sync: ${err instanceof Error ? err.message : String(err)}`,
       );
+      if (isSandboxGone(err)) {
+        onLog(`[sandbox-${inst.index}] Sandbox is gone; stopping periodic sync`);
+        break;
+      }
     }
     if (stop.flag) break;
     await nudge.wait(intervalMs);
@@ -822,6 +1130,7 @@ async function runOnSandboxAttached(
   mode: DeepsecMode,
   onLog: (msg: string) => void,
   nudge?: SyncNudge,
+  onDispatched?: () => void,
 ): Promise<SandboxResult> {
   if (instance.status === "error") {
     return {
@@ -856,17 +1165,44 @@ async function runOnSandboxAttached(
       cwd: DEEPSEC_DIR,
       detached: true,
     });
+    instance.cmdId = cmd.cmdId;
+    onDispatched?.();
 
-    await streamLogsCapped(cmd, `[sandbox-${index}]`, onLog, (line) => {
-      if (nudge && BATCH_COMPLETE_RE.test(line)) {
-        // Kick the streaming download loop to sync now — a batch
-        // just finished and wrote file records to disk.
-        nudge.signal();
-      }
-    });
+    // Started before streaming so a closed log stream can tell whether the
+    // command is really done or the stream just dropped.
+    const waitPromise = waitForCommand(
+      cmd,
+      () => sandbox.getCommand(cmd.cmdId),
+      `[sandbox-${index}]`,
+      onLog,
+    );
+    waitPromise.catch(() => {});
+    const isFinished = async () => {
+      const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000));
+      return Promise.race([
+        waitPromise.then(
+          () => true,
+          () => true,
+        ),
+        timeout,
+      ]);
+    };
+    await streamLogsCapped(
+      cmd,
+      `[sandbox-${index}]`,
+      onLog,
+      (line) => {
+        if (nudge && BATCH_COMPLETE_RE.test(line)) {
+          // Kick the streaming download loop to sync now — a batch
+          // just finished and wrote file records to disk.
+          nudge.signal();
+        }
+      },
+      isFinished,
+    );
     const tLogsClosed = Date.now();
 
-    const result = await cmd.wait();
+    const result = await waitPromise;
     const tWaitReturned = Date.now();
     const waitGap = tWaitReturned - tLogsClosed;
     if (waitGap > 500) {

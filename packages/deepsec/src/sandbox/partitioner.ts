@@ -1,7 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import type { FileRecord } from "@deepsec/core";
-import { dataDir, loadAllFileRecords } from "@deepsec/core";
+import type { FileRecord, RunMeta } from "@deepsec/core";
+import { dataDir, isPidAlive, loadAllFileRecords, readRunMeta } from "@deepsec/core";
 import { noiseScore } from "@deepsec/scanner";
 import type { PartitionResult, SandboxSubcommand } from "./types.js";
 
@@ -12,6 +13,73 @@ const SEVERITY_ORDER: Record<string, number> = {
   HIGH_BUG: 3,
   BUG: 4,
 };
+
+/**
+ * Locks from sandbox workers name a run on another host, so neither PID
+ * liveness nor the processor's 1h stale-lock cutoff applies: a sandbox run
+ * can legitimately hold files for up to its 5h timeout.
+ */
+const SANDBOX_STALE_LOCK_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * True when a `processing` record is still held by a run that may finish
+ * it. Partitioning such a file again would run it twice while another
+ * wave is in flight.
+ */
+export function hasLiveLock(
+  projectId: string,
+  r: FileRecord,
+  metaCache: Map<string, RunMeta | null> = new Map(),
+  now = Date.now(),
+): boolean {
+  if (r.status !== "processing" || !r.lockedByRunId) return false;
+  if (!metaCache.has(r.lockedByRunId)) {
+    try {
+      metaCache.set(r.lockedByRunId, readRunMeta(projectId, r.lockedByRunId));
+    } catch {
+      metaCache.set(r.lockedByRunId, null);
+    }
+  }
+  const meta = metaCache.get(r.lockedByRunId);
+  if (!meta || meta.phase === "done" || meta.phase === "error") return false;
+  if (meta.hostname === os.hostname() && meta.pid !== undefined && !isPidAlive(meta.pid))
+    return false;
+  const lockedAt = r.lockedAt ? Date.parse(r.lockedAt) : Number.NaN;
+  if (!Number.isFinite(lockedAt)) return false;
+  return now - lockedAt < SANDBOX_STALE_LOCK_MS;
+}
+
+/**
+ * Files assigned to live sandboxes of other active `revalidate` runs.
+ * Revalidation takes no file locks, so the run states (written at dispatch,
+ * shrunk as sandboxes finish) are the only record of what another run still
+ * has queued. States older than the sandbox lifetime are ignored so a
+ * crashed run's leftover state can't hold files forever.
+ */
+function filesHeldByActiveRevalidations(projectId: string, now = Date.now()): Set<string> {
+  const held = new Set<string>();
+  const dir = path.join(dataDir(projectId), "sandbox-runs");
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return held;
+  }
+  for (const name of names) {
+    try {
+      const state = JSON.parse(fs.readFileSync(path.join(dir, name), "utf-8")) as {
+        command?: string;
+        launchedAt?: string;
+        sandboxes?: Array<{ manifest?: string[] }>;
+      };
+      if (state.command !== "revalidate") continue;
+      const launched = Date.parse(state.launchedAt ?? "");
+      if (!Number.isFinite(launched) || now - launched > SANDBOX_STALE_LOCK_MS) continue;
+      for (const sb of state.sandboxes ?? []) for (const f of sb.manifest ?? []) held.add(f);
+    } catch {}
+  }
+  return held;
+}
 
 /**
  * Load eligible files for the given command and split into N disjoint partitions.
@@ -30,7 +98,12 @@ export function partitionFiles(
     agentType?: string;
   } = {},
 ): PartitionResult {
-  const allRecords = loadAllFileRecords(projectId);
+  const metaCache = new Map<string, RunMeta | null>();
+  const now = Date.now();
+  // Files another run is still working on are never handed out again.
+  const allRecords = loadAllFileRecords(projectId).filter(
+    (r) => !hasLiveLock(projectId, r, metaCache, now),
+  );
   const command = opts.command ?? "process";
   const agentType = opts.agentType ?? "claude-agent-sdk";
 
@@ -63,8 +136,10 @@ export function partitionFiles(
       }
       break;
 
-    case "revalidate":
+    case "revalidate": {
+      const held = filesHeldByActiveRevalidations(projectId, now);
       eligible = allRecords.filter((r) => {
+        if (held.has(r.filePath)) return false;
         if (r.findings.length === 0) return false;
         const unrevalidated = r.findings.filter((f) => {
           if (!opts.force && f.revalidation) return false;
@@ -75,6 +150,7 @@ export function partitionFiles(
         return unrevalidated.length > 0;
       });
       break;
+    }
 
     default:
       eligible = allRecords;

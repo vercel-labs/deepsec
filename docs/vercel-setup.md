@@ -201,6 +201,43 @@ large multi-project workspaces:
 pnpm deepsec sandbox-all process --sandboxes 30 --concurrency 4
 ```
 
+Workers start at up to 10 Sandboxes per minute, each at a random point in
+its share of the minute, so a large run doesn't open every Sandbox and model
+session at the same moment. Each worker starts processing as soon as its
+Sandbox is ready; 100 Sandboxes take about 10 minutes to all be running. Set
+`--spawn-rate <n>` to change the rate, or `--spawn-rate 0` to start every
+Sandbox at once.
+
+Files that a running worker still holds aren't handed to another run, so you
+can start a second `sandbox process` run while the first is still going.
+
+### Recover an interrupted run
+
+When it dispatches the first worker, `sandbox process` saves the run's state
+and prints its run ID:
+
+```text
+Run state sbx-20260101120000-0123456789abcdef saved. If this process stops, recover with: pnpm deepsec sandbox collect --project-id my-app --run-id sbx-20260101120000-0123456789abcdef
+```
+
+The workers run inside the Sandboxes, so they keep going if the command on
+your machine is cut off, for example when the process is killed or your
+laptop sleeps. A command that is still running reconnects when the network
+comes back. If the process has exited, run `collect` with the printed run ID:
+
+```bash
+pnpm deepsec sandbox collect --project-id my-app --run-id sbx-20260101120000-0123456789abcdef
+```
+
+`collect` reattaches to every Sandbox that's still running, downloads results
+while the workers finish, and stops each Sandbox after its final download.
+Stopping the command with Ctrl-C still stops its Sandboxes.
+
+A Sandbox that stops or reaches its timeout (`--timeout`, 5 hours by default)
+can't be reached again, so results its worker hadn't downloaded yet are lost.
+deepsec marks that worker's unfinished files as `error`, and the next
+`sandbox process` run picks them up.
+
 ## Troubleshooting
 
 | Symptom | Meaning | Fix |

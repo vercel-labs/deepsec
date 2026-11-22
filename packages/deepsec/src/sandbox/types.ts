@@ -48,6 +48,11 @@ export interface SandboxConfig {
   matchers?: string;
   /** Sandbox timeout in ms (default: 5 hours for Pro) */
   timeout: number;
+  /**
+   * Max worker sandboxes started per minute, each at a random point in its
+   * slot. 0 starts them all at once. Default: 10.
+   */
+  spawnRate?: number;
   /** Extra hostnames to allow through worker egress firewall (in addition to the AI host derived from base URLs) */
   allowedHosts?: string[];
   /** Extra CLI args to pass through to the subcommand */
@@ -61,6 +66,10 @@ export interface SandboxInstance {
   status: "creating" | "setup" | "running" | "collecting" | "done" | "error";
   manifest: string[];
   error?: string;
+  /** Command running the deepsec worker, once dispatched. */
+  cmdId?: string;
+  /** Results downloaded; nothing left to collect. */
+  collected?: boolean;
 }
 
 export interface PartitionResult {

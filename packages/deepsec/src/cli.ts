@@ -528,6 +528,11 @@ const sandboxCmd = program
   .option("--save-snapshot", "Snapshot after setup for future reuse")
   .option("--keep-alive", "Don't stop sandboxes after completion")
   .option("--timeout <ms>", "Sandbox timeout in ms (default: 5 hours)", parseInt)
+  .option(
+    "--spawn-rate <n>",
+    "Max worker sandboxes started per minute, at random points within each slot; 0 starts all at once (default: 10)",
+    parseInt,
+  )
   .action((subcommand: string, opts: Record<string, unknown>) => {
     // Commander puts unknown options into .args on the Command object
     const unknownArgs = sandboxCmd.args.slice(1); // skip the subcommand itself
