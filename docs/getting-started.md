@@ -136,14 +136,19 @@ npx deepsec init --model-auth local
 Deepsec then configures nothing for model access: no API key, no gateway
 token, no environment variables. Later commands (`process`,
 `revalidate`, `triage`) skip their credential checks and rely on the
-machine-wide login — if it's missing, the agent SDK itself reports a
-clear error on first use.
+machine-wide login.
 
 Two caveats: the login must exist for the harness you actually run
 (`claude` for `--agent claude`, a logged-in `codex` for `--agent codex`),
 and `sandbox` commands still need a real API token
 (`AI_GATEWAY_API_KEY`), because a machine-local login can't be brokered
 into an isolated sandbox.
+
+The saved route is harness-agnostic, so it does not record which harness
+you logged in. If `--agent codex` runs without a Codex login it falls back
+to gateway auth while an ambient `OPENAI_API_KEY` (or
+`ANTHROPIC_AUTH_TOKEN`) is exported; with no ambient key either, `process`
+and `revalidate` reject the run at preflight instead of failing per batch.
 
 ## Scaffold only
 

@@ -86,6 +86,8 @@ describe("assertAgentCredential", () => {
       CODEX_HOME: process.env.CODEX_HOME,
       PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
       PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
     };
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     delete process.env.OPENAI_API_KEY;
@@ -104,6 +106,11 @@ describe("assertAgentCredential", () => {
     process.env.PI_CODING_AGENT_DIR = join(emptyCodexHome, "pi-agent");
     mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
     process.env.PATH = emptyPathDir;
+    // os.homedir() is the fallback location for a Codex login; point it at an
+    // empty dir so a developer's real ~/.codex/auth.json cannot satisfy the
+    // local-route checks below.
+    process.env.HOME = emptyCodexHome;
+    process.env.USERPROFILE = emptyCodexHome;
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(saved)) {
@@ -183,12 +190,33 @@ describe("assertAgentCredential", () => {
     expect(() => assertAgentCredential("anything-else")).not.toThrow();
   });
 
-  it("skips all env-var checks when the configured route is local subscriptions", () => {
+  it("leaves claude and pi local routes to their machine-wide logins", () => {
     setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
     // Nothing set anywhere — no env vars, no CLI on PATH, no auth.json.
     expect(() => assertAgentCredential("claude-agent-sdk")).not.toThrow();
-    expect(() => assertAgentCredential("codex")).not.toThrow();
     expect(() => assertAgentCredential("pi")).not.toThrow();
+  });
+
+  it("accepts a codex local route backed by a Codex subscription login", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    writeFileSync(join(emptyCodexHome, "auth.json"), "{}");
+    expect(() => assertAgentCredential("codex")).not.toThrow();
+  });
+
+  it("accepts a codex local route that falls back to gateway auth", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    process.env.OPENAI_API_KEY = "sk-ambient-for-other-tools";
+    expect(() => assertAgentCredential("codex")).not.toThrow();
+  });
+
+  it("fails preflight (not mid-run) for a codex local route with no login and no key", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    // ai.mode: "local" is harness-agnostic; --agent codex additionally needs
+    // a Codex login or an ambient gateway key. Surface that before scanning
+    // instead of throwing from investigate/revalidate per batch.
+    expect(() => assertAgentCredential("codex")).toThrow(/codex login/);
+    expect(() => assertAgentCredential("codex")).toThrow(/OPENAI_API_KEY/);
+    expect(() => assertAgentCredential("codex")).toThrow(/--model-auth gateway/);
   });
 
   it("still requires a brokered token in sandbox mode despite a local route", () => {

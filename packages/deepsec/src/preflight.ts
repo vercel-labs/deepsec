@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getConfig } from "@deepsec/core";
+import { resolveCodexAuth } from "@deepsec/processor";
 import { getVercelOidcToken } from "@vercel/oidc";
 import {
   applyResolvedModelRoute,
@@ -254,14 +255,33 @@ export function assertAgentCredential(
 ): void {
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
 
-  // A local-subscription route is the user saying "claude/codex are set up
-  // machine-wide" — skip the env-var checks entirely and let the agent SDK
-  // error clearly at first call if the login is actually missing. Sandboxes
-  // are the exception: they must broker a real token through the firewall,
-  // so fall through to the normal checks (an ambient AI_GATEWAY_API_KEY
-  // still works there, and the standard actionable error fires otherwise).
+  // A local-subscription route is the user saying "machine-wide agent logins
+  // are set up" — skip the env-var checks and let the agent SDK error clearly
+  // at first call if the login is actually missing. The mode is
+  // harness-agnostic, though: it also covers a Claude or Pi login, so
+  // --agent codex needs a Codex login before it can use subscription auth.
+  // Without one the backend falls back to gateway auth with an ambient key;
+  // with no ambient key either, report it here instead of throwing per batch
+  // from investigate/revalidate after scanning already ran. Sandboxes are the
+  // exception: they must broker a real token through the firewall, so fall
+  // through to the normal checks (an ambient AI_GATEWAY_API_KEY still works
+  // there, and the standard actionable error fires otherwise).
   const selectedRoute = options.modelRoute ?? (getConfig()?.ai as ModelRoute | undefined);
-  if (selectedRoute?.mode === "local" && !options.inSandbox) return;
+  if (selectedRoute?.mode === "local" && !options.inSandbox) {
+    if (isCodex(agentType)) {
+      const auth = resolveCodexAuth({ modelAuth: "local" });
+      if (auth.mode === "subscription" || auth.gatewayApiKey) return;
+      throw new Error(
+        `Missing AI credentials for --agent codex with the saved local-subscription route.\n` +
+          `\n` +
+          `  Run:              codex login                     (Codex subscription auth)\n` +
+          `  Or export:        OPENAI_API_KEY=…                (ambient gateway credential)\n` +
+          `  Or re-run setup:  npx deepsec init --model-auth gateway\n` +
+          `  Setup: ${SETUP_DOC_URL}`,
+      );
+    }
+    return;
+  }
 
   const gateway = process.env.AI_GATEWAY_API_KEY;
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;

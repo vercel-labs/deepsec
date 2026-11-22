@@ -140,11 +140,13 @@ export default defineConfig({
 The flag requires the Codex backend and a logged-in `codex` CLI (the `local`
 route). Deepsec rejects the flag with `--agent claude` or `--agent pi`, and
 it ignores the config value when another backend runs. Codex only accepts
-the program on OpenAI's built-in provider. When `OPENAI_API_KEY` or
-`ANTHROPIC_AUTH_TOKEN` routes Codex through AI Gateway, deepsec rejects the
-flag and ignores the config value with a warning. Sandbox workers always use
-AI Gateway, so `sandbox` and `sandbox-all` reject the flag before they
-provision anything.
+the program on OpenAI's built-in provider. A saved local-subscription route
+counts as Codex subscription auth even when unrelated `OPENAI_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` values are exported for other tools. When Codex
+instead uses AI Gateway — no saved local route, or a route with no Codex
+login to back it — deepsec rejects the flag and ignores the config value
+with a warning. Sandbox workers always use AI Gateway, so `sandbox` and
+`sandbox-all` reject the flag before they provision anything.
 
 Deepsec runs Codex with a temporary `CODEX_HOME`, so the Daybreak toggle in
 the Codex desktop app doesn't carry over. Set the program explicitly.
