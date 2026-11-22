@@ -52,8 +52,14 @@ There is also a `local` route (`--model-auth local`, or "Use local
 subscriptions" in the interactive prompt) for machines where the `claude` or
 `codex` CLI is already logged in. It configures no credential at all and
 disables the env-var preflight checks — the machine-wide login is used
-directly. Sandbox commands are the exception: they must broker a real token,
-so they still require `AI_GATEWAY_API_KEY` (or an equivalent key).
+directly. For `--agent codex` the login must be a Codex login: when it is
+missing, the run fails closed instead of using an ambient gateway key, and
+`process`/`revalidate` report that at preflight. Pass `--model-auth` to
+`process` or `revalidate` to use a different credential route for one run
+(for example `--model-auth gateway` to use the gateway credential instead of
+the saved local route). Sandbox commands are the exception: they must broker
+a real token, so they still require `AI_GATEWAY_API_KEY` (or an equivalent
+key).
 
 ## CLI selection
 
@@ -81,7 +87,9 @@ pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
 ```
 
 `--agent`, `--model`, and `--thinking-level` are also accepted on `setup` and
-`revalidate`. Setup persists the interactive choice as `defaultAgent`,
+`revalidate`. `process` and `revalidate` additionally accept a one-run
+`--model-auth gateway|direct|custom|local` override. Setup persists the
+interactive choice as `defaultAgent`,
 `defaultModel`, and `defaultThinkingLevel`, checkpoints the exact combination,
 and invalidates affected phases when it changes.
 
@@ -142,11 +150,13 @@ route). Deepsec rejects the flag with `--agent claude` or `--agent pi`, and
 it ignores the config value when another backend runs. Codex only accepts
 the program on OpenAI's built-in provider. A saved local-subscription route
 counts as Codex subscription auth even when unrelated `OPENAI_API_KEY` or
-`ANTHROPIC_AUTH_TOKEN` values are exported for other tools. When Codex
-instead uses AI Gateway — no saved local route, or a route with no Codex
-login to back it — deepsec rejects the flag and ignores the config value
-with a warning. Sandbox workers always use AI Gateway, so `sandbox` and
-`sandbox-all` reject the flag before they provision anything.
+`ANTHROPIC_AUTH_TOKEN` values are exported for other tools — but only when
+the Codex login actually exists; a missing login is reported as a
+`codex login` error, not as a gateway-credential problem. When Codex uses AI
+Gateway (no saved local route, or `--model-auth gateway` for one run),
+deepsec rejects the flag and ignores the config value with a warning.
+Sandbox workers always use AI Gateway, so `sandbox` and `sandbox-all` reject
+the flag before they provision anything.
 
 Deepsec runs Codex with a temporary `CODEX_HOME`, so the Daybreak toggle in
 the Codex desktop app doesn't carry over. Set the program explicitly.

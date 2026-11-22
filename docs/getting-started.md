@@ -145,10 +145,22 @@ and `sandbox` commands still need a real API token
 into an isolated sandbox.
 
 The saved route is harness-agnostic, so it does not record which harness
-you logged in. If `--agent codex` runs without a Codex login it falls back
-to gateway auth while an ambient `OPENAI_API_KEY` (or
-`ANTHROPIC_AUTH_TOKEN`) is exported; with no ambient key either, `process`
-and `revalidate` reject the run at preflight instead of failing per batch.
+you logged in. `--agent codex` therefore fails closed when no Codex login
+exists: it never silently falls back to an ambient `OPENAI_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` (a stale or unrelated key could be billed or used
+against the wrong provider). `process` and `revalidate` report the missing
+login at preflight, before scanning starts, with a `codex login` hint.
+
+To use a gateway credential for a single run instead of the saved local
+route, pass `--model-auth` to `process` or `revalidate`:
+
+```bash
+npx deepsec process --project-id my-app --model-auth gateway
+```
+
+`--model-auth gateway` uses the linked workspace gateway credential
+(`AI_GATEWAY_API_KEY` or OIDC); `--model-auth direct --ai-provider openai`
+uses an exported `OPENAI_API_KEY`. Neither changes `deepsec.config.ts`.
 
 ## Scaffold only
 

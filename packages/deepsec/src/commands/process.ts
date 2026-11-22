@@ -3,15 +3,16 @@ import path from "node:path";
 import { ensureProject, readProjectConfig } from "@deepsec/core";
 import { process as processRun } from "@deepsec/processor";
 import { scanFiles } from "@deepsec/scanner";
-import { buildAgentConfig } from "../agent-config.js";
 import { defaultModelForAgent } from "../agent-defaults.js";
+import type { ModelAuthMode } from "../auth/model-route.js";
 import { resolveFiles } from "../file-sources.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
 import { renderPrComment } from "../pr-comment.js";
-import { applyConfiguredModelRoute, assertAgentCredential } from "../preflight.js";
+import { assertAgentCredential } from "../preflight.js";
 import { renderQuotaMessage } from "../quota-message.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import { resolveProjectId, resolveProjectIdForDirect } from "../resolve-project-id.js";
+import { resolveRunAgentConfig } from "../run-route.js";
 
 function logProgress(progress: {
   type: string;
@@ -87,6 +88,8 @@ export async function processCommand(opts: {
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
   aiHeader?: string[];
+  /** One-run credential route override; defaults to the saved route. */
+  modelAuth?: ModelAuthMode;
   /** Commander yields `true` when bare; string (unparsed) when an arg is provided */
   reinvestigate?: boolean | string;
   limit?: number;
@@ -128,15 +131,12 @@ async function processStandardMode(opts: Parameters<typeof processCommand>[0]) {
   const effectiveRoot = opts.root ?? project.rootPath;
   const agentType = resolveAgentType(opts.agent);
   const model = opts.model ?? defaultModelForAgent(agentType);
-  const resolvedRoute =
-    !opts.aiApiKeyEnv && !opts.aiBaseUrl ? await applyConfiguredModelRoute(agentType) : undefined;
-  const agentConfig = buildAgentConfig({
+  const { agentConfig, explicitRoute } = await resolveRunAgentConfig({
     ...opts,
     agentType,
     model,
-    modelRoute: resolvedRoute?.route,
   });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv, modelRoute: explicitRoute });
 
   // --reinvestigate  → true (re-investigate all)
   // --reinvestigate 2 → number (only files with < 2 analyses)
@@ -281,15 +281,12 @@ async function processDirectMode(opts: Parameters<typeof processCommand>[0]) {
 
   const agentType = resolveAgentType(opts.agent);
   const model = opts.model ?? defaultModelForAgent(agentType);
-  const resolvedRoute =
-    !opts.aiApiKeyEnv && !opts.aiBaseUrl ? await applyConfiguredModelRoute(agentType) : undefined;
-  const agentConfig = buildAgentConfig({
+  const { agentConfig, explicitRoute } = await resolveRunAgentConfig({
     ...opts,
     agentType,
     model,
-    modelRoute: resolvedRoute?.route,
   });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv, modelRoute: explicitRoute });
 
   // Resolve the file list.
   const resolved = resolveFiles({

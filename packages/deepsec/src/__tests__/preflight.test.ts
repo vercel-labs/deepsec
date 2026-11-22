@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setLoadedConfig } from "@deepsec/core";
+import { resolveCodexAuth } from "@deepsec/processor";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Stub @vercel/oidc so the preflight suite is hermetic: the real
@@ -21,6 +22,7 @@ vi.mock("@vercel/oidc", () => ({
 
 import {
   applyAiGatewayDefaults,
+  applyCommandModelRoute,
   applyConfiguredModelRoute,
   assertAgentCredential,
   assertSandboxCredential,
@@ -70,6 +72,38 @@ describe("applyConfiguredModelRoute", () => {
   });
 });
 
+describe("applyCommandModelRoute", () => {
+  // `process` / `revalidate --model-auth` is the per-run escape hatch from a
+  // saved local-subscription route: it reuses the same route resolution as
+  // init/setup, for one command only.
+  it("applies an explicit gateway route for a single run", async () => {
+    const env: NodeJS.ProcessEnv = { AI_GATEWAY_API_KEY: "vck_run" };
+    const route = await applyCommandModelRoute(
+      { mode: "gateway", provider: "vercel" },
+      "codex",
+      env,
+    );
+
+    expect(route).toEqual({ mode: "gateway", provider: "vercel" });
+    expect(env.OPENAI_API_KEY).toBe("vck_run");
+    expect(env.OPENAI_BASE_URL).toBe("https://ai-gateway.vercel.sh/v1");
+  });
+
+  it("accepts an explicit local route without a brokerable credential", async () => {
+    const env: NodeJS.ProcessEnv = {};
+    const route = await applyCommandModelRoute({ mode: "local", provider: "local" }, "codex", env);
+
+    expect(route).toEqual({ mode: "local", provider: "local" });
+    expect(env).toEqual({});
+  });
+
+  it("still rejects gateway routes with no credential", async () => {
+    await expect(
+      applyCommandModelRoute({ mode: "gateway", provider: "vercel" }, "codex", {}),
+    ).rejects.toThrow(/AI_GATEWAY_API_KEY/);
+  });
+});
+
 describe("assertAgentCredential", () => {
   let saved: Record<string, string | undefined>;
   let emptyClaudeHome: string;
@@ -88,12 +122,14 @@ describe("assertAgentCredential", () => {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       USERPROFILE: process.env.USERPROFILE,
+      DEEPSEC_INSIDE_SANDBOX: process.env.DEEPSEC_INSIDE_SANDBOX,
     };
     delete process.env.ANTHROPIC_AUTH_TOKEN;
     delete process.env.OPENAI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.AI_GATEWAY_API_KEY;
     delete process.env.MARTIAN_API_KEY;
+    delete process.env.DEEPSEC_INSIDE_SANDBOX;
     // Point CLAUDE_HOME / CODEX_HOME and PATH at empty tmp dirs so the
     // suite is hermetic — the dev running tests may have a real
     // ~/.codex/auth.json or `claude` on $PATH, which would cause
@@ -203,20 +239,79 @@ describe("assertAgentCredential", () => {
     expect(() => assertAgentCredential("codex")).not.toThrow();
   });
 
-  it("accepts a codex local route that falls back to gateway auth", () => {
+  it("fails closed for a codex local route with no Codex login even when an ambient key is exported", () => {
     setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
     process.env.OPENAI_API_KEY = "sk-ambient-for-other-tools";
-    expect(() => assertAgentCredential("codex")).not.toThrow();
+    // The saved local route is an explicit subscription-auth choice. An
+    // unrelated ambient key must not silently reroute the run through the
+    // gateway; reject before scanning starts instead.
+    expect(() => assertAgentCredential("codex")).toThrow(/codex login/);
+    expect(() => assertAgentCredential("codex")).toThrow(/--model-auth gateway/);
   });
 
   it("fails preflight (not mid-run) for a codex local route with no login and no key", () => {
     setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
-    // ai.mode: "local" is harness-agnostic; --agent codex additionally needs
-    // a Codex login or an ambient gateway key. Surface that before scanning
-    // instead of throwing from investigate/revalidate per batch.
     expect(() => assertAgentCredential("codex")).toThrow(/codex login/);
-    expect(() => assertAgentCredential("codex")).toThrow(/OPENAI_API_KEY/);
     expect(() => assertAgentCredential("codex")).toThrow(/--model-auth gateway/);
+    expect(() => assertAgentCredential("codex")).not.toThrow(/OPENAI_API_KEY/);
+  });
+
+  it("accepts a codex login under $HOME and the backend resolves the same file", () => {
+    mkdirSync(join(emptyCodexHome, ".codex"), { recursive: true });
+    writeFileSync(join(emptyCodexHome, ".codex", "auth.json"), "{}");
+    expect(() => assertAgentCredential("codex")).not.toThrow();
+    expect(resolveCodexAuth({}).subscriptionHome).toBe(join(emptyCodexHome, ".codex"));
+  });
+
+  it("resolves a login under USERPROFILE when HOME is unset, like the backend", () => {
+    // HOME can diverge from the OS home (sudo -E, systemd/launchd units, CI
+    // jobs that override HOME). Preflight and the backend must agree on the
+    // login location, or preflight accepts a login the backend cannot find.
+    const userHome = mkdtempSync(join(tmpdir(), "deepsec-user-home-"));
+    try {
+      mkdirSync(join(userHome, ".codex"), { recursive: true });
+      writeFileSync(join(userHome, ".codex", "auth.json"), "{}");
+      delete process.env.HOME;
+      delete process.env.CODEX_HOME;
+      process.env.USERPROFILE = userHome;
+
+      expect(() => assertAgentCredential("codex")).not.toThrow();
+      expect(resolveCodexAuth({}).subscriptionHome).toBe(join(userHome, ".codex"));
+    } finally {
+      rmSync(userHome, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a per-run gateway override on a saved local route", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    process.env.AI_GATEWAY_API_KEY = "vck_gateway";
+    expect(() =>
+      assertAgentCredential("codex", { modelRoute: { mode: "gateway", provider: "vercel" } }),
+    ).not.toThrow();
+  });
+
+  it("accepts a per-run local override even when the saved route is gateway", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "gateway", provider: "vercel" } });
+    writeFileSync(join(emptyCodexHome, "auth.json"), "{}");
+    expect(() =>
+      assertAgentCredential("codex", { modelRoute: { mode: "local", provider: "local" } }),
+    ).not.toThrow();
+  });
+
+  it("uses the brokered token for a saved local route inside a sandbox worker", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    process.env.DEEPSEC_INSIDE_SANDBOX = "1";
+    process.env.OPENAI_API_KEY = "deepsec-sandbox-brokered-credential";
+    expect(() => assertAgentCredential("codex")).not.toThrow();
+  });
+
+  it("still requires a brokered token inside a sandbox worker with a local route", () => {
+    setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+    process.env.DEEPSEC_INSIDE_SANDBOX = "1";
+    // No machine-wide login is honored in the worker, and the saved local
+    // route must not turn into a "codex login" error there: the brokered
+    // token is the sandbox credential route.
+    expect(() => assertAgentCredential("codex")).toThrow(/AI_GATEWAY_API_KEY/);
   });
 
   it("still requires a brokered token in sandbox mode despite a local route", () => {

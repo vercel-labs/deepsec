@@ -1,11 +1,15 @@
 import { getConfig } from "@deepsec/core";
 import { type CodexAuthDecision, resolveCodexAuth } from "@deepsec/processor";
-import { defaultCredentialHeaderScheme, type ModelRoute } from "./auth/model-route.js";
+import {
+  defaultCredentialHeaderScheme,
+  type ModelAuthMode,
+  type ModelRoute,
+} from "./auth/model-route.js";
 
 const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const CYBER_ACCESS_PROGRAMS = ["standard", "daybreak_blue", "daybreak_red"] as const;
 
-interface AgentRuntimeOpts {
+export interface AgentRuntimeOpts {
   agentType: string;
   model?: string;
   maxTurns?: number;
@@ -15,6 +19,8 @@ interface AgentRuntimeOpts {
   aiApiKeyEnv?: string;
   aiHeader?: string[];
   cyberAccessProgram?: string;
+  /** One-run credential route override (`process` / `revalidate --model-auth`). */
+  modelAuth?: ModelAuthMode;
   modelRoute?: ModelRoute;
 }
 
@@ -136,12 +142,11 @@ function cyberAccessProgramError(auth: CodexAuthDecision): string {
   if (auth.localRoute) {
     return (
       "--cyber-access-program only works with Codex subscription auth. " +
-      "The saved model route selects local subscriptions, but no Codex login was found " +
-      "(expected auth.json in CODEX_HOME or ~/.codex), so this run would fall back to gateway auth. " +
-      "Run `codex login` and retry."
+      "The saved local-subscription route requires a Codex login, but no Codex login was found " +
+      "(expected auth.json in CODEX_HOME or ~/.codex). Run `codex login` and retry."
     );
   }
-  if (auth.gatewayApiKey) {
+  if (auth.hasGatewayApiKey) {
     return (
       "--cyber-access-program only works with Codex subscription auth. " +
       "OPENAI_API_KEY or ANTHROPIC_AUTH_TOKEN routes this run through the AI Gateway, " +
@@ -158,8 +163,8 @@ function cyberAccessProgramError(auth: CodexAuthDecision): string {
 /** Matching warning when a config-file program is silently unusable. */
 function cyberAccessProgramWarning(auth: CodexAuthDecision): string {
   const reason = auth.localRoute
-    ? "the saved local-subscription route has no Codex login, so the run falls back to gateway auth"
-    : auth.gatewayApiKey
+    ? "the saved local-subscription route has no Codex login, so the run requires `codex login`"
+    : auth.hasGatewayApiKey
       ? "this run uses gateway auth because OPENAI_API_KEY or ANTHROPIC_AUTH_TOKEN is set"
       : "this run doesn't use Codex subscription auth";
   return `Ignoring codex.cyberAccessProgram from deepsec.config.ts: ${reason}.`;

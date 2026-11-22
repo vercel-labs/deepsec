@@ -102,16 +102,21 @@ function makeCodexHome(): string {
 }
 
 /**
- * Locate a usable `~/.codex/auth.json` for subscription-mode auth (the user
- * has run `codex login` on the laptop and we want to reuse that session
- * instead of forcing them to set OPENAI_API_KEY).
+ * Single resolver for the machine-wide Codex login (the directory holding a
+ * usable `auth.json` created by `codex login`).
  *
- * Returns the parent dir (the "user codex home"), or null if no auth file
- * is present. Honors `CODEX_HOME` for users who run codex with a
- * non-default data dir; we look for auth.json in that override before
- * falling back to `$HOME/.codex`.
+ * Both this backend and preflight's credential check
+ * (`packages/deepsec/src/preflight.ts`) call this, so the two probes cannot
+ * disagree about where the login lives. A divergence would let preflight
+ * accept a login the backend never finds, and the run would fail mid-batch
+ * instead of before scanning.
+ *
+ * Honors `CODEX_HOME` for users who run codex with a non-default data dir,
+ * then `$HOME` / `%USERPROFILE%`. The OS home is only a last resort: HOME
+ * can diverge from it (sudo -E, systemd/launchd units, CI steps that
+ * override HOME), and the backend must follow the same env precedence.
  */
-function findCodexSubscriptionAuth(env: NodeJS.ProcessEnv = process.env): string | null {
+export function resolveCodexLoginHome(env: NodeJS.ProcessEnv = process.env): string | null {
   const candidates: string[] = [];
   if (env.CODEX_HOME) candidates.push(env.CODEX_HOME);
   const home = env.HOME || env.USERPROFILE || os.homedir();
@@ -321,17 +326,23 @@ export function buildGatewayProviderConfig(
  * - `subscription`: the machine-wide Codex CLI login (`auth.json`), which is
  *   what supports OpenAI Cyber Access Program selection.
  * - `gateway`: the custom AI Gateway provider, credentialed by the ambient
- *   OPENAI_API_KEY / ANTHROPIC_AUTH_TOKEN. When neither a login nor an
- *   ambient key exists, preflight rejects the run before any batch starts.
+ *   OPENAI_API_KEY / ANTHROPIC_AUTH_TOKEN.
+ * - `unavailable`: the persisted route explicitly selected local
+ *   subscriptions but no Codex login exists. This is an error state, not a
+ *   gateway fallback: the run fails closed rather than using an unrelated
+ *   credential.
  */
-export type CodexAuthMode = "subscription" | "gateway";
+export type CodexAuthMode = "subscription" | "gateway" | "unavailable";
 
 export interface CodexAuthDecision {
   mode: CodexAuthMode;
   /** Directory holding the Codex login that backs subscription mode. */
   subscriptionHome: string | null;
-  /** Ambient gateway credential, when one is exported. */
-  gatewayApiKey: string | undefined;
+  /**
+   * True when an ambient gateway credential is exported. Consumers only need
+   * presence; the credential value never leaves the invocation builder.
+   */
+  hasGatewayApiKey: boolean;
   /** True when the persisted route explicitly selected local subscriptions. */
   localRoute: boolean;
 }
@@ -339,37 +350,51 @@ export interface CodexAuthDecision {
 /**
  * Single predicate for "does this Codex run use the machine-wide login?".
  *
- * The invocation builder and the Cyber Access Program gate must agree on
- * this answer, so both call this function instead of re-deriving it.
+ * The invocation builder, preflight, and the Cyber Access Program gate must
+ * agree on this answer, so they all call this function instead of
+ * re-deriving it.
  *
- * A saved local route (`ai.mode: "local"`) is the user choosing
+ * A saved local route (`ai.mode: "local"`) is the user explicitly choosing
  * machine-wide subscription auth, so it outranks ambient OPENAI_API_KEY /
  * ANTHROPIC_AUTH_TOKEN values exported for other tools (direnv, CI, a
- * Claude token). But that mode is harness-agnostic: it also covers a Claude
- * or Pi login, and it records no per-agent provider. It therefore only
- * counts as Codex subscription auth when a Codex login actually exists;
- * otherwise the run falls back to gateway auth with the ambient key rather
- * than failing mid-run. Sandbox workers have no machine-wide login at all,
- * so they always use gateway auth with the key brokered into the VM.
+ * Claude token). Because the route does not record which harness was logged
+ * in, --agent codex treats it as satisfied only when a Codex login actually
+ * exists; otherwise the run fails closed with a login error rather than
+ * quietly changing credential routes. Sandbox workers have no machine-wide
+ * login at all, so they always use gateway auth with the key brokered into
+ * the VM.
  */
 export function resolveCodexAuth(
   agentConfig: Record<string, unknown> = {},
   env: NodeJS.ProcessEnv = process.env,
 ): CodexAuthDecision {
   const inSandbox = env.DEEPSEC_INSIDE_SANDBOX === "1";
-  const localRoute = !inSandbox && agentConfig.modelAuth === "local";
-  const gatewayApiKey = env.OPENAI_API_KEY || env.ANTHROPIC_AUTH_TOKEN || undefined;
-  const subscriptionHome = inSandbox ? null : findCodexSubscriptionAuth(env);
-  if (subscriptionHome && (localRoute || !gatewayApiKey)) {
-    return { mode: "subscription", subscriptionHome, gatewayApiKey, localRoute };
+  const hasGatewayApiKey = Boolean(env.OPENAI_API_KEY || env.ANTHROPIC_AUTH_TOKEN);
+  if (inSandbox) {
+    return { mode: "gateway", subscriptionHome: null, hasGatewayApiKey, localRoute: false };
   }
-  return { mode: "gateway", subscriptionHome: null, gatewayApiKey, localRoute };
+  const localRoute = agentConfig.modelAuth === "local";
+  const subscriptionHome = resolveCodexLoginHome(env);
+  if (localRoute) {
+    // Explicit local choice: never silently swap in an ambient key, even
+    // when one is exported. Preflight turns this state into an actionable
+    // error before scanning; buildCodexInvocation refuses per batch as a
+    // backstop (setup/init do not run preflight).
+    return subscriptionHome
+      ? { mode: "subscription", subscriptionHome, hasGatewayApiKey, localRoute: true }
+      : { mode: "unavailable", subscriptionHome: null, hasGatewayApiKey, localRoute: true };
+  }
+  if (subscriptionHome && !hasGatewayApiKey) {
+    return { mode: "subscription", subscriptionHome, hasGatewayApiKey, localRoute: false };
+  }
+  return { mode: "gateway", subscriptionHome: null, hasGatewayApiKey, localRoute: false };
 }
 
 /**
- * Back-compat helper for callers that only need the login location. Prefer
- * {@link resolveCodexAuth}: the Cyber Access Program gate and the invocation
- * builder must share the full route-aware decision, not just this location.
+ * Back-compat helper for callers that only need the login location (it was
+ * exported before the route-aware predicate existed). Prefer
+ * {@link resolveCodexAuth}: preflight, the invocation builder, and the Cyber
+ * Access Program gate must share the full decision, not just this location.
  */
 export function findCodexSubscriptionHome(
   agentConfig: Record<string, unknown> = {},
@@ -385,11 +410,18 @@ export function buildCodexInvocation(
     typeof agentConfigOrProgram === "string"
       ? agentConfigOrProgram
       : (agentConfig.cyberAccessProgram as CyberAccessProgram | undefined);
-  // Same predicate as agent-config.ts's Cyber Access Program gate. A local
-  // route only overrides ambient keys when a Codex login actually exists;
-  // otherwise the run falls back to gateway auth. Preflight rejects the
-  // no-login/no-key combination, so a missing login never throws per batch.
+  // Same predicate as preflight and agent-config.ts's Cyber Access Program
+  // gate. A saved local route is honored even when ambient keys are exported
+  // for other tools, and it fails closed when the Codex login is missing
+  // instead of silently switching credential routes.
   const { mode: authMode, subscriptionHome } = resolveCodexAuth(agentConfig);
+  if (authMode === "unavailable") {
+    throw new Error(
+      "A local-subscription route is selected, but no Codex login was found " +
+        "(expected auth.json in CODEX_HOME or ~/.codex). Run `codex login`, or rerun with " +
+        "`--model-auth gateway` to use a gateway credential for this run.",
+    );
+  }
 
   const codexHome = makeCodexHome();
   if (authMode === "subscription" && subscriptionHome) {
@@ -437,10 +469,9 @@ export function buildCodexInvocation(
 
   // Gateway mode (default): AI Gateway exposes an OpenAI-compatible
   // endpoint. Both vars are honored; OPENAI_BASE_URL takes precedence
-  // when both are set. This is also the fallback for a saved local route
-  // with no Codex login (the user may have picked it for Claude/Pi) and
-  // for sandbox workers, which receive a brokered key. A missing key here
-  // is unreachable from the CLI: preflight rejects it before scanning.
+  // when both are set. Sandbox workers reach this branch with a brokered
+  // key. A missing key here is unreachable from the CLI: preflight rejects
+  // it before scanning (and setup fails on the first Codex call).
   const baseUrl = process.env.OPENAI_BASE_URL ?? process.env.ANTHROPIC_BASE_URL ?? undefined;
   const apiKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN ?? undefined;
 

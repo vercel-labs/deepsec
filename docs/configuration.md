@@ -67,8 +67,10 @@ ai: {
 
 `process`, `revalidate`, `setup`, and Sandbox orchestration resolve this
 route in each fresh process. Explicit per-command Pi provider flags take
-precedence. Run `deepsec setup --model-auth …` to change and verify the route
-instead of hand-editing it.
+precedence. `process` and `revalidate` also accept a one-run
+`--model-auth gateway|direct|custom|local` override (for example to opt out
+of a saved `local` route without editing this file); `deepsec setup
+--model-auth …` changes and verifies the persisted route.
 
 ## ProjectDeclaration
 

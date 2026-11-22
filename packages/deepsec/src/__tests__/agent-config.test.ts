@@ -63,6 +63,17 @@ describe("buildAgentConfig", () => {
     ).toMatchObject({ modelAuth: "direct" });
   });
 
+  it("lets an explicit per-run route override a saved local mode", () => {
+    setLoadedConfig(defineConfig({ projects: [], ai: { mode: "local", provider: "local" } }));
+    expect(
+      buildAgentConfig({
+        agentType: "codex",
+        model: "gpt-5.5",
+        modelRoute: { mode: "gateway", provider: "vercel" },
+      }),
+    ).toMatchObject({ modelAuth: "gateway" });
+  });
+
   it("does not inherit the saved local mode when --ai-* overrides are present", () => {
     setLoadedConfig(defineConfig({ projects: [], ai: { mode: "local", provider: "local" } }));
     expect(
@@ -209,7 +220,7 @@ describe("buildAgentConfig cyberAccessProgram", () => {
   // A saved local route is the user choosing Codex subscription auth. Ambient
   // keys exported for other tools must not override that choice, so Cyber
   // Access Program selection must follow the same route-aware predicate as the
-  // Codex backend instead of findCodexSubscriptionHome()'s ambient-key veto.
+  // Codex backend instead of being vetoed by the ambient key.
   it("keeps --cyber-access-program on a saved local route with an ambient API key", () => {
     setLoadedConfig(defineConfig({ projects: [], ai: { mode: "local", provider: "local" } }));
     vi.stubEnv("OPENAI_API_KEY", "sk-ambient-for-other-tools");
@@ -255,7 +266,7 @@ describe("buildAgentConfig cyberAccessProgram", () => {
 
     expect(buildAgentConfig({ agentType: "codex" })).not.toHaveProperty("cyberAccessProgram");
     expect(warn).toHaveBeenCalledWith(
-      "Ignoring codex.cyberAccessProgram from deepsec.config.ts: the saved local-subscription route has no Codex login, so the run falls back to gateway auth.",
+      "Ignoring codex.cyberAccessProgram from deepsec.config.ts: the saved local-subscription route has no Codex login, so the run requires `codex login`.",
     );
     warn.mockRestore();
   });
@@ -273,6 +284,7 @@ describe("buildAgentConfig cyberAccessProgram", () => {
     expect(message).toContain("only works with Codex subscription auth");
     expect(message).toContain("no Codex login was found");
     expect(message).toContain("codex login");
+    expect(message).not.toContain("fall back");
     expect(message).not.toContain("unset OPENAI_API_KEY");
   });
 });
