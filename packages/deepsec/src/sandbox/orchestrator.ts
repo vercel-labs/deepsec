@@ -129,6 +129,15 @@ function unregisterLogAborter(aborter: AbortController): void {
 // command exits. Each reconnect replays the log from the start, so already
 // shown lines are skipped by count.
 const MAX_LOG_RECONNECTS = 100;
+// The display budget above only counts lines that are shown, so replays
+// don't use it up. Raw bytes received, replays included, get their own
+// fixed budget, charged before any concatenation, so a worker can't make
+// the host buffer or rescan unbounded output.
+const MAX_LOG_INCOMING_BYTES_PER_SANDBOX = 4 * MAX_LOG_BYTES_PER_SANDBOX;
+// Longest unterminated line kept while waiting for its newline; the rest of
+// that line is dropped. Line counting only depends on newlines, so replay
+// deduplication is unaffected.
+const MAX_LOG_PARTIAL_CHARS = 64 * 1024;
 
 export async function streamLogsCapped(
   cmd: LoggableCommand,
@@ -140,6 +149,7 @@ export async function streamLogsCapped(
   const aborter = new AbortController();
   registerLogAborter(aborter);
   let remaining = MAX_LOG_BYTES_PER_SANDBOX;
+  let incoming = 0;
   let emitted = 0;
   let exhausted = false;
   const emit = (line: string) => {
@@ -157,8 +167,19 @@ export async function streamLogsCapped(
       let partial = "";
       try {
         for await (const log of cmd.logs({ signal: aborter.signal })) {
+          incoming += Buffer.byteLength(log.data);
+          if (incoming > MAX_LOG_INCOMING_BYTES_PER_SANDBOX) {
+            exhausted = true;
+            onLog(
+              `${prefix} [log stream exceeded ${Math.round(MAX_LOG_INCOMING_BYTES_PER_SANDBOX / 1024 / 1024)}MiB including replays after reconnects; further output suppressed]`,
+            );
+            aborter.abort();
+            break;
+          }
           const parts = (partial + log.data).split("\n");
           partial = parts.pop() ?? "";
+          if (partial.length > MAX_LOG_PARTIAL_CHARS)
+            partial = partial.slice(0, MAX_LOG_PARTIAL_CHARS);
           for (const line of parts) {
             if (index++ < emitted) continue;
             emitted++;

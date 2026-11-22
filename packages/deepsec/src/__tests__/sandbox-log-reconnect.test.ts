@@ -54,6 +54,53 @@ describe("streamLogsCapped reconnects", () => {
     expect(cmd.calls()).toBe(1);
   });
 
+  it("stops an endless newline-free stream at the raw-byte budget", async () => {
+    const MiB = 1024 * 1024;
+    let yielded = 0;
+    const cmd = {
+      logs() {
+        return (async function* () {
+          for (;;) {
+            yielded++;
+            yield { stream: "stdout", data: "x".repeat(MiB) };
+          }
+        })();
+      },
+    };
+    const lines: string[] = [];
+    const raw: string[] = [];
+    await streamLogsCapped(
+      cmd,
+      "[s]",
+      (m) => lines.push(m),
+      (l) => raw.push(l),
+    );
+    // 40 MiB budget: the 41st chunk trips it.
+    expect(yielded).toBe(41);
+    expect(
+      lines.some((l) => /including replays after reconnects; further output suppressed/.test(l)),
+    ).toBe(true);
+    expect(raw.every((l) => l.length <= 64 * 1024)).toBe(true);
+  });
+
+  it("counts replayed bytes so endless reconnects stop at the budget", async () => {
+    const line = `${"y".repeat(1023)}\n`;
+    const chunk = line.repeat(1024); // 1 MiB of complete lines
+    const cmd = replayingCommand(Array(6).fill(chunk), []);
+    const lines: string[] = [];
+    await streamLogsCapped(
+      cmd,
+      "[s]",
+      (m) => lines.push(m),
+      undefined,
+      async () => false,
+    );
+    // 6 MiB per connection: the 7th connection crosses 40 MiB.
+    expect(cmd.calls()).toBe(7);
+    expect(lines.filter((l) => l.startsWith("[s] y")).length).toBe(6 * 1024);
+    expect(lines.some((l) => /including replays after reconnects/.test(l))).toBe(true);
+  });
+
   it("makes a single pass without an isFinished check", async () => {
     const cmd = replayingCommand(["a\n", "b\n"], [1]);
     const lines: string[] = [];
