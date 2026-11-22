@@ -617,7 +617,6 @@ export async function process(params: {
       envMs("DEEPSEC_CONTENT_FILTER_PAUSE_MS", 30_000),
       envMs("DEEPSEC_CONTENT_FILTER_MAX_PAUSE_MS", 5 * 60_000),
     );
-    let contentFilterBlocks = 0;
     const contentFilterChunk = Math.max(
       1,
       Number(globalThis.process.env.DEEPSEC_CONTENT_FILTER_CHUNK) || 5,
@@ -785,14 +784,15 @@ export async function process(params: {
     // A content-filter block on a multi-file batch: retry each file on its
     // own after the brake's pause, so one file's content can't fail the
     // others. Files still blocked after CONTENT_FILTER_FILE_ATTEMPTS become
-    // `error` and are picked up again by the next run.
+    // `error` and are picked up again by the next run. `unresolved` counts
+    // every file left as `error`, so the caller can fail the batch.
     async function retryFilesOneAtATime(
       batch: FileRecord[],
       i: number,
-    ): Promise<{ analyses: number; findings: number; blocked: number }> {
+    ): Promise<{ analyses: number; findings: number; unresolved: number }> {
       let analyses = 0;
       let findings = 0;
-      let blocked = 0;
+      let unresolved = 0;
       for (const file of batch) {
         let done = false;
         for (let attempt = 1; attempt <= CONTENT_FILTER_FILE_ATTEMPTS && !done; attempt++) {
@@ -805,6 +805,7 @@ export async function process(params: {
             done = true;
           } catch (err) {
             if (!(err instanceof ContentFilteredError)) {
+              unresolved++;
               markError([file]);
               emitProgress({
                 type: "batch_complete",
@@ -822,11 +823,11 @@ export async function process(params: {
           }
         }
         if (!done) {
-          blocked++;
+          unresolved++;
           markError([file]);
         }
       }
-      return { analyses, findings, blocked };
+      return { analyses, findings, unresolved };
     }
 
     // Big blocked batches go through chunks first: one problem file in a
@@ -836,13 +837,14 @@ export async function process(params: {
     async function retryFilesAfterContentFilter(
       batch: FileRecord[],
       i: number,
-    ): Promise<{ analyses: number; findings: number; blocked: number }> {
+    ): Promise<{ analyses: number; findings: number; unresolved: number }> {
       if (batch.length <= contentFilterChunk) return retryFilesOneAtATime(batch, i);
-      const total = { analyses: 0, findings: 0, blocked: 0 };
+      const total = { analyses: 0, findings: 0, unresolved: 0 };
       for (let start = 0; start < batch.length; start += contentFilterChunk) {
         const chunk = batch.slice(start, start + contentFilterChunk);
         await contentFilterBrake.wait(quotaAbort.signal);
         if (quotaAbort.signal.aborted) {
+          total.unresolved += chunk.length;
           markError(chunk);
           continue;
         }
@@ -852,6 +854,7 @@ export async function process(params: {
           total.findings += r.findings;
         } catch (err) {
           if (!(err instanceof ContentFilteredError)) {
+            total.unresolved += chunk.length;
             markError(chunk);
             emitProgress({
               type: "batch_complete",
@@ -871,14 +874,13 @@ export async function process(params: {
           const r = await retryFilesOneAtATime(chunk, i);
           total.analyses += r.analyses;
           total.findings += r.findings;
-          total.blocked += r.blocked;
+          total.unresolved += r.unresolved;
         }
       }
       return total;
     }
 
     function noteContentFilterBlock(i: number, what: string): void {
-      contentFilterBlocks++;
       const pauseMs = contentFilterBrake.noteBlock();
       emitProgress({
         type: "batch_complete",
@@ -918,6 +920,18 @@ export async function process(params: {
           const r = await retryFilesAfterContentFilter(batch, i);
           if (r.analyses === 0) throw err;
           counts = r;
+          // Files the retries left as `error` were never reviewed. Count the
+          // batch as failed so callers that gate on errorBatchCount, such as
+          // `process --diff` in CI, can't pass with an unreviewed file.
+          if (r.unresolved > 0) {
+            batchesFailed++;
+            emitProgress({
+              type: "batch_complete",
+              message: `Batch ${i + 1}/${batches.length}: ${r.unresolved} file(s) not analyzed after content-filter retries; marked error`,
+              batchIndex: i,
+              totalBatches: batches.length,
+            });
+          }
         }
 
         batchesInFlight--;

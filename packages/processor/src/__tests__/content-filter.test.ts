@@ -63,7 +63,6 @@ function useStub(
   impl: (p: InvestigateParams) => unknown,
 ) {
   const stub = new StubAgent({
-    // biome-ignore lint/correctness/useYield: the stub throws or returns without progress
     investigateImpl: async function* (params) {
       return impl(params) as any;
     },
@@ -118,6 +117,11 @@ describe("process() with provider content-filter blocks", () => {
     expect(fx.read("b.ts").status).toBe("error");
     expect(fx.read("b.ts").analysisHistory).toHaveLength(0);
     expect(result.analysisCount).toBe(2);
+    // b.ts was never reviewed, so the run must not look clean to CI.
+    expect(result.errorBatchCount).toBe(1);
+    expect(
+      progress.some((m) => /1 file\(s\) not analyzed after content-filter retries/.test(m)),
+    ).toBe(true);
     // 1 batch call, then a.ts, b.ts twice, c.ts.
     expect(
       stub.calls.investigateCalls.map((c) => c.batch.map((r) => r.filePath).join(",")),
@@ -148,6 +152,7 @@ describe("process() with provider content-filter blocks", () => {
     expect(fx.read("f07.ts").status).toBe("error");
     for (const f of files.filter((f) => f !== "f07.ts")) expect(fx.read(f).status).toBe("analyzed");
     expect(result.analysisCount).toBe(11);
+    expect(result.errorBatchCount).toBe(1);
     expect(progress.some((m) => /retrying 12 files in chunks of 5/.test(m))).toBe(true);
     expect(progress.some((m) => /retrying 5 files one at a time/.test(m))).toBe(true);
   });
@@ -161,9 +166,52 @@ describe("process() with provider content-filter blocks", () => {
       return okResult(params);
     });
 
-    await processProject({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
     expect(calls).toBe(2);
     expect(fx.read("a.ts").status).toBe("analyzed");
+    expect(result.errorBatchCount).toBe(0);
+  });
+
+  it("reports a clean batch when every blocked file succeeds on retry", async () => {
+    const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
+    let blockedOnce = false;
+    useStub(fx, (params) => {
+      if (params.batch.length > 1 && !blockedOnce) {
+        blockedOnce = true;
+        throw new ContentFilteredError(FLAGGED);
+      }
+      return okResult(params);
+    });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+    expect(result.analysisCount).toBe(3);
+    expect(result.errorBatchCount).toBe(0);
+  });
+
+  it("fails the batch when a retried file errors for another reason", async () => {
+    const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
+    useStub(fx, (params) => {
+      if (params.batch.length > 1) throw new ContentFilteredError(FLAGGED);
+      if (params.batch[0].filePath === "c.ts") throw new Error("agent crashed");
+      return okResult(params);
+    });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+    expect(fx.read("a.ts").status).toBe("analyzed");
+    expect(fx.read("b.ts").status).toBe("analyzed");
+    expect(fx.read("c.ts").status).toBe("error");
+    expect(result.analysisCount).toBe(2);
+    expect(result.errorBatchCount).toBe(1);
   });
 
   it("fails the batch when every file stays blocked, without recording any as clean", async () => {
@@ -178,6 +226,7 @@ describe("process() with provider content-filter blocks", () => {
       concurrency: 1,
     });
     expect(result.analysisCount).toBe(0);
+    expect(result.errorBatchCount).toBe(1);
     expect(fx.read("a.ts").status).toBe("error");
     expect(fx.read("b.ts").status).toBe("error");
   });
