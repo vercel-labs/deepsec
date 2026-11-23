@@ -299,7 +299,7 @@ program
   )
   .option(
     "--model-auth <mode>",
-    "One-run credential route override: gateway, direct, custom, or local (default: the saved route)",
+    "One-run credential route override: gateway, direct, custom (Pi only), or local (default: the saved route)",
   )
   .option(
     "--ai-provider <provider>",
@@ -310,6 +310,7 @@ program
     "Pi: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",
   )
   .option("--ai-api-key-env <name>", "Pi: environment variable that holds the provider API key")
+  .option("--ai-credential-header <name[:scheme]>", "Custom auth header; scheme is bearer or raw")
   .option(
     "--ai-header <name=value>",
     "Pi: extra provider request header; repeatable",
@@ -356,6 +357,21 @@ program
     "--comment-out <path>",
     "Write a PR-comment-shaped markdown summary to <path> (only when findings exist)",
   )
+  .addHelpText(
+    "after",
+    `
+A custom --model-auth route is Pi-only and needs --ai-provider, --ai-base-url,
+--ai-api-key-env, and --ai-credential-header. Without --model-auth, process
+uses the route saved in deepsec.config.ts.
+
+Examples:
+  $ pnpm deepsec process --project-id my-app
+  $ pnpm deepsec process --project-id my-app --agent codex --model gpt-5.4
+  $ pnpm deepsec process --project-id my-app --model-auth gateway
+  $ MY_KEY=... pnpm deepsec process --project-id my-app --agent pi --model acme/security-model \\
+      --model-auth custom --ai-provider acme --ai-base-url https://models.acme.test/v1 \\
+      --ai-api-key-env MY_KEY --ai-credential-header authorization:bearer`,
+  )
   .action(processCommand);
 
 program
@@ -386,7 +402,7 @@ program
   )
   .option(
     "--model-auth <mode>",
-    "One-run credential route override: gateway, direct, custom, or local (default: the saved route)",
+    "One-run credential route override: gateway, direct, custom (Pi only), or local (default: the saved route)",
   )
   .option(
     "--ai-provider <provider>",
@@ -397,6 +413,7 @@ program
     "Pi: provider base URL override (e.g. a Martian/OpenAI-compatible gateway)",
   )
   .option("--ai-api-key-env <name>", "Pi: environment variable that holds the provider API key")
+  .option("--ai-credential-header <name[:scheme]>", "Custom auth header; scheme is bearer or raw")
   .option(
     "--ai-header <name=value>",
     "Pi: extra provider request header; repeatable",
@@ -425,6 +442,20 @@ program
   .option("--manifest <path>", "JSON file with array of file paths to revalidate")
   .option("--only-slugs <csv>", "Only revalidate findings with one of these vulnSlugs")
   .option("--skip-slugs <csv>", "Skip findings with any of these vulnSlugs")
+  .addHelpText(
+    "after",
+    `
+A custom --model-auth route is Pi-only and needs --ai-provider, --ai-base-url,
+--ai-api-key-env, and --ai-credential-header. Without --model-auth, revalidate
+uses the route saved in deepsec.config.ts.
+
+Examples:
+  $ pnpm deepsec revalidate --project-id my-app
+  $ pnpm deepsec revalidate --project-id my-app --model-auth gateway
+  $ MY_KEY=... pnpm deepsec revalidate --project-id my-app --agent pi --model acme/security-model \\
+      --model-auth custom --ai-provider acme --ai-base-url https://models.acme.test/v1 \\
+      --ai-api-key-env MY_KEY --ai-credential-header x-api-key:raw`,
+  )
   .action(revalidateCommand);
 
 program

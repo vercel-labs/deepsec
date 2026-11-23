@@ -136,6 +136,45 @@ describe("buildAgentConfig", () => {
       aiHeaders: { "x-test": "one", "x-other": "two" },
     });
   });
+
+  it("maps a per-run --ai-credential-header to the Pi runtime config", () => {
+    expect(
+      buildAgentConfig({
+        agentType: "pi",
+        model: "openai/gpt-5.5",
+        aiApiKeyEnv: "MARTIAN_API_KEY",
+        aiCredentialHeader: "x-api-key:raw",
+      }),
+    ).toMatchObject({
+      aiProvider: "openai",
+      aiApiKeyEnv: "MARTIAN_API_KEY",
+      aiCredentialHeader: { name: "x-api-key", scheme: "raw" },
+    });
+  });
+
+  it("defaults a per-run authorization header to the bearer scheme", () => {
+    expect(
+      buildAgentConfig({
+        agentType: "pi",
+        model: "acme/security-model",
+        aiApiKeyEnv: "ACME_MODEL_KEY",
+        aiCredentialHeader: "authorization",
+      }),
+    ).toMatchObject({
+      aiCredentialHeader: { name: "authorization", scheme: "bearer" },
+    });
+  });
+
+  it("rejects an unknown per-run credential header scheme", () => {
+    expect(() =>
+      buildAgentConfig({
+        agentType: "pi",
+        model: "acme/security-model",
+        aiApiKeyEnv: "ACME_MODEL_KEY",
+        aiCredentialHeader: "x-api-key:basic",
+      }),
+    ).toThrow(/scheme must be bearer or raw/);
+  });
 });
 
 describe("buildAgentConfig cyberAccessProgram", () => {

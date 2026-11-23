@@ -70,7 +70,20 @@ route in each fresh process. Explicit per-command Pi provider flags take
 precedence. `process` and `revalidate` also accept a one-run
 `--model-auth gateway|direct|custom|local` override (for example to opt out
 of a saved `local` route without editing this file); `deepsec setup
---model-auth …` changes and verifies the persisted route.
+--model-auth …` changes and verifies the persisted route. A one-run custom
+route is Pi-only and needs the same provider, base URL, API-key environment
+variable, and credential header flags as setup:
+
+```bash
+MARTIAN_KEY=... pnpm deepsec process --project-id my-app \
+  --agent pi \
+  --model openai/gpt-5.5 \
+  --model-auth custom \
+  --ai-provider martian \
+  --ai-base-url https://api.martian.example/v1 \
+  --ai-api-key-env MARTIAN_KEY \
+  --ai-credential-header x-api-key:raw
+```
 
 ## ProjectDeclaration
 

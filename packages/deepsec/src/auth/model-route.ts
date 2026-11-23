@@ -87,6 +87,24 @@ export function defaultCredentialHeaderScheme(name: string): CredentialHeaderSch
   return name.toLowerCase() === "authorization" ? "bearer" : "raw";
 }
 
+/**
+ * Parse the `--ai-credential-header <name[:scheme]>` value shared by
+ * setup/init and the one-run `process`/`revalidate` route overrides.
+ * The scheme defaults from the header name, so `authorization` becomes
+ * bearer and any other header stays raw.
+ */
+export function parseCredentialHeader(value: string): {
+  name: string;
+  scheme: CredentialHeaderScheme;
+} {
+  const [name, explicitScheme] = value.split(":");
+  const scheme = explicitScheme ?? defaultCredentialHeaderScheme(name);
+  if (scheme !== "bearer" && scheme !== "raw") {
+    throw new Error("--ai-credential-header scheme must be bearer or raw");
+  }
+  return { name, scheme };
+}
+
 function headerValue(scheme: CredentialHeaderScheme, credential: string): string {
   return scheme === "bearer" ? `Bearer ${credential}` : credential;
 }

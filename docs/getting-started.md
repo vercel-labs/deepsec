@@ -162,6 +162,25 @@ npx deepsec process --project-id my-app --model-auth gateway
 (`AI_GATEWAY_API_KEY` or OIDC); `--model-auth direct --ai-provider openai`
 uses an exported `OPENAI_API_KEY`. Neither changes `deepsec.config.ts`.
 
+A one-run custom route follows the same rules as setup: it requires
+`--agent pi` plus the provider, base URL, API-key environment variable, and
+credential header flags.
+
+```bash
+MARTIAN_KEY=... npx deepsec process --project-id my-app \
+  --agent pi \
+  --model openai/gpt-5.5 \
+  --model-auth custom \
+  --ai-provider martian \
+  --ai-base-url https://api.martian.example/v1 \
+  --ai-api-key-env MARTIAN_KEY \
+  --ai-credential-header x-api-key:raw
+```
+
+Use `:bearer` for an `Authorization: Bearer …` header and `:raw` for a
+provider-specific token header. When a required custom flag is missing,
+`process` and `revalidate` name that flag in the error.
+
 ## Scaffold only
 
 To create the workspace files without running any of the setup:

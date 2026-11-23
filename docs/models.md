@@ -59,7 +59,8 @@ missing, the run fails closed instead of using an ambient gateway key, and
 (for example `--model-auth gateway` to use the gateway credential instead of
 the saved local route). Sandbox commands are the exception: they must broker
 a real token, so they still require `AI_GATEWAY_API_KEY` (or an equivalent
-key).
+key). A one-run custom override is Pi-only and needs the same provider, base
+URL, API-key environment variable, and credential header flags as setup.
 
 ## CLI selection
 
@@ -88,7 +89,9 @@ pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
 
 `--agent`, `--model`, and `--thinking-level` are also accepted on `setup` and
 `revalidate`. `process` and `revalidate` additionally accept a one-run
-`--model-auth gateway|direct|custom|local` override. Setup persists the
+`--model-auth gateway|direct|custom|local` override. Custom overrides are
+Pi-only and require `--ai-credential-header` along with the provider, base
+URL, and API-key environment flags. Setup persists the
 interactive choice as `defaultAgent`,
 `defaultModel`, and `defaultThinkingLevel`, checkpoints the exact combination,
 and invalidates affected phases when it changes.
@@ -212,8 +215,26 @@ pnpm deepsec setup --project-id my-app \
 ```
 
 Later `process`, `revalidate`, and Sandbox commands resolve the persisted
-route. Per-command `--ai-provider`, `--ai-base-url`, `--ai-api-key-env`, and
-repeatable `--ai-header name=value` remain available as Pi runtime overrides.
+route. Per-command `--ai-provider`, `--ai-base-url`, `--ai-api-key-env`,
+`--ai-credential-header`, and repeatable `--ai-header name=value` remain
+available as Pi runtime overrides.
+
+To use a custom route for one run without changing the saved route, pass the
+same flags with `--model-auth custom`:
+
+```bash
+MARTIAN_API_KEY=... pnpm deepsec process --project-id my-app \
+  --agent pi \
+  --model openai/gpt-5.5 \
+  --model-auth custom \
+  --ai-provider martian \
+  --ai-base-url https://api.withmartian.com/v1 \
+  --ai-api-key-env MARTIAN_API_KEY \
+  --ai-credential-header authorization:bearer
+```
+
+`--agent pi` is required. When a custom route is incomplete, `process` and
+`revalidate` report the flag that is missing.
 
 ### `claude-sonnet-4-6` for `triage`
 

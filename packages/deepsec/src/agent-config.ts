@@ -4,6 +4,7 @@ import {
   defaultCredentialHeaderScheme,
   type ModelAuthMode,
   type ModelRoute,
+  parseCredentialHeader,
 } from "./auth/model-route.js";
 
 const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
@@ -17,6 +18,8 @@ export interface AgentRuntimeOpts {
   aiProvider?: string;
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
+  /** `--ai-credential-header <name[:scheme]>`; custom route auth header for Pi. */
+  aiCredentialHeader?: string;
   aiHeader?: string[];
   cyberAccessProgram?: string;
   /** One-run credential route override (`process` / `revalidate --model-auth`). */
@@ -83,14 +86,17 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
   if (opts.aiProvider || hasProviderOverride) config.aiProvider = effectiveProvider;
   if (aiBaseUrl) config.aiBaseUrl = aiBaseUrl;
   if (aiApiKeyEnv) config.aiApiKeyEnv = aiApiKeyEnv;
-  const credentialHeader =
-    customRoute?.credentialHeader ??
-    (customRoute?.authHeader
-      ? {
-          name: customRoute.authHeader,
-          scheme: customRoute.authScheme ?? defaultCredentialHeaderScheme(customRoute.authHeader),
-        }
-      : undefined);
+  // An explicit per-run flag wins over a rehydrated route, matching the
+  // precedence of the other Pi provider overrides above.
+  const credentialHeader = opts.aiCredentialHeader
+    ? parseCredentialHeader(opts.aiCredentialHeader)
+    : (customRoute?.credentialHeader ??
+      (customRoute?.authHeader
+        ? {
+            name: customRoute.authHeader,
+            scheme: customRoute.authScheme ?? defaultCredentialHeaderScheme(customRoute.authHeader),
+          }
+        : undefined));
   if (credentialHeader) {
     config.aiCredentialHeader = credentialHeader;
   }

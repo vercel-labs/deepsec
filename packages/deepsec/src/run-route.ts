@@ -18,7 +18,20 @@ export async function resolveRunAgentConfig(
 ): Promise<{ agentConfig: Record<string, unknown>; explicitRoute?: ModelRoute }> {
   let route: ModelRoute | undefined;
   if (opts.modelAuth) {
-    route = await applyCommandModelRoute(modelRouteFromCli(opts), opts.agentType);
+    // Pass the resolved agent type as `agent`: a one-run direct/custom route
+    // may omit --ai-provider, and the provider then defaults from the harness
+    // the command actually runs (including defaultAgent from deepsec.config.ts).
+    route = await applyCommandModelRoute(
+      modelRouteFromCli({
+        modelAuth: opts.modelAuth,
+        aiProvider: opts.aiProvider,
+        aiApiKeyEnv: opts.aiApiKeyEnv,
+        aiBaseUrl: opts.aiBaseUrl,
+        aiCredentialHeader: opts.aiCredentialHeader,
+        agent: opts.agentType,
+      }),
+      opts.agentType,
+    );
   } else if (!opts.aiApiKeyEnv && !opts.aiBaseUrl) {
     route = (await applyConfiguredModelRoute(opts.agentType))?.route;
   }
