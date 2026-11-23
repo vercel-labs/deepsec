@@ -551,6 +551,11 @@ const sandboxAllCmd = program
   .option("--sandboxes <n>", "Total sandboxes to distribute (default: 10)", parseInt)
   .option("--vcpus <n>", "vCPUs per sandbox (default: auto from concurrency, max: 8)", parseInt)
   .option("--timeout <ms>", "Sandbox timeout in ms (default: 5 hours)", parseInt)
+  .option(
+    "--spawn-rate <n>",
+    "Max worker sandboxes started per minute across all projects; 0 starts all at once (default: 10)",
+    parseInt,
+  )
   .action((subcommand: string, opts: Record<string, unknown>) => {
     const unknownArgs = sandboxAllCmd.args.slice(1);
     return sandboxAllCommand(subcommand, { ...opts, args: unknownArgs } as Parameters<

@@ -1,5 +1,22 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { APIError } from "@vercel/sandbox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The orchestrator takes a partition lock under the data root.
+let dataRoot: string;
+let prevDataRoot: string | undefined;
+beforeAll(() => {
+  prevDataRoot = process.env.DEEPSEC_DATA_ROOT;
+  dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-stagger-"));
+  process.env.DEEPSEC_DATA_ROOT = dataRoot;
+});
+afterAll(() => {
+  if (prevDataRoot === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+  else process.env.DEEPSEC_DATA_ROOT = prevDataRoot;
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
 
 const h = vi.hoisted(() => ({
   spawned: [] as number[],
@@ -273,9 +290,30 @@ describe("launch (detached)", () => {
     reset();
     h.failDispatch = 1;
     await launch({ ...baseConfig, sandboxCount: 3, spawnRate: 0 }, (m) => h.logs.push(m));
-    expect(h.saved).toEqual(["0/3", "1/2", "1/1", "2/0"]);
-    expect(h.logs.some((l) => /\[sandbox-1\] Dispatch failed: dispatch failed/.test(l))).toBe(true);
+    // Reserved first; every later write records one dispatch or one failure.
+    expect(h.saved[0]).toBe("0/3");
+    expect(h.saved).toHaveLength(4);
+    expect(h.saved.at(-1)).toBe("2/0");
+    expect(h.logs.some((l) => /Dispatch failed: dispatch failed/.test(l))).toBe(true);
     expect(h.logs.some((l) => /launched with 2 sandbox\(es\)/.test(l))).toBe(true);
+  });
+
+  it("gives the reservation back when bootstrapping fails", async () => {
+    reset();
+    // No snapshot and no project config: the upload step throws after the
+    // files were reserved.
+    await expect(
+      launch({ ...baseConfig, snapshotId: undefined, sandboxCount: 3, spawnRate: 0 }, () => {}),
+    ).rejects.toThrow();
+    expect(h.saved).toEqual(["0/3", "deleted"]);
+    reset();
+    await expect(
+      orchestrate(
+        { ...baseConfig, snapshotId: undefined, sandboxCount: 3, spawnRate: 0 },
+        () => {},
+      ),
+    ).rejects.toThrow();
+    expect(h.saved).toEqual(["0/3", "deleted"]);
   });
 });
 

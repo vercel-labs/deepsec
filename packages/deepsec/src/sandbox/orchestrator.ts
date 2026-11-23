@@ -12,7 +12,7 @@ import {
 } from "@deepsec/core";
 import { Sandbox } from "@vercel/sandbox";
 import { downloadResults } from "./download.js";
-import { partitionFiles } from "./partitioner.js";
+import { hasLiveLock, partitionFiles } from "./partitioner.js";
 import {
   createBootstrapSnapshot,
   DEEPSEC_DIR,
@@ -21,7 +21,7 @@ import {
   TARGET_DIR,
   type UploadBundle,
 } from "./setup.js";
-import { untrackSandbox } from "./shutdown.js";
+import { addShutdownCleanup, untrackSandbox } from "./shutdown.js";
 import {
   deleteRunState,
   generateRunId,
@@ -375,6 +375,46 @@ interface BootstrapAndSpawnResult {
   mode: DeepsecMode;
 }
 
+const PARTITION_LOCK_STALE_MS = 2 * 60 * 1000;
+const PARTITION_LOCK_WAIT_MS = 5 * 60 * 1000;
+
+/**
+ * Run `fn` while holding `sandbox-runs/.partition.lock` (created with
+ * O_EXCL). A lock older than PARTITION_LOCK_STALE_MS is treated as left
+ * behind by a crashed process; partitioning itself takes seconds.
+ */
+export async function withPartitionLock<T>(projectId: string, fn: () => T): Promise<T> {
+  const dir = path.join(dataDir(projectId), "sandbox-runs");
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = path.join(dir, ".partition.lock");
+  const deadline = Date.now() + PARTITION_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, "wx"));
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > PARTITION_LOCK_STALE_MS) {
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch {
+        continue; // the holder released it between our calls
+      }
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${lock}`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.unlinkSync(lock);
+    } catch {}
+  }
+}
+
 async function bootstrapAndSpawn(
   config: SandboxConfig,
   onLog: (msg: string) => void,
@@ -387,14 +427,22 @@ async function bootstrapAndSpawn(
 
   if (usePartitioning) {
     onLog("Partitioning files across sandboxes...");
-    const result = partitionFiles(config.projectId, config.sandboxCount, {
-      command: config.command,
-      limit: config.limit,
-      filter: config.filter,
-      reinvestigate: config.reinvestigate,
-      force: config.force,
-      minSeverity: config.minSeverity,
-      agentType: config.agentType,
+    // Partition and reserve under one lock, so two runs starting at the same
+    // time can't both select the same files before either has reserved them.
+    const result = await withPartitionLock(config.projectId, () => {
+      const r = partitionFiles(config.projectId, config.sandboxCount, {
+        command: config.command,
+        limit: config.limit,
+        filter: config.filter,
+        reinvestigate: config.reinvestigate,
+        force: config.force,
+        minSeverity: config.minSeverity,
+        agentType: config.agentType,
+      });
+      // Reserve the files before the (slow) snapshot build, so a concurrent
+      // run can't partition them while this one bootstraps or ramps up.
+      if (r.totalFiles > 0) onPartitioned?.(r.partitions);
+      return r;
     });
     partitions = result.partitions;
     totalFiles = result.totalFiles;
@@ -407,9 +455,6 @@ async function bootstrapAndSpawn(
     onLog(
       `${totalFiles} files partitioned across ${partitions.length} sandbox(es): ${partitions.map((p) => p.length).join(", ")} files each`,
     );
-    // Reserve the files before the (slow) snapshot build, so a concurrent
-    // run can't partition them while this one bootstraps or ramps up.
-    onPartitioned?.(partitions);
   } else {
     if (config.sandboxCount > 1) {
       onLog(`Warning: '${config.command}' doesn't support file partitioning. Using 1 sandbox.`);
@@ -624,6 +669,16 @@ function createRunStateTracker(config: SandboxConfig, runId: string, onLog: (msg
       state.sandboxes = state.sandboxes.filter((e) => e.index !== index);
       write();
     },
+    /**
+     * Give back partitions that won't be dispatched: bootstrap failed or
+     * the CLI is shutting down. Dispatched workers stay, so `collect` can
+     * still reach them or release their files.
+     */
+    release() {
+      if ((state.reserved?.length ?? 0) === 0) return;
+      state.reserved = [];
+      write();
+    },
   };
 }
 
@@ -667,34 +722,42 @@ async function dispatchOnSandbox(
 export async function launch(config: SandboxConfig, onLog: (msg: string) => void): Promise<string> {
   const runId = generateRunId();
   const tracker = createRunStateTracker(config, runId, onLog);
-  const { spawns, mode } = await bootstrapAndSpawn(config, onLog, (partitions) =>
-    tracker.reserve(partitions),
-  );
-  const instances = await Promise.all(spawns);
-
-  if (instances.length === 0) {
-    throw new Error("No sandboxes to launch (no files to process?)");
-  }
-
-  onLog(`Run ${runId}: dispatching commands...`);
-
-  // Each dispatch is saved as it happens, so a crash partway through still
-  // leaves every started worker recoverable by `collect`.
-  for (const inst of instances) {
-    let cmdId: string | null = null;
-    try {
-      cmdId = await dispatchOnSandbox(inst, config, mode, onLog);
-    } catch (err) {
-      onLog(
-        `[sandbox-${inst.index}] Dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+  const removeCleanup = addShutdownCleanup(() => tracker.release());
+  try {
+    const { spawns, mode } = await bootstrapAndSpawn(config, onLog, (partitions) =>
+      tracker.reserve(partitions),
+    );
+    if (spawns.length === 0) {
+      throw new Error("No sandboxes to launch (no files to process?)");
     }
-    if (cmdId) {
-      inst.cmdId = cmdId;
-      tracker.dispatched(inst);
-    } else {
-      tracker.abandon(inst.index);
-    }
+    onLog(`Run ${runId}: dispatching commands as sandboxes become ready...`);
+    // Each worker is dispatched and saved as soon as its sandbox is ready,
+    // so a crash during a staggered ramp still leaves every started worker
+    // recoverable by `collect`.
+    await Promise.all(
+      spawns.map(async (spawn) => {
+        const inst = await spawn;
+        let cmdId: string | null = null;
+        try {
+          cmdId = await dispatchOnSandbox(inst, config, mode, onLog);
+        } catch (err) {
+          onLog(
+            `[sandbox-${inst.index}] Dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        if (cmdId) {
+          inst.cmdId = cmdId;
+          tracker.dispatched(inst);
+        } else {
+          tracker.abandon(inst.index);
+        }
+      }),
+    );
+  } catch (err) {
+    tracker.release();
+    throw err;
+  } finally {
+    removeCleanup();
   }
 
   const launched = tracker.state.sandboxes.length;
@@ -767,9 +830,11 @@ export async function checkStatus(
  * used to stop the sandbox mid-run).
  */
 /**
- * The Sandbox API answers 410 (or 404 once it's cleaned up) when a sandbox
- * is gone: timed out or stopped. Nothing on it can be reached again, so
- * retrying is pointless and "leave it for collect" is wrong.
+ * The Sandbox API answers 410 when a sandbox is gone: timed out or stopped.
+ * Nothing on it can be reached again, so retrying is pointless and "leave
+ * it for collect" is wrong. A 404 is ambiguous here (it can come from a
+ * command or file lookup on a live sandbox); `collect` treats a 404 from
+ * `Sandbox.get` itself as gone.
  *
  * Only structured SDK errors count (`APIError.response.status`, its JSON
  * error code, or a `StreamError` code), following `cause` chains. Message
@@ -777,8 +842,18 @@ export async function checkStatus(
  * inside the sandbox, which must not be able to make the host abandon a
  * live sandbox.
  */
-const GONE_STATUSES = new Set([404, 410]);
 const GONE_CODES = new Set(["sandbox_stopped", "sandbox_not_found"]);
+
+/** HTTP status of a structured SDK error (`APIError`), following `cause`. */
+function sdkStatus(err: unknown): number | undefined {
+  let e: unknown = err;
+  for (let depth = 0; depth < 5 && e !== null && typeof e === "object"; depth++) {
+    const status = (e as { response?: { status?: unknown } }).response?.status;
+    if (typeof status === "number") return status;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
 
 export function isSandboxGone(err: unknown): boolean {
   let e: unknown = err;
@@ -790,8 +865,7 @@ export function isSandboxGone(err: unknown): boolean {
       json?: { error?: { code?: unknown } };
       cause?: unknown;
     };
-    const status = x.response?.status;
-    if (typeof status === "number" && GONE_STATUSES.has(status)) return true;
+    if (x.response?.status === 410) return true;
     const jsonCode = x.json?.error?.code;
     if (typeof jsonCode === "string" && GONE_CODES.has(jsonCode)) return true;
     if (x.name === "StreamError" && typeof x.code === "string" && GONE_CODES.has(x.code))
@@ -865,8 +939,10 @@ export async function collect(
   };
 
   const resultPromises = state.sandboxes.map(async (entry): Promise<SandboxResult> => {
+    let lookedUp = false;
     try {
       const sandbox = await Sandbox.get({ sandboxId: entry.sandboxId });
+      lookedUp = true;
       const cmd = await sandbox.getCommand(entry.cmdId);
 
       if (cmd.exitCode === null) {
@@ -991,7 +1067,8 @@ export async function collect(
       };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      if (isSandboxGone(err)) {
+      // Sandbox.get answering 404 means the sandbox no longer exists.
+      if (isSandboxGone(err) || (!lookedUp && sdkStatus(err) === 404)) {
         // Nothing left to collect; give its unfinished files back.
         onLog(`[sandbox-${entry.index}] Sandbox is gone (timed out or stopped): ${errMsg}`);
         releaseUnfinished(entry, projectId, onLog);
@@ -1050,8 +1127,13 @@ export function releaseUnfinished(
     try {
       const record = readFileRecord(projectId, filePath);
       if (!record || record.status !== "processing") continue;
-      if (inst.workerRunId && record.lockedByRunId && record.lockedByRunId !== inst.workerRunId)
+      if (inst.workerRunId) {
+        if (record.lockedByRunId && record.lockedByRunId !== inst.workerRunId) continue;
+      } else if (hasLiveLock(projectId, record)) {
+        // Run state from an older version: without the worker's run ID,
+        // leave any lock that may belong to a live run.
         continue;
+      }
       record.status = "error";
       record.lockedByRunId = undefined;
       record.lockedAt = undefined;
@@ -1079,6 +1161,23 @@ export async function orchestrate(
   // once its results are safely downloaded. A clean run ends with no state.
   const runId = generateRunId();
   const tracker = createRunStateTracker(config, runId, onLog);
+  const removeCleanup = addShutdownCleanup(() => tracker.release());
+  try {
+    return await runAttached(config, onLog, runId, tracker);
+  } catch (err) {
+    tracker.release();
+    throw err;
+  } finally {
+    removeCleanup();
+  }
+}
+
+async function runAttached(
+  config: SandboxConfig,
+  onLog: (msg: string) => void,
+  runId: string,
+  tracker: ReturnType<typeof createRunStateTracker>,
+): Promise<SandboxResult[]> {
   const { spawns, mode } = await bootstrapAndSpawn(config, onLog, (partitions) =>
     tracker.reserve(partitions),
   );

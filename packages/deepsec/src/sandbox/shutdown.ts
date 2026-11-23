@@ -7,8 +7,21 @@ import type { Sandbox } from "@vercel/sandbox";
  */
 
 const live = new Set<Sandbox>();
+const cleanups = new Set<() => void>();
 let installed = false;
 let shuttingDown = false;
+
+/**
+ * Run `fn` (synchronously) if the CLI is interrupted, before exiting.
+ * Returns a function that unregisters it.
+ */
+export function addShutdownCleanup(fn: () => void): () => void {
+  installHandlers();
+  cleanups.add(fn);
+  return () => {
+    cleanups.delete(fn);
+  };
+}
 
 export function trackSandbox(sandbox: Sandbox): void {
   installHandlers();
@@ -30,6 +43,12 @@ function installHandlers(): void {
       process.exit(130);
     }
     shuttingDown = true;
+    for (const fn of cleanups) {
+      try {
+        fn();
+      } catch {}
+    }
+    cleanups.clear();
     const count = live.size;
     process.stderr.write(
       `\nReceived ${signal}. Stopping ${count} sandbox${count === 1 ? "" : "es"}...\n`,

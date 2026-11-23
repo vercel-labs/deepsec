@@ -96,6 +96,21 @@ describe("partitionFiles skips files another run is still working on", () => {
     expect(partitions.flat()).toEqual(["a.ts"]);
   });
 
+  it("ignores a lock timestamp far in the future", () => {
+    meta("run-live", "running");
+    const r = rec("future.ts", "processing", { run: "run-live", ageMs: -60 * 60_000 });
+    expect(hasLiveLock(P, r)).toBe(false);
+    const skewed = rec("skewed.ts", "processing", { run: "run-live", ageMs: -60_000 });
+    expect(hasLiveLock(P, skewed)).toBe(true);
+  });
+
+  it("counts every record for scan, which doesn't claim files", () => {
+    meta("run-live", "running");
+    rec("a.ts", "analyzed");
+    rec("b.ts", "processing", { run: "run-live", ageMs: 60_000 });
+    expect(partitionFiles(P, 1, { command: "scan" }).totalFiles).toBe(2);
+  });
+
   it("treats a dead local PID as reclaimable", () => {
     meta("run-local", "running", os.hostname());
     // pid 23 belongs to the test fixture's meta; use one that can't exist.

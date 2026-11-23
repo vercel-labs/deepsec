@@ -17,9 +17,15 @@ vi.mock("@vercel/sandbox", async (orig) => {
             message: "Status code 410 is not ok",
           });
         if (sandboxId === "unreachable") throw new Error("fetch failed");
+        if (sandboxId === "notfound")
+          throw new actual.APIError(new Response(null, { status: 404 }), { message: "not found" });
         return {
           sandboxId,
-          getCommand: async () => ({ exitCode: exitCodes[sandboxId], async *logs() {} }),
+          getCommand: async () => {
+            if (sandboxId === "cmd404")
+              throw new actual.APIError(new Response(null, { status: 404 }), { message: "no cmd" });
+            return { exitCode: exitCodes[sandboxId], async *logs() {} };
+          },
           stop: async () => {
             h.stops.push(sandboxId);
           },
@@ -58,7 +64,7 @@ describe("collect", () => {
 
   it("keeps only the sandboxes a later collect can still act on", async () => {
     const runId = "sbx-20261122000000-0123456789abcdef";
-    const ids = ["ok", "failed", "dlfail", "gone", "unreachable"];
+    const ids = ["ok", "failed", "dlfail", "gone", "unreachable", "notfound", "cmd404"];
     saveRunState({
       runId,
       projectId: "p",
@@ -77,13 +83,19 @@ describe("collect", () => {
     const logs: string[] = [];
     const results = await collect("p", runId, (m) => logs.push(m));
 
-    expect(results.map((r) => r.success)).toEqual([true, false, false, false, false]);
+    expect(results.map((r) => r.success)).toEqual([true, false, false, false, false, false, false]);
     // Finished and salvaged sandboxes were stopped; the one whose download
     // failed is left running for another try.
     expect(h.stops.sort()).toEqual(["failed", "ok"]);
     const left = loadRunState("p", runId);
-    expect(left.sandboxes.map((e) => e.sandboxId).sort()).toEqual(["dlfail", "unreachable"]);
+    // A 404 from Sandbox.get means the sandbox no longer exists; a 404 from
+    // a command lookup on a sandbox that does exist is kept for another try.
+    expect(left.sandboxes.map((e) => e.sandboxId).sort()).toEqual([
+      "cmd404",
+      "dlfail",
+      "unreachable",
+    ]);
     expect(left.reserved).toEqual([]);
-    expect(logs.at(-1)).toMatch(/keeping 2 in the run state/);
+    expect(logs.at(-1)).toMatch(/keeping 3 in the run state/);
   });
 });

@@ -20,6 +20,7 @@ const SEVERITY_ORDER: Record<string, number> = {
  * can legitimately hold files for up to its 5h timeout.
  */
 const SANDBOX_STALE_LOCK_MS = 6 * 60 * 60 * 1000;
+const MAX_LOCK_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 /**
  * True when a `processing` record is still held by a run that may finish
@@ -46,6 +47,9 @@ export function hasLiveLock(
     return false;
   const lockedAt = r.lockedAt ? Date.parse(r.lockedAt) : Number.NaN;
   if (!Number.isFinite(lockedAt)) return false;
+  // Lock timestamps come from worker-written records. One far in the future
+  // (clock skew or tampering) would otherwise hold the file indefinitely.
+  if (lockedAt > now + MAX_LOCK_CLOCK_SKEW_MS) return false;
   return now - lockedAt < SANDBOX_STALE_LOCK_MS;
 }
 
@@ -114,10 +118,12 @@ export function partitionFiles(
   const now = Date.now();
   const command = opts.command ?? "process";
   // Files another run is still working on, or has assigned to its workers,
-  // are never handed out again.
-  const held = filesHeldByActiveRuns(projectId, command, now);
+  // are never handed out again. Only partitioned commands claim files; other
+  // commands (scan) count every record.
+  const claims = command === "process" || command === "revalidate";
+  const held = claims ? filesHeldByActiveRuns(projectId, command, now) : new Set<string>();
   const allRecords = loadAllFileRecords(projectId).filter(
-    (r) => !held.has(r.filePath) && !hasLiveLock(projectId, r, metaCache, now),
+    (r) => !claims || (!held.has(r.filePath) && !hasLiveLock(projectId, r, metaCache, now)),
   );
   const agentType = opts.agentType ?? "claude-agent-sdk";
 

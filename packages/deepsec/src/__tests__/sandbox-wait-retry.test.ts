@@ -69,7 +69,8 @@ describe("waitForCommand", () => {
 describe("isSandboxGone", () => {
   it("recognizes the structured errors the SDK throws for a vanished sandbox", () => {
     expect(isSandboxGone(apiError(410))).toBe(true);
-    expect(isSandboxGone(apiError(404))).toBe(true);
+    // A 404 can come from a command or file lookup on a live sandbox.
+    expect(isSandboxGone(apiError(404))).toBe(false);
     expect(isSandboxGone(apiError(400, { error: { code: "sandbox_stopped" } }))).toBe(true);
     expect(isSandboxGone(new StreamError("sandbox_stopped", "Sandbox stopped", "sbx_1"))).toBe(
       true,

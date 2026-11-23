@@ -206,7 +206,8 @@ its share of the minute, so a large run doesn't open every Sandbox and model
 session at the same moment. Each worker starts processing as soon as its
 Sandbox is ready; 100 Sandboxes take about 10 minutes to all be running. Set
 `--spawn-rate <n>` to change the rate, or `--spawn-rate 0` to start every
-Sandbox at once.
+Sandbox at once. With `sandbox-all`, the rate applies across all projects
+together.
 
 A run reserves its files as soon as it partitions them, before its Sandboxes
 start, and another run of the same command doesn't receive them. You can start

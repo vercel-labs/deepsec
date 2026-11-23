@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { type FileRecord, readFileRecord, writeFileRecord } from "@deepsec/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { releaseUnfinished, streamLogsCapped } from "../sandbox/orchestrator.js";
+import { releaseUnfinished, streamLogsCapped, withPartitionLock } from "../sandbox/orchestrator.js";
 
 /** A command whose log stream replays from the start and closes after `cuts[i]` chunks. */
 function replayingCommand(chunks: string[], cuts: number[]) {
@@ -183,5 +183,83 @@ describe("releaseUnfinished", () => {
     const theirs = readFileRecord("p", "theirs.ts");
     expect(theirs?.status).toBe("processing");
     expect(theirs?.lockedByRunId).toBe("other-run");
+  });
+
+  it("leaves live locks alone for run states from older versions", () => {
+    // Without the worker's run ID, only locks that can't belong to a live
+    // run are released.
+    fs.mkdirSync(path.join(tmp, "p", "runs"), { recursive: true });
+    const meta = (runId: string, phase: string) =>
+      fs.writeFileSync(
+        path.join(tmp, "p", "runs", `${runId}.json`),
+        JSON.stringify({
+          runId,
+          projectId: "p",
+          rootPath: "/vercel/sandbox/target",
+          createdAt: new Date().toISOString(),
+          type: "process",
+          phase,
+          pid: 23,
+          hostname: "other-host",
+          stats: {},
+        }),
+      );
+    meta("live-run", "running");
+    meta("done-run", "done");
+    const now = new Date().toISOString();
+    writeFileRecord({
+      ...record("live.ts", "processing"),
+      lockedByRunId: "live-run",
+      lockedAt: now,
+    });
+    writeFileRecord({
+      ...record("done.ts", "processing"),
+      lockedByRunId: "done-run",
+      lockedAt: now,
+    });
+    releaseUnfinished({ manifest: ["live.ts", "done.ts"], index: 0 }, "p", () => {});
+    expect(readFileRecord("p", "live.ts")?.status).toBe("processing");
+    expect(readFileRecord("p", "done.ts")?.status).toBe("error");
+  });
+});
+
+describe("withPartitionLock", () => {
+  let prev: string | undefined;
+  let tmp: string;
+  let lock: string;
+
+  beforeEach(() => {
+    prev = process.env.DEEPSEC_DATA_ROOT;
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-plock-"));
+    process.env.DEEPSEC_DATA_ROOT = tmp;
+    fs.mkdirSync(path.join(tmp, "p", "sandbox-runs"), { recursive: true });
+    lock = path.join(tmp, "p", "sandbox-runs", ".partition.lock");
+  });
+
+  afterEach(() => {
+    if (prev === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+    else process.env.DEEPSEC_DATA_ROOT = prev;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("waits for the holder to release the lock, then removes its own", async () => {
+    fs.writeFileSync(lock, "");
+    let ran = false;
+    const pending = withPartitionLock("p", () => {
+      ran = true;
+      return 7;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(ran).toBe(false);
+    fs.unlinkSync(lock);
+    await expect(pending).resolves.toBe(7);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it("takes over a lock left behind by a crashed process", async () => {
+    fs.writeFileSync(lock, "");
+    const old = new Date(Date.now() - 3 * 60_000);
+    fs.utimesSync(lock, old, old);
+    await expect(withPartitionLock("p", () => "ok")).resolves.toBe("ok");
   });
 });
