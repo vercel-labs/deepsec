@@ -149,7 +149,8 @@ function cyberAccessProgramError(auth: CodexAuthDecision): string {
     return (
       "--cyber-access-program only works with Codex subscription auth. " +
       "The saved local-subscription route requires a Codex login, but no Codex login was found " +
-      "(expected auth.json in CODEX_HOME or ~/.codex). Run `codex login` and retry."
+      "(expected auth.json in CODEX_HOME, $HOME/.codex, or %USERPROFILE%/.codex). " +
+      "Run `codex login` and retry."
     );
   }
   if (auth.hasGatewayApiKey) {

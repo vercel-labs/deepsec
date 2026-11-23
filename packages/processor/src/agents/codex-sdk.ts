@@ -111,16 +111,35 @@ function makeCodexHome(): string {
  * accept a login the backend never finds, and the run would fail mid-batch
  * instead of before scanning.
  *
- * Honors `CODEX_HOME` for users who run codex with a non-default data dir,
- * then `$HOME` / `%USERPROFILE%`. The OS home is only a last resort: HOME
- * can diverge from it (sudo -E, systemd/launchd units, CI steps that
- * override HOME), and the backend must follow the same env precedence.
+ * Probes every location the codex CLI can be pointed at, in order:
+ * `CODEX_HOME` (an explicit data dir), `$HOME/.codex`, `%USERPROFILE%/.codex`,
+ * then `os.homedir()/.codex`. HOME and USERPROFILE can disagree — Git/MSYS
+ * shells rewrite HOME while the codex CLI still writes to the real Windows
+ * profile — so neither may shadow the other; the first candidate that
+ * actually holds `auth.json` wins. Duplicate candidates (HOME ==
+ * USERPROFILE == OS home) are probed once. The OS home stays last: HOME can
+ * diverge from it (sudo -E, systemd/launchd units, CI steps that override
+ * HOME), but it is still worth checking when neither env var is set.
  */
 export function resolveCodexLoginHome(env: NodeJS.ProcessEnv = process.env): string | null {
   const candidates: string[] = [];
-  if (env.CODEX_HOME) candidates.push(env.CODEX_HOME);
-  const home = env.HOME || env.USERPROFILE || os.homedir();
-  candidates.push(path.join(home, ".codex"));
+  const seen = new Set<string>();
+  const addCandidate = (dir: string | undefined): void => {
+    if (!dir) return;
+    const normalized = path.normalize(dir);
+    const key = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(dir);
+  };
+  addCandidate(env.CODEX_HOME);
+  addCandidate(env.HOME ? path.join(env.HOME, ".codex") : undefined);
+  addCandidate(env.USERPROFILE ? path.join(env.USERPROFILE, ".codex") : undefined);
+  try {
+    addCandidate(path.join(os.homedir(), ".codex"));
+  } catch {
+    // No OS home available (unusual containers); the env candidates remain.
+  }
   for (const dir of candidates) {
     if (fs.existsSync(path.join(dir, "auth.json"))) return dir;
   }
@@ -418,7 +437,8 @@ export function buildCodexInvocation(
   if (authMode === "unavailable") {
     throw new Error(
       "A local-subscription route is selected, but no Codex login was found " +
-        "(expected auth.json in CODEX_HOME or ~/.codex). Run `codex login`, or rerun with " +
+        "(expected auth.json in CODEX_HOME, $HOME/.codex, or %USERPROFILE%/.codex). " +
+        "Run `codex login`, or rerun with " +
         "`--model-auth gateway` to use a gateway credential for this run.",
     );
   }

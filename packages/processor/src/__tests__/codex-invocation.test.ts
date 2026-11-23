@@ -243,4 +243,34 @@ describe("resolveCodexLoginHome", () => {
 
     expect(resolveCodexLoginHome()).toBeNull();
   });
+
+  // Windows Git/MSYS shells can set HOME to a path that is not the real
+  // profile while Codex still stores its login under %USERPROFILE%\.codex.
+  // Collapsing HOME || USERPROFILE into one candidate misses that login and
+  // makes local-route runs fail closed with "run codex login".
+  it("falls back to USERPROFILE/.codex when HOME is set but has no login", () => {
+    const emptyHome = tempUserHome(false);
+    const userProfile = tempUserHome(true);
+    process.env.HOME = emptyHome;
+    process.env.USERPROFILE = userProfile;
+
+    expect(resolveCodexLoginHome()).toBe(path.join(userProfile, ".codex"));
+  });
+
+  it("keeps HOME/.codex ahead of USERPROFILE/.codex when both are logged in", () => {
+    const home = tempUserHome(true);
+    const userProfile = tempUserHome(true);
+    process.env.HOME = home;
+    process.env.USERPROFILE = userProfile;
+
+    expect(resolveCodexLoginHome()).toBe(path.join(home, ".codex"));
+  });
+
+  it("falls through to a logged-in home when CODEX_HOME has no auth.json", () => {
+    process.env.CODEX_HOME = tempCodexHome(false);
+    const home = tempUserHome(true);
+    process.env.HOME = home;
+
+    expect(resolveCodexLoginHome()).toBe(path.join(home, ".codex"));
+  });
 });

@@ -70,9 +70,12 @@ route in each fresh process. Explicit per-command Pi provider flags take
 precedence. `process` and `revalidate` also accept a one-run
 `--model-auth gateway|direct|custom|local` override (for example to opt out
 of a saved `local` route without editing this file); `deepsec setup
---model-auth …` changes and verifies the persisted route. A one-run custom
-route is Pi-only and needs the same provider, base URL, API-key environment
-variable, and credential header flags as setup:
+--model-auth …` changes and verifies the persisted route. `sandbox` and
+`sandbox-all` accept the same one-run override: the orchestrator resolves and
+brokers the chosen route before provisioning workers, and rejects `local`
+because workers have no machine-wide login. A one-run custom route is Pi-only
+and needs the same provider, base URL, API-key environment variable, and
+credential header flags as setup:
 
 ```bash
 MARTIAN_KEY=... pnpm deepsec process --project-id my-app \

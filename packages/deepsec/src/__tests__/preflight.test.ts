@@ -282,6 +282,31 @@ describe("assertAgentCredential", () => {
     }
   });
 
+  it("accepts a Codex login under USERPROFILE when HOME points elsewhere", () => {
+    // Windows shells can set HOME (Git/MSYS) away from the real profile.
+    // Preflight and the backend must probe both locations, or a valid
+    // %USERPROFILE%\.codex login is missed and the local route fails closed.
+    const bareHome = mkdtempSync(join(tmpdir(), "deepsec-bare-home-"));
+    const userHome = mkdtempSync(join(tmpdir(), "deepsec-user-home-"));
+    try {
+      mkdirSync(join(userHome, ".codex"), { recursive: true });
+      writeFileSync(join(userHome, ".codex", "auth.json"), "{}");
+      delete process.env.CODEX_HOME;
+      process.env.HOME = bareHome;
+      process.env.USERPROFILE = userHome;
+
+      expect(() => assertAgentCredential("codex")).not.toThrow();
+      expect(resolveCodexAuth({}).subscriptionHome).toBe(join(userHome, ".codex"));
+
+      setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
+      expect(() => assertAgentCredential("codex")).not.toThrow();
+      expect(resolveCodexAuth({ modelAuth: "local" }).mode).toBe("subscription");
+    } finally {
+      rmSync(bareHome, { recursive: true, force: true });
+      rmSync(userHome, { recursive: true, force: true });
+    }
+  });
+
   it("accepts a per-run gateway override on a saved local route", () => {
     setLoadedConfig({ projects: [], ai: { mode: "local", provider: "local" } });
     process.env.AI_GATEWAY_API_KEY = "vck_gateway";

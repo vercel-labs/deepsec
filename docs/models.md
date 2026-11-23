@@ -57,10 +57,13 @@ missing, the run fails closed instead of using an ambient gateway key, and
 `process`/`revalidate` report that at preflight. Pass `--model-auth` to
 `process` or `revalidate` to use a different credential route for one run
 (for example `--model-auth gateway` to use the gateway credential instead of
-the saved local route). Sandbox commands are the exception: they must broker
-a real token, so they still require `AI_GATEWAY_API_KEY` (or an equivalent
-key). A one-run custom override is Pi-only and needs the same provider, base
-URL, API-key environment variable, and credential header flags as setup.
+the saved local route). `sandbox` and `sandbox-all` accept the same override:
+they resolve and broker the chosen route on the orchestrator, so workers
+still see only a placeholder credential. `--model-auth local` is rejected
+there — Sandbox workers have no machine-wide login, so subscription auth only
+works when the command runs locally. A one-run custom override is Pi-only and
+needs the same provider, base URL, API-key environment variable, and
+credential header flags as setup.
 
 ## CLI selection
 
