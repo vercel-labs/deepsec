@@ -781,6 +781,39 @@ export async function process(params: {
       }
     }
 
+    // The first batch to hit quota exhaustion records it and aborts the
+    // run; later ones are cancelled by the abort.
+    function noteQuotaExhausted(err: QuotaExhaustedError): void {
+      if (quotaExhausted) return;
+      quotaExhausted = { source: err.source, rawMessage: err.rawMessage };
+      quotaAbort.abort(err);
+    }
+
+    function checkCostLimit(): void {
+      if (
+        params.maxCostUsd !== undefined &&
+        totalCostUsd >= params.maxCostUsd &&
+        !costLimitReached
+      ) {
+        costLimitReached = { limitUsd: params.maxCostUsd, actualUsd: totalCostUsd };
+        quotaAbort.abort(new Error(`Cost limit $${params.maxCostUsd.toFixed(2)} reached`));
+      }
+    }
+
+    // Content-filter retries can run longer than the processor's 1h stale
+    // lock window. Renew the lock on files still waiting in this batch, but
+    // only where this run still holds it on disk.
+    function refreshLocks(records: FileRecord[]): void {
+      const now = new Date().toISOString();
+      for (const record of records) {
+        if (record.status !== "processing") continue;
+        const onDisk = readFileRecord(projectId, record.filePath);
+        if (onDisk?.status !== "processing" || onDisk.lockedByRunId !== runId) continue;
+        record.lockedAt = now;
+        writeFileRecord(record);
+      }
+    }
+
     // A content-filter block on a multi-file batch: retry each file on its
     // own after the brake's pause, so one file's content can't fail the
     // others. Files still blocked after CONTENT_FILTER_FILE_ATTEMPTS become
@@ -798,13 +831,16 @@ export async function process(params: {
         for (let attempt = 1; attempt <= CONTENT_FILTER_FILE_ATTEMPTS && !done; attempt++) {
           await contentFilterBrake.wait(quotaAbort.signal);
           if (quotaAbort.signal.aborted) break;
+          refreshLocks(batch);
           try {
             const r = await runInvestigation([file], i);
             analyses += r.analyses;
             findings += r.findings;
             done = true;
+            checkCostLimit();
           } catch (err) {
             if (!(err instanceof ContentFilteredError)) {
+              if (err instanceof QuotaExhaustedError) noteQuotaExhausted(err);
               unresolved++;
               markError([file]);
               emitProgress({
@@ -848,12 +884,15 @@ export async function process(params: {
           markError(chunk);
           continue;
         }
+        refreshLocks(batch);
         try {
           const r = await runInvestigation(chunk, i);
           total.analyses += r.analyses;
           total.findings += r.findings;
+          checkCostLimit();
         } catch (err) {
           if (!(err instanceof ContentFilteredError)) {
+            if (err instanceof QuotaExhaustedError) noteQuotaExhausted(err);
             total.unresolved += chunk.length;
             markError(chunk);
             emitProgress({
@@ -936,14 +975,7 @@ export async function process(params: {
 
         batchesInFlight--;
         batchesCompleted++;
-        if (
-          params.maxCostUsd !== undefined &&
-          totalCostUsd >= params.maxCostUsd &&
-          !costLimitReached
-        ) {
-          costLimitReached = { limitUsd: params.maxCostUsd, actualUsd: totalCostUsd };
-          quotaAbort.abort(new Error(`Cost limit $${params.maxCostUsd.toFixed(2)} reached`));
-        }
+        checkCostLimit();
         emitProgress({
           type: "batch_complete",
           message: `Batch ${i + 1}/${batches.length} complete: ${counts.analyses} analyses, ${counts.findings} findings (${batchesInFlight} in flight, ${batchesCompleted}/${batches.length} done)`,
@@ -959,10 +991,7 @@ export async function process(params: {
         // (because they were already in-flight against the same empty
         // credential) get their classifier silently dropped — no point
         // logging "quota exhausted" N times. The abort below cancels them.
-        if (err instanceof QuotaExhaustedError && !quotaExhausted) {
-          quotaExhausted = { source: err.source, rawMessage: err.rawMessage };
-          quotaAbort.abort(err);
-        }
+        if (err instanceof QuotaExhaustedError) noteQuotaExhausted(err);
         for (const record of batch) {
           record.status = "error";
           record.lockedByRunId = undefined;

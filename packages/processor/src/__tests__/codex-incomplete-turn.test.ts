@@ -167,6 +167,14 @@ describe("codex investigate with an incomplete turn", () => {
     expect(scripts).toHaveLength(0);
   });
 
+  it("keeps a completed turn's results when an earlier stream error mentioned the filter", async () => {
+    const turn = completedTurn();
+    turn.splice(2, 0, { type: "error", message: FLAGGED });
+    scripts.push(turn);
+    const { output } = await drain(investigate());
+    expect(output.results).toHaveLength(2);
+  });
+
   it("accepts a completed turn on the first attempt", async () => {
     scripts.push(completedTurn());
     const { output } = await drain(investigate());

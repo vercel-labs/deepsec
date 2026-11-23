@@ -921,8 +921,13 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         }
         // A provider content filter ended the turn. Retrying the same batch
         // right away tends to hit the same filter; the processor pauses and
-        // retries the files in smaller groups instead.
-        const filterBlock = [turnFailure, lastError].find((m) => isContentFilterBlock(m));
+        // retries the files in smaller groups instead. A turn that completed
+        // without turn.failed keeps its results even if an earlier stream
+        // error mentioned the filter.
+        const filterBlock =
+          turnCompleted && !turnFailure
+            ? undefined
+            : [turnFailure, lastError].find((m) => isContentFilterBlock(m));
         if (filterBlock) throw new ContentFilteredError(filterBlock);
         incompleteTurn = codexIncompleteTurnReason({
           agentMessages: agentMessages.length,
@@ -1271,7 +1276,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         }
         // Same as investigate(): a content-filter block goes back to the
         // processor, which pauses and retries the files one at a time.
-        const revalFilterBlock = [turnFailure, lastError].find((m) => isContentFilterBlock(m));
+        const revalFilterBlock =
+          turnCompleted && !turnFailure
+            ? undefined
+            : [turnFailure, lastError].find((m) => isContentFilterBlock(m));
         if (revalFilterBlock) throw new ContentFilteredError(revalFilterBlock);
         incompleteTurn = codexIncompleteTurnReason({
           agentMessages: agentMessages.length,

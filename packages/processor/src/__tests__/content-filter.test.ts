@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   ContentFilterBrake,
   ContentFilteredError,
   isContentFilterBlock,
+  QuotaExhaustedError,
 } from "../agents/shared.js";
 import type { InvestigateParams } from "../agents/types.js";
 import { process as processProject } from "../index.js";
@@ -231,6 +233,75 @@ describe("process() with provider content-filter blocks", () => {
     expect(fx.read("b.ts").status).toBe("error");
   });
 
+  it("stops the run when quota runs out during content-filter retries", async () => {
+    const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
+    const stub = useStub(fx, (params) => {
+      if (params.batch.length > 1) throw new ContentFilteredError(FLAGGED);
+      if (params.batch[0].filePath === "b.ts")
+        throw new QuotaExhaustedError("anthropic-credits", "credit balance is too low");
+      return okResult(params);
+    });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+    expect(result.quotaExhausted?.source).toBe("anthropic-credits");
+    expect(fx.read("a.ts").status).toBe("analyzed");
+    expect(fx.read("b.ts").status).toBe("error");
+    // c.ts is never sent against the exhausted credential.
+    expect(
+      stub.calls.investigateCalls.map((c) => c.batch.map((r) => r.filePath).join(",")),
+    ).toEqual(["a.ts,b.ts,c.ts", "a.ts", "b.ts"]);
+    expect(fx.read("c.ts").status).not.toBe("analyzed");
+  });
+
+  it("checks the cost limit between content-filter retries", async () => {
+    const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
+    const stub = useStub(fx, (params) => {
+      if (params.batch.length > 1) throw new ContentFilteredError(FLAGGED);
+      return { ...okResult(params), meta: { durationMs: 1, costUsd: 1 } };
+    });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      maxCostUsd: 1,
+    });
+    expect(result.costLimitReached?.limitUsd).toBe(1);
+    expect(stub.calls.investigateCalls).toHaveLength(2);
+    expect(fx.read("a.ts").status).toBe("analyzed");
+  });
+
+  it("renews this run's locks during long retries, but not another run's", async () => {
+    process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = "20";
+    const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
+    const seen: Record<string, string[]> = { "c.ts": [] };
+    let bLockAtRetry: string | undefined;
+    useStub(fx, (params) => {
+      seen["c.ts"].push(fx.read("c.ts").lockedAt ?? "");
+      if (params.batch.length === 1 && params.batch[0].filePath === "b.ts")
+        bLockAtRetry = fx.read("b.ts").lockedAt;
+      if (params.batch.length > 1) {
+        // Another run takes over b.ts while this batch is blocked.
+        const b = fx.read("b.ts");
+        b.lockedByRunId = "other-run";
+        b.lockedAt = "2000-01-01T00:00:00.000Z";
+        fs.writeFileSync(
+          path.join(process.env.DEEPSEC_DATA_ROOT ?? "", fx.projectId, "files", "b.ts.json"),
+          JSON.stringify(b),
+        );
+        throw new ContentFilteredError(FLAGGED);
+      }
+      return okResult(params);
+    });
+    await processProject({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+    const [atClaim, ...atRetries] = seen["c.ts"];
+    expect(atRetries.length).toBeGreaterThan(0);
+    for (const at of atRetries) expect(Date.parse(at)).toBeGreaterThan(Date.parse(atClaim));
+    expect(bLockAtRetry).toBe("2000-01-01T00:00:00.000Z");
+  });
+
   it("holds back the next batch while the brake is on", async () => {
     process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = "300";
     const fx = setupProject(["a.ts", "b.ts"]);
@@ -275,6 +346,27 @@ describe("ContentFilterBrake", () => {
     t = 120_000;
     expect(brake.remainingMs()).toBe(0);
     expect(brake.noteBlock()).toBe(1000);
+  });
+
+  it("never exceeds the maximum pause, even with jitter", () => {
+    const brake = new ContentFilterBrake(
+      1000,
+      5000,
+      60_000,
+      () => 0,
+      () => 1,
+    );
+    for (let n = 0; n < 6; n++) expect(brake.noteBlock()).toBeLessThanOrEqual(5000);
+  });
+
+  it("removes its abort listener when a pause ends normally", async () => {
+    const brake = new ContentFilterBrake(5, 5);
+    const ac = new AbortController();
+    for (let n = 0; n < 3; n++) {
+      brake.noteBlock();
+      await brake.wait(ac.signal);
+    }
+    expect(getEventListeners(ac.signal, "abort")).toHaveLength(0);
   });
 
   it("stops waiting when the signal aborts", async () => {

@@ -268,7 +268,8 @@ export class ContentFilterBrake {
     this.strikes = t - this.lastBlockAt < this.windowMs ? this.strikes + 1 : 1;
     this.lastBlockAt = t;
     const pause = Math.min(this.maxMs, this.baseMs * 2 ** (this.strikes - 1));
-    const jittered = Math.round(pause * (0.75 + this.random() * 0.5));
+    // Cap after jitter so maxMs is a real upper limit.
+    const jittered = Math.min(this.maxMs, Math.round(pause * (0.75 + this.random() * 0.5)));
     this.until = Math.max(this.until, t + jittered);
     return jittered;
   }
@@ -283,15 +284,17 @@ export class ContentFilterBrake {
       const ms = this.remainingMs();
       if (ms <= 0 || signal?.aborted) return;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
+        // Remove the abort listener when the timer wins, so repeated pauses
+        // don't pile up listeners on a long-lived signal.
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
       });
     }
   }
