@@ -1767,22 +1767,20 @@ describe("revalidate() reconciliation, repair, and adaptive splitting", () => {
       else process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = prevPause;
     });
 
-    function seed(files: string[]) {
+    function seed(files: string[], findingsPerFile = 1) {
       const fx = setupProject({ files });
       for (const f of files) {
         const rec = pendingRecord(fx.projectId, f);
         rec.status = "analyzed";
-        rec.findings = [
-          {
-            severity: "HIGH",
-            vulnSlug: "auth-bypass",
-            title: `finding in ${f}`,
-            description: "d",
-            lineNumbers: [1],
-            recommendation: "r",
-            confidence: "high",
-          },
-        ];
+        rec.findings = Array.from({ length: findingsPerFile }, (_, n) => ({
+          severity: "HIGH" as const,
+          vulnSlug: "auth-bypass",
+          title: n === 0 ? `finding in ${f}` : `finding ${n + 1} in ${f}`,
+          description: "d",
+          lineNumbers: [1],
+          recommendation: "r",
+          confidence: "high" as const,
+        }));
         fx.writeRecord(rec);
       }
       return fx;
@@ -1834,6 +1832,20 @@ describe("revalidate() reconciliation, repair, and adaptive splitting", () => {
       expect(stub.calls.revalidateCalls.map((c) => c.batch.length)).toEqual([2, 1, 1]);
       expect(fx.readRecord("a.ts").findings[0].revalidation?.verdict).toBe("true-positive");
       expect(fx.readRecord("b.ts").findings[0].revalidation?.verdict).toBe("true-positive");
+    });
+
+    it("doesn't retry finding by finding once a file stayed blocked", async () => {
+      const fx = seed(["a.ts"], 3);
+      const stub = stubBlocking(fx, () => true);
+      await revalidate({
+        projectId: fx.projectId,
+        agentType: "stub",
+        concurrency: 1,
+        batchSize: 1,
+      });
+      // The batch, then the per-file retry twice; no per-finding calls.
+      expect(stub.calls.revalidateCalls).toHaveLength(3);
+      expect(fx.readRecord("a.ts").findings.every((f) => !f.revalidation)).toBe(true);
     });
 
     it("leaves a file that stays blocked unrevalidated without losing the rest", async () => {

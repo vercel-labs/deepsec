@@ -805,21 +805,34 @@ export async function process(params: {
       }
     }
 
-    // Content-filter retries can run longer than the processor's 1h stale
-    // lock window. Renew the lock on files still waiting in this batch where
-    // this run still holds it on disk; a file another run has taken over is
-    // remembered in `lostLocks` and left to that run.
-    function refreshLocks(records: FileRecord[]): void {
-      const now = new Date().toISOString();
-      for (const record of records) {
-        if (record.status !== "processing" || lostLocks.has(record)) continue;
-        const onDisk = readFileRecord(projectId, record.filePath);
-        if (onDisk?.status !== "processing" || onDisk.lockedByRunId !== runId) {
-          lostLocks.add(record);
-          continue;
+    // Content-filter pauses and retries can hold files longer than the
+    // processor's 1h stale-lock window. Renew the lock on records this run
+    // still holds, under the same mutex as claiming, by updating the fresh
+    // record on disk. A record another run has taken over is remembered in
+    // `lostLocks` and left to that run. The loop after acquiring the mutex
+    // is synchronous, so it can't interleave with runInvestigation writing
+    // a finished record.
+    async function renewLocks(records: FileRecord[]): Promise<void> {
+      if (!records.some((r) => r.status === "processing" && !lostLocks.has(r))) return;
+      const release = await acquireProcessLock(projectId, runId);
+      try {
+        const now = new Date().toISOString();
+        for (const record of records) {
+          if (record.status !== "processing" || lostLocks.has(record)) continue;
+          let onDisk: FileRecord | null = null;
+          try {
+            onDisk = readFileRecord(projectId, record.filePath);
+          } catch {}
+          if (onDisk?.status !== "processing" || onDisk.lockedByRunId !== runId) {
+            lostLocks.add(record);
+            continue;
+          }
+          onDisk.lockedAt = now;
+          writeFileRecord(onDisk);
+          record.lockedAt = now;
         }
-        record.lockedAt = now;
-        writeFileRecord(record);
+      } finally {
+        release();
       }
     }
 
@@ -840,7 +853,7 @@ export async function process(params: {
         for (let attempt = 1; attempt <= CONTENT_FILTER_FILE_ATTEMPTS && !done; attempt++) {
           await contentFilterBrake.wait(quotaAbort.signal);
           if (quotaAbort.signal.aborted) break;
-          refreshLocks(batch);
+          await renewLocks(batch);
           if (lostLocks.has(file)) break;
           try {
             const r = await runInvestigation([file], i);
@@ -898,7 +911,7 @@ export async function process(params: {
           markError(chunk);
           continue;
         }
-        refreshLocks(batch);
+        await renewLocks(batch);
         const lost = chunk.filter((r) => lostLocks.has(r)).length;
         if (lost > 0) {
           total.unresolved += lost;
@@ -951,7 +964,21 @@ export async function process(params: {
       });
     }
 
-    async function processBatch(batch: FileRecord[], i: number) {
+    async function processBatch(fullBatch: FileRecord[], i: number) {
+      // A queued file the lock heartbeat found taken over by another run is
+      // that run's now. Leave it, and count the batch as failed so a CI gate
+      // doesn't pass without it.
+      const batch = fullBatch.filter((r) => !lostLocks.has(r));
+      if (batch.length < fullBatch.length) {
+        batchesFailed++;
+        emitProgress({
+          type: "batch_complete",
+          message: `Batch ${i + 1}/${batches.length}: ${fullBatch.length - batch.length} file(s) taken over by another run; skipped`,
+          batchIndex: i,
+          totalBatches: batches.length,
+        });
+        if (batch.length === 0) return;
+      }
       batchesInFlight++;
       emitProgress({
         type: "batch_started",
@@ -1032,30 +1059,52 @@ export async function process(params: {
       }
     }
 
-    if (concurrency <= 1) {
-      // Sequential
-      for (let i = 0; i < batches.length; i++) {
-        // Stop pulling new batches once any earlier batch has tripped quota
-        // — the credential is empty for the whole run.
-        if (quotaAbort.signal.aborted) break;
-        await contentFilterBrake.wait(quotaAbort.signal);
-        if (quotaAbort.signal.aborted) break;
-        await processBatch(batches[i], i);
-      }
-    } else {
-      // Concurrent with limited parallelism
-      let nextIdx = 0;
-      async function worker() {
-        while (nextIdx < batches.length) {
-          if (quotaAbort.signal.aborted) return;
+    // Renew every lock this run still holds while batches run, including
+    // queued batches that content-filter pauses delay.
+    let renewing = false;
+    const heartbeat = setInterval(
+      () => {
+        if (renewing) return;
+        renewing = true;
+        renewLocks(toProcess)
+          .catch(() => {})
+          .finally(() => {
+            renewing = false;
+          });
+      },
+      envMs("DEEPSEC_LOCK_HEARTBEAT_MS", 5 * 60_000),
+    );
+    heartbeat.unref();
+    try {
+      if (concurrency <= 1) {
+        // Sequential
+        for (let i = 0; i < batches.length; i++) {
+          // Stop pulling new batches once any earlier batch has tripped quota
+          // — the credential is empty for the whole run.
+          if (quotaAbort.signal.aborted) break;
           await contentFilterBrake.wait(quotaAbort.signal);
-          if (quotaAbort.signal.aborted || nextIdx >= batches.length) return;
-          const idx = nextIdx++;
-          await processBatch(batches[idx], idx);
+          if (quotaAbort.signal.aborted) break;
+          await processBatch(batches[i], i);
         }
+      } else {
+        // Concurrent with limited parallelism
+        let nextIdx = 0;
+        async function worker() {
+          while (nextIdx < batches.length) {
+            if (quotaAbort.signal.aborted) return;
+            await contentFilterBrake.wait(quotaAbort.signal);
+            if (quotaAbort.signal.aborted || nextIdx >= batches.length) return;
+            const idx = nextIdx++;
+            await processBatch(batches[idx], idx);
+          }
+        }
+        const workers = Array.from({ length: Math.min(concurrency, batches.length) }, () =>
+          worker(),
+        );
+        await Promise.all(workers);
       }
-      const workers = Array.from({ length: Math.min(concurrency, batches.length) }, () => worker());
-      await Promise.all(workers);
+    } finally {
+      clearInterval(heartbeat);
     }
 
     // Cost/quota stops can leave batches that were claimed up front but never
@@ -1383,6 +1432,8 @@ export async function revalidate(params: {
       persistedCount: number;
       /** Expected findings that still have no persisted verdict. */
       unresolved: ExpectedFinding[];
+      /** The invocation ended blocked by the provider's content filter. */
+      contentFiltered?: boolean;
     }
 
     /**
@@ -1692,6 +1743,7 @@ export async function revalidate(params: {
           matchedCount: 0,
           persistedCount: 0,
           unresolved: inv.fallbackUnresolved,
+          contentFiltered: err instanceof ContentFilteredError,
         };
       }
     }
@@ -1736,6 +1788,9 @@ export async function revalidate(params: {
         // reproduce, less output to format. Already-persisted findings
         // are never re-requested (onlyFindingIds pins the subset).
         const perFileRequestSize = new Map<string, number>();
+        // Files whose per-file retry stayed blocked: asking about each
+        // finding separately would only hit the filter again.
+        const filteredFiles = new Set<string>();
         if (unresolved.length > 0 && !quotaAbort.signal.aborted) {
           emitProgress({
             type: "batch_complete",
@@ -1768,6 +1823,7 @@ export async function revalidate(params: {
             });
             persisted += res.persistedCount;
             next.push(...res.unresolved);
+            if (res.contentFiltered) filteredFiles.add(filePath);
           }
           unresolved = next;
         }
@@ -1777,10 +1833,10 @@ export async function revalidate(params: {
         // finding whose per-file retry already asked for exactly one is
         // skipped — an individual retry would be the identical request.
         if (unresolved.length > 0 && !quotaAbort.signal.aborted) {
-          const individual = unresolved.filter(
-            (e) => (perFileRequestSize.get(e.filePath) ?? 0) > 1,
-          );
-          const skipped = unresolved.filter((e) => (perFileRequestSize.get(e.filePath) ?? 0) <= 1);
+          const retryable = (e: ExpectedFinding) =>
+            (perFileRequestSize.get(e.filePath) ?? 0) > 1 && !filteredFiles.has(e.filePath);
+          const individual = unresolved.filter(retryable);
+          const skipped = unresolved.filter((e) => !retryable(e));
           const next: ExpectedFinding[] = [...skipped];
           for (const e of individual) {
             if (quotaAbort.signal.aborted) {

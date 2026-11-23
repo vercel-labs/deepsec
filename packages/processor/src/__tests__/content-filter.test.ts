@@ -85,6 +85,7 @@ describe("process() with provider content-filter blocks", () => {
     prev = {
       DEEPSEC_DATA_ROOT: process.env.DEEPSEC_DATA_ROOT,
       DEEPSEC_CONTENT_FILTER_PAUSE_MS: process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS,
+      DEEPSEC_LOCK_HEARTBEAT_MS: process.env.DEEPSEC_LOCK_HEARTBEAT_MS,
     };
     process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = "0";
   });
@@ -339,6 +340,61 @@ describe("process() with provider content-filter blocks", () => {
       expect(b.lockedByRunId, scenario).toBe("other-run");
       expect(b.status, scenario).toBe("processing");
     }
+  });
+
+  it("keeps renewing locks on queued batches while a pause holds them back", async () => {
+    process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = "300";
+    process.env.DEEPSEC_LOCK_HEARTBEAT_MS = "50";
+    const fx = setupProject(["a.ts", "b.ts"]);
+    const bLockAt: string[] = [];
+    let blocked = false;
+    useStub(fx, (params) => {
+      bLockAt.push(fx.read("b.ts").lockedAt ?? "");
+      if (!blocked) {
+        blocked = true;
+        throw new ContentFilteredError(FLAGGED);
+      }
+      return okResult(params);
+    });
+    await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 1,
+    });
+    // b.ts waited in the queue through the pause; its lock kept moving.
+    expect(Date.parse(bLockAt.at(-1) ?? "")).toBeGreaterThan(Date.parse(bLockAt[0]));
+  });
+
+  it("skips a queued file that another run took over during a pause", async () => {
+    process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = "300";
+    process.env.DEEPSEC_LOCK_HEARTBEAT_MS = "50";
+    const fx = setupProject(["a.ts", "b.ts"]);
+    let blocked = false;
+    const stub = useStub(fx, (params) => {
+      if (!blocked) {
+        blocked = true;
+        const b = fx.read("b.ts");
+        b.lockedByRunId = "other-run";
+        b.lockedAt = new Date().toISOString();
+        fs.writeFileSync(
+          path.join(process.env.DEEPSEC_DATA_ROOT ?? "", fx.projectId, "files", "b.ts.json"),
+          JSON.stringify(b),
+        );
+        throw new ContentFilteredError(FLAGGED);
+      }
+      return okResult(params);
+    });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 1,
+    });
+    expect(stub.calls.investigateCalls.every((c) => c.batch[0].filePath === "a.ts")).toBe(true);
+    expect(fx.read("b.ts").lockedByRunId).toBe("other-run");
+    expect(fx.read("b.ts").status).toBe("processing");
+    expect(result.errorBatchCount).toBe(1);
   });
 
   it("fails the batch when a retry succeeds but the agent leaves a file out", async () => {
