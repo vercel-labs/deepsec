@@ -177,6 +177,9 @@ async function processStandardMode(opts: Parameters<typeof processCommand>[0]) {
   const result = await processRun({
     projectId,
     runId: opts.runId,
+    // Set by the sandbox orchestrator so it can recognize this worker's
+    // file locks when it releases unfinished files.
+    newRunId: opts.manifest ? process.env.DEEPSEC_WORKER_RUN_ID || undefined : undefined,
     agentType,
     config: agentConfig,
     reinvestigate,

@@ -109,6 +109,8 @@ export interface ProcessProgress {
 export async function process(params: {
   projectId: string;
   runId?: string;
+  /** ID for a new run (ignored when `runId` resumes one). */
+  newRunId?: string;
   agentType?: string;
   config?: Record<string, unknown>;
   promptTemplate?: string;
@@ -302,6 +304,7 @@ export async function process(params: {
       projectId,
       rootPath: effectiveRootPath,
       type: "process",
+      runId: params.newRunId,
       processorConfig: {
         agentType,
         model,

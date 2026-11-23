@@ -208,8 +208,10 @@ Sandbox is ready; 100 Sandboxes take about 10 minutes to all be running. Set
 `--spawn-rate <n>` to change the rate, or `--spawn-rate 0` to start every
 Sandbox at once.
 
-Files that a running worker still holds aren't handed to another run, so you
-can start a second `sandbox process` run while the first is still going.
+A run reserves its files as soon as it partitions them, before its Sandboxes
+start, and another run of the same command doesn't receive them. You can start
+a second `sandbox process` run while the first is still going, and the two
+won't analyze the same files.
 
 ### Recover an interrupted run
 
@@ -230,8 +232,10 @@ pnpm deepsec sandbox collect --project-id my-app --run-id sbx-20260101120000-012
 ```
 
 `collect` reattaches to every Sandbox that's still running, downloads results
-while the workers finish, and stops each Sandbox after its final download.
-Stopping the command with Ctrl-C still stops its Sandboxes.
+while the workers finish, and stops each Sandbox after its final download. If
+a download fails or a Sandbox can't be reached, that Sandbox stays in the run
+state, so you can run the same `collect` command again. Stopping the command
+with Ctrl-C still stops its Sandboxes.
 
 A Sandbox that stops or reaches its timeout (`--timeout`, 5 hours by default)
 can't be reached again, so results its worker hadn't downloaded yet are lost.

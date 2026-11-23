@@ -50,13 +50,16 @@ export function hasLiveLock(
 }
 
 /**
- * Files assigned to live sandboxes of other active `revalidate` runs.
- * Revalidation takes no file locks, so the run states (written at dispatch,
- * shrunk as sandboxes finish) are the only record of what another run still
- * has queued. States older than the sandbox lifetime are ignored so a
- * crashed run's leftover state can't hold files forever.
+ * Files assigned to other active sandbox runs of the same command, from
+ * their saved run states: partitions reserved but not dispatched yet, and
+ * dispatched sandboxes that haven't been collected. Revalidation takes no
+ * file locks, and a `process` worker's locks only reach this host at its
+ * first sync, so the run states are the record of what another run still
+ * has queued. Each entry expires a sandbox lifetime after its own dispatch
+ * (or the launch, while reserved), so a crashed run's leftover state can't
+ * hold files forever.
  */
-function filesHeldByActiveRevalidations(projectId: string, now = Date.now()): Set<string> {
+function filesHeldByActiveRuns(projectId: string, command: string, now = Date.now()): Set<string> {
   const held = new Set<string>();
   const dir = path.join(dataDir(projectId), "sandbox-runs");
   let names: string[] = [];
@@ -70,12 +73,21 @@ function filesHeldByActiveRevalidations(projectId: string, now = Date.now()): Se
       const state = JSON.parse(fs.readFileSync(path.join(dir, name), "utf-8")) as {
         command?: string;
         launchedAt?: string;
-        sandboxes?: Array<{ manifest?: string[] }>;
+        sandboxes?: Array<{ manifest?: string[]; dispatchedAt?: string }>;
+        reserved?: Array<{ manifest?: string[] }>;
       };
-      if (state.command !== "revalidate") continue;
-      const launched = Date.parse(state.launchedAt ?? "");
-      if (!Number.isFinite(launched) || now - launched > SANDBOX_STALE_LOCK_MS) continue;
-      for (const sb of state.sandboxes ?? []) for (const f of sb.manifest ?? []) held.add(f);
+      if (state.command !== command) continue;
+      const active = (since: string | undefined) => {
+        const t = Date.parse(since ?? "");
+        return Number.isFinite(t) && now - t <= SANDBOX_STALE_LOCK_MS;
+      };
+      for (const sb of state.sandboxes ?? []) {
+        if (!active(sb.dispatchedAt ?? state.launchedAt)) continue;
+        for (const f of sb.manifest ?? []) held.add(f);
+      }
+      if (active(state.launchedAt)) {
+        for (const r of state.reserved ?? []) for (const f of r.manifest ?? []) held.add(f);
+      }
     } catch {}
   }
   return held;
@@ -100,11 +112,13 @@ export function partitionFiles(
 ): PartitionResult {
   const metaCache = new Map<string, RunMeta | null>();
   const now = Date.now();
-  // Files another run is still working on are never handed out again.
-  const allRecords = loadAllFileRecords(projectId).filter(
-    (r) => !hasLiveLock(projectId, r, metaCache, now),
-  );
   const command = opts.command ?? "process";
+  // Files another run is still working on, or has assigned to its workers,
+  // are never handed out again.
+  const held = filesHeldByActiveRuns(projectId, command, now);
+  const allRecords = loadAllFileRecords(projectId).filter(
+    (r) => !held.has(r.filePath) && !hasLiveLock(projectId, r, metaCache, now),
+  );
   const agentType = opts.agentType ?? "claude-agent-sdk";
 
   let eligible: FileRecord[];
@@ -137,9 +151,7 @@ export function partitionFiles(
       break;
 
     case "revalidate": {
-      const held = filesHeldByActiveRevalidations(projectId, now);
       eligible = allRecords.filter((r) => {
-        if (held.has(r.filePath)) return false;
         if (r.findings.length === 0) return false;
         const unrevalidated = r.findings.filter((f) => {
           if (!opts.force && f.revalidation) return false;

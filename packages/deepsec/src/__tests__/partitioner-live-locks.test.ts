@@ -176,3 +176,87 @@ describe("partitionFiles for revalidate skips files other active revalidations h
     ).toEqual(["free.ts", "held.ts", "stale.ts"]);
   });
 });
+
+describe("partitionFiles respects files other process runs have assigned", () => {
+  let prev: string | undefined;
+  let tmp: string;
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 60 * 60_000).toISOString();
+
+  beforeEach(() => {
+    prev = process.env.DEEPSEC_DATA_ROOT;
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-part-proc-"));
+    process.env.DEEPSEC_DATA_ROOT = tmp;
+    fs.mkdirSync(path.join(tmp, P, "sandbox-runs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, P, "project.json"),
+      JSON.stringify({ projectId: P, rootPath: tmp, createdAt: new Date(0).toISOString() }),
+    );
+    for (const f of ["free.ts", "reserved.ts", "late.ts", "expired.ts", "reval.ts"]) {
+      writeFileRecord({
+        filePath: f,
+        projectId: P,
+        candidates: [
+          { vulnSlug: "auth-bypass", lineNumbers: [1], snippet: "x", matchedPattern: "p" },
+        ],
+        lastScannedAt: new Date().toISOString(),
+        lastScannedRunId: "scan",
+        fileHash: "h",
+        findings: [],
+        analysisHistory: [],
+        status: "pending",
+      } as FileRecord);
+    }
+    const write = (runId: string, body: Record<string, unknown>) =>
+      fs.writeFileSync(
+        path.join(tmp, P, "sandbox-runs", `${runId}.json`),
+        JSON.stringify({ runId, projectId: P, vcpus: 2, sandboxes: [], ...body }),
+      );
+    // Still bootstrapping: nothing dispatched, so no locks exist yet.
+    write("sbx-ramp", {
+      command: "process",
+      launchedAt: new Date().toISOString(),
+      reserved: [{ index: 0, manifest: ["reserved.ts"] }],
+    });
+    // Launched long ago, but this worker was dispatched late in a slow ramp.
+    write("sbx-slow", {
+      command: "process",
+      launchedAt: hoursAgo(7),
+      sandboxes: [
+        {
+          sandboxId: "s1",
+          cmdId: "c1",
+          index: 0,
+          manifest: ["late.ts"],
+          dispatchedAt: hoursAgo(1),
+        },
+        {
+          sandboxId: "s2",
+          cmdId: "c2",
+          index: 1,
+          manifest: ["expired.ts"],
+          dispatchedAt: hoursAgo(7),
+        },
+      ],
+      reserved: [{ index: 2, manifest: ["expired.ts"] }],
+    });
+    write("sbx-reval", {
+      command: "revalidate",
+      launchedAt: new Date().toISOString(),
+      sandboxes: [{ sandboxId: "s3", cmdId: "c3", index: 0, manifest: ["reval.ts"] }],
+    });
+  });
+
+  afterEach(() => {
+    if (prev === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+    else process.env.DEEPSEC_DATA_ROOT = prev;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("skips reserved and recently dispatched files, but not expired ones or other commands'", () => {
+    expect(partitionFiles(P, 1, { command: "process" }).partitions.flat().sort()).toEqual([
+      "expired.ts",
+      "free.ts",
+      "reval.ts",
+    ]);
+  });
+});

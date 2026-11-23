@@ -1,5 +1,12 @@
+import { APIError, StreamError } from "@vercel/sandbox";
 import { describe, expect, it, vi } from "vitest";
 import { isSandboxGone, waitForCommand } from "../sandbox/orchestrator.js";
+
+const apiError = (status: number, json?: unknown) =>
+  new APIError(new Response(null, { status }), {
+    message: `Status code ${status} is not ok`,
+    json,
+  });
 
 function cmd(results: Array<Error | { exitCode: number }>) {
   return {
@@ -49,7 +56,7 @@ describe("waitForCommand", () => {
   });
 
   it("gives up at once when the sandbox is gone (410)", async () => {
-    const c = cmd([new Error("Status code 410 is not ok"), { exitCode: 0 }]);
+    const c = cmd([apiError(410), { exitCode: 0 }]);
     const refetch = vi.fn(async () => c);
     await expect(waitForCommand(c, refetch, "[s]", () => {}, { delayMs: 1 })).rejects.toThrow(
       "410",
@@ -60,18 +67,31 @@ describe("waitForCommand", () => {
 });
 
 describe("isSandboxGone", () => {
-  it("recognizes the shapes a vanished sandbox produces", () => {
-    expect(isSandboxGone(new Error("Status code 410 is not ok"))).toBe(true);
-    expect(isSandboxGone({ status: 410 })).toBe(true);
-    expect(isSandboxGone({ response: { status: 410 } })).toBe(true);
+  it("recognizes the structured errors the SDK throws for a vanished sandbox", () => {
+    expect(isSandboxGone(apiError(410))).toBe(true);
+    expect(isSandboxGone(apiError(404))).toBe(true);
+    expect(isSandboxGone(apiError(400, { error: { code: "sandbox_stopped" } }))).toBe(true);
+    expect(isSandboxGone(new StreamError("sandbox_stopped", "Sandbox stopped", "sbx_1"))).toBe(
+      true,
+    );
+    expect(isSandboxGone(new Error("download failed", { cause: apiError(410) }))).toBe(true);
+    expect(isSandboxGone(apiError(500))).toBe(false);
+    expect(isSandboxGone(new Error("fetch failed"))).toBe(false);
+    expect(isSandboxGone(undefined)).toBe(false);
+  });
+
+  it("ignores message text, which can come from inside the sandbox", () => {
+    expect(isSandboxGone(new Error("Status code 410 is not ok"))).toBe(false);
     expect(
       isSandboxGone(
         new Error("sandbox_stopped: Sandbox has stopped execution and is no longer available"),
       ),
-    ).toBe(true);
-    expect(isSandboxGone("Exit code 1: Status code 410 is not ok")).toBe(true);
-    expect(isSandboxGone(new Error("fetch failed"))).toBe(false);
-    expect(isSandboxGone(new Error("Status code 4100"))).toBe(false);
-    expect(isSandboxGone(undefined)).toBe(false);
+    ).toBe(false);
+    expect(isSandboxGone("Exit code 1: Status code 410 is not ok")).toBe(false);
+    expect(
+      isSandboxGone(
+        new Error("[sandbox-0] tar failed (exit 2): sandbox_stopped no longer available"),
+      ),
+    ).toBe(false);
   });
 });

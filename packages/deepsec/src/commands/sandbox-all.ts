@@ -9,7 +9,7 @@ import {
   assertSandboxCredential,
 } from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
-import { orchestrate } from "../sandbox/orchestrator.js";
+import { createSpawnLimiter, orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
 import {
@@ -208,6 +208,11 @@ export async function sandboxAllCommand(
     console.log(`${DIM}[${elapsed}s]${RESET} ${CYAN}[${projectId}]${RESET} ${msg}`);
   };
 
+  // One schedule for every project, so the spawn rate applies to the whole
+  // run rather than separately to each project.
+  const spawnLimiter =
+    totalSandboxes > DEFAULT_SPAWN_RATE ? createSpawnLimiter(DEFAULT_SPAWN_RATE) : undefined;
+
   // Run all projects in parallel
   const promises = allocations.map(async (a) => {
     const config: SandboxConfig = {
@@ -234,6 +239,7 @@ export async function sandboxAllCommand(
       matchers: extractFlag(passthrough, "--matchers"),
       timeout,
       spawnRate: DEFAULT_SPAWN_RATE,
+      spawnLimiter,
       extraArgs: passthrough,
     };
 

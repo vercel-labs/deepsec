@@ -42,6 +42,20 @@ describe("streamLogsCapped reconnects", () => {
     expect(cmd.calls()).toBe(2);
   });
 
+  it("waits for the replay instead of emitting a line cut off by an early close", async () => {
+    const lines: string[] = [];
+    const raw: string[] = [];
+    let checks = 0;
+    await streamLogsCapped(
+      replayingCommand(["one\ntw", "o\nthree\n"], [1, 2]),
+      "[s]",
+      (m) => lines.push(m),
+      (l) => raw.push(l),
+      async () => ++checks > 1,
+    );
+    expect(raw).toEqual(["one", "two", "three"]);
+  });
+
   it("does not reconnect once the command has finished", async () => {
     const cmd = replayingCommand(["a\n"], [1]);
     await streamLogsCapped(
@@ -155,5 +169,19 @@ describe("releaseUnfinished", () => {
     expect(a?.lockedByRunId).toBeUndefined();
     expect(readFileRecord("p", "b.ts")?.status).toBe("analyzed");
     expect(logs).toEqual(["[sandbox-3] 1 file(s) did not finish; marked error for the next run"]);
+  });
+
+  it("only releases locks held by the worker's own run", () => {
+    writeFileRecord(record("mine.ts", "processing"));
+    writeFileRecord({ ...record("theirs.ts", "processing"), lockedByRunId: "other-run" });
+    releaseUnfinished(
+      { manifest: ["mine.ts", "theirs.ts"], index: 0, workerRunId: "sandbox-run" },
+      "p",
+      () => {},
+    );
+    expect(readFileRecord("p", "mine.ts")?.status).toBe("error");
+    const theirs = readFileRecord("p", "theirs.ts");
+    expect(theirs?.status).toBe("processing");
+    expect(theirs?.lockedByRunId).toBe("other-run");
   });
 });
