@@ -310,6 +310,37 @@ describe("process() with provider content-filter blocks", () => {
     expect(result.errorBatchCount).toBe(1);
   });
 
+  it("never overwrites a taken-over file, even when every retry fails or quota runs out", async () => {
+    // Another run takes b.ts while the batch is blocked. Scenario 1: every
+    // retry is blocked too (the batch fails as a whole). Scenario 2: quota
+    // runs out after a.ts succeeds (end-of-run cleanup releases claims).
+    for (const scenario of ["all-blocked", "quota"] as const) {
+      const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
+      const takeOver = () => {
+        const b = fx.read("b.ts");
+        b.lockedByRunId = "other-run";
+        b.lockedAt = new Date().toISOString();
+        fs.writeFileSync(
+          path.join(process.env.DEEPSEC_DATA_ROOT ?? "", fx.projectId, "files", "b.ts.json"),
+          JSON.stringify(b),
+        );
+      };
+      useStub(fx, (params) => {
+        if (params.batch.length > 1) {
+          takeOver();
+          throw new ContentFilteredError(FLAGGED);
+        }
+        if (scenario === "all-blocked") throw new ContentFilteredError(FLAGGED);
+        if (params.batch[0].filePath === "a.ts") return okResult(params);
+        throw new QuotaExhaustedError("anthropic-credits", "credit balance is too low");
+      });
+      await processProject({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+      const b = fx.read("b.ts");
+      expect(b.lockedByRunId, scenario).toBe("other-run");
+      expect(b.status, scenario).toBe("processing");
+    }
+  });
+
   it("fails the batch when a retry succeeds but the agent leaves a file out", async () => {
     const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
     useStub(fx, (params) => {

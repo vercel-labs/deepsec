@@ -1015,6 +1015,9 @@ export async function process(params: {
         // logging "quota exhausted" N times. The abort below cancels them.
         if (err instanceof QuotaExhaustedError) noteQuotaExhausted(err);
         for (const record of batch) {
+          // A file another run took over during content-filter retries is
+          // that run's now; don't overwrite its record.
+          if (lostLocks.has(record)) continue;
           record.status = "error";
           record.lockedByRunId = undefined;
           record.lockedAt = undefined;
@@ -1061,6 +1064,7 @@ export async function process(params: {
     if (costLimitReached || quotaExhausted) {
       for (const record of toProcess) {
         if (record.status !== "processing" || record.lockedByRunId !== runId) continue;
+        if (lostLocks.has(record)) continue;
         record.status = "pending";
         record.lockedByRunId = undefined;
         record.lockedAt = undefined;
