@@ -295,11 +295,57 @@ describe("process() with provider content-filter blocks", () => {
       }
       return okResult(params);
     });
-    await processProject({ projectId: fx.projectId, agentType: "stub", concurrency: 1 });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
     const [atClaim, ...atRetries] = seen["c.ts"];
     expect(atRetries.length).toBeGreaterThan(0);
     for (const at of atRetries) expect(Date.parse(at)).toBeGreaterThan(Date.parse(atClaim));
-    expect(bLockAtRetry).toBe("2000-01-01T00:00:00.000Z");
+    // b.ts now belongs to the other run: it's never retried or written here.
+    expect(bLockAtRetry).toBeUndefined();
+    expect(fx.read("b.ts").lockedByRunId).toBe("other-run");
+    expect(fx.read("b.ts").status).toBe("processing");
+    expect(result.errorBatchCount).toBe(1);
+  });
+
+  it("fails the batch when a retry succeeds but the agent leaves a file out", async () => {
+    const fx = setupProject(["a.ts", "b.ts", "c.ts"]);
+    useStub(fx, (params) => {
+      if (params.batch.length > 1) throw new ContentFilteredError(FLAGGED);
+      const res = okResult(params);
+      if (params.batch[0].filePath === "b.ts") res.results = [];
+      return res;
+    });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+    });
+    expect(fx.read("b.ts").status).toBe("error");
+    expect(result.analysisCount).toBe(2);
+    expect(result.errorBatchCount).toBe(1);
+  });
+
+  it("counts files left out of a successful chunk retry", async () => {
+    const files = Array.from({ length: 6 }, (_, n) => `f${n}.ts`);
+    const fx = setupProject(files);
+    useStub(fx, (params) => {
+      if (params.batch.length === 6) throw new ContentFilteredError(FLAGGED);
+      const res = okResult(params);
+      res.results = res.results.filter((r) => r.filePath !== "f2.ts");
+      return res;
+    });
+    const result = await processProject({
+      projectId: fx.projectId,
+      agentType: "stub",
+      concurrency: 1,
+      batchSize: 6,
+    });
+    expect(fx.read("f2.ts").status).toBe("error");
+    expect(result.analysisCount).toBe(5);
+    expect(result.errorBatchCount).toBe(1);
   });
 
   it("holds back the next batch while the brake is on", async () => {

@@ -772,8 +772,13 @@ export async function process(params: {
       };
     }
 
+    // Records whose lock another run took over during content-filter
+    // retries. This run must not retry or write them again.
+    const lostLocks = new WeakSet<FileRecord>();
+
     function markError(records: FileRecord[]): void {
       for (const record of records) {
+        if (lostLocks.has(record)) continue;
         record.status = "error";
         record.lockedByRunId = undefined;
         record.lockedAt = undefined;
@@ -801,14 +806,18 @@ export async function process(params: {
     }
 
     // Content-filter retries can run longer than the processor's 1h stale
-    // lock window. Renew the lock on files still waiting in this batch, but
-    // only where this run still holds it on disk.
+    // lock window. Renew the lock on files still waiting in this batch where
+    // this run still holds it on disk; a file another run has taken over is
+    // remembered in `lostLocks` and left to that run.
     function refreshLocks(records: FileRecord[]): void {
       const now = new Date().toISOString();
       for (const record of records) {
-        if (record.status !== "processing") continue;
+        if (record.status !== "processing" || lostLocks.has(record)) continue;
         const onDisk = readFileRecord(projectId, record.filePath);
-        if (onDisk?.status !== "processing" || onDisk.lockedByRunId !== runId) continue;
+        if (onDisk?.status !== "processing" || onDisk.lockedByRunId !== runId) {
+          lostLocks.add(record);
+          continue;
+        }
         record.lockedAt = now;
         writeFileRecord(record);
       }
@@ -832,10 +841,13 @@ export async function process(params: {
           await contentFilterBrake.wait(quotaAbort.signal);
           if (quotaAbort.signal.aborted) break;
           refreshLocks(batch);
+          if (lostLocks.has(file)) break;
           try {
             const r = await runInvestigation([file], i);
             analyses += r.analyses;
             findings += r.findings;
+            // runInvestigation marks a file the agent left out as `error`.
+            if (file.status !== "analyzed") unresolved++;
             done = true;
             checkCostLimit();
           } catch (err) {
@@ -859,6 +871,8 @@ export async function process(params: {
           }
         }
         if (!done) {
+          // Blocked on every attempt, stopped by an abort, or taken over by
+          // another run (which markError leaves alone).
           unresolved++;
           markError([file]);
         }
@@ -877,7 +891,7 @@ export async function process(params: {
       if (batch.length <= contentFilterChunk) return retryFilesOneAtATime(batch, i);
       const total = { analyses: 0, findings: 0, unresolved: 0 };
       for (let start = 0; start < batch.length; start += contentFilterChunk) {
-        const chunk = batch.slice(start, start + contentFilterChunk);
+        let chunk = batch.slice(start, start + contentFilterChunk);
         await contentFilterBrake.wait(quotaAbort.signal);
         if (quotaAbort.signal.aborted) {
           total.unresolved += chunk.length;
@@ -885,10 +899,18 @@ export async function process(params: {
           continue;
         }
         refreshLocks(batch);
+        const lost = chunk.filter((r) => lostLocks.has(r)).length;
+        if (lost > 0) {
+          total.unresolved += lost;
+          chunk = chunk.filter((r) => !lostLocks.has(r));
+          if (chunk.length === 0) continue;
+        }
         try {
           const r = await runInvestigation(chunk, i);
           total.analyses += r.analyses;
           total.findings += r.findings;
+          // runInvestigation marks files the agent left out as `error`.
+          total.unresolved += chunk.filter((rec) => rec.status !== "analyzed").length;
           checkCostLimit();
         } catch (err) {
           if (!(err instanceof ContentFilteredError)) {
@@ -1639,12 +1661,13 @@ export async function revalidate(params: {
           try {
             return await runRevalidateInvocation(inv);
           } catch (err) {
-            if (!(err instanceof ContentFilteredError) || attempt >= CONTENT_FILTER_FILE_ATTEMPTS)
-              throw err;
+            if (!(err instanceof ContentFilteredError)) throw err;
+            // Every block counts toward the pause, the last attempt included.
             noteRevalBlock(
               inv.batchIdx,
               `${inv.label}, attempt ${attempt}/${CONTENT_FILTER_FILE_ATTEMPTS}`,
             );
+            if (attempt >= CONTENT_FILTER_FILE_ATTEMPTS) throw err;
           }
         }
       } catch (err) {

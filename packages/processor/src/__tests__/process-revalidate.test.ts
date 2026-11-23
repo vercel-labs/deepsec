@@ -1839,12 +1839,17 @@ describe("revalidate() reconciliation, repair, and adaptive splitting", () => {
     it("leaves a file that stays blocked unrevalidated without losing the rest", async () => {
       const fx = seed(["a.ts", "b.ts"]);
       const stub = stubBlocking(fx, (paths) => paths.includes("b.ts"));
+      const progress: string[] = [];
       await revalidate({
         projectId: fx.projectId,
         agentType: "stub",
         concurrency: 1,
         batchSize: 2,
+        onProgress: (p) => progress.push(p.message),
       });
+      // Every block pauses new work, the last attempt on b.ts included.
+      expect(progress.filter((m) => /blocked by provider content filter/.test(m))).toHaveLength(3);
+      expect(progress.some((m) => /b\.ts, attempt 2\/2/.test(m))).toBe(true);
       // batch of 2 (blocked), a.ts alone, b.ts twice (blocked both times)
       expect(
         stub.calls.revalidateCalls.map((c) => c.batch.map((r) => r.filePath).join(",")),
