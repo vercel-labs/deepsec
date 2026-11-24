@@ -225,6 +225,11 @@ export function applyResolvedModelRoute(
   if (resolved.route.mode === "direct" && resolved.route.provider === "anthropic") {
     delete env.ANTHROPIC_AUTH_TOKEN;
   }
+  // A non-local route was explicitly resolved (local never reaches here). Clear
+  // any ambient Vertex switch so Claude Code uses this provider instead of
+  // silently routing to Vertex, which would mismatch billing and the gateway
+  // attribution headers deepsec still appends for the resolved route.
+  delete env.CLAUDE_CODE_USE_VERTEX;
   for (const [name, value] of Object.entries(resolved.environment)) {
     // Inside a Sandbox, this URL is deliberately pinned to the in-VM request
     // proxy. ANTHROPIC_UPSTREAM_BASE_URL records the provider endpoint that

@@ -55,6 +55,49 @@ disables the env-var preflight checks — the machine-wide login is used
 directly. Sandbox commands are the exception: they must broker a real token,
 so they still require `AI_GATEWAY_API_KEY` (or an equivalent key).
 
+## Claude on Google Vertex AI
+
+The `claude` backend can run Claude from Google Vertex AI (Anthropic's partner
+models in Model Garden). Vertex authenticates with Google Application Default
+Credentials rather than an API key, so there is no credential for deepsec to
+configure. Use the `local` route and let Claude Code read the Vertex environment.
+
+One-time setup:
+
+1. Enable Claude in Vertex Model Garden for your GCP project.
+2. Authenticate with `gcloud auth application-default login`. deepsec relies on
+   Application Default Credentials from the well-known path (under `HOME`, or
+   `%APPDATA%` on Windows). It does not forward `GOOGLE_APPLICATION_CREDENTIALS`,
+   so a static service-account key file is not read from inside the agent.
+
+Run with the Vertex environment set:
+
+```bash
+CLAUDE_CODE_USE_VERTEX=1 \
+ANTHROPIC_VERTEX_PROJECT_ID=<your-gcp-project> \
+CLOUD_ML_REGION=us-east5 \
+CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
+npx deepsec init --yes --agent claude --model-auth local --model claude-sonnet-4-6
+```
+
+Notes:
+
+- Set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Without it, Claude Code adds
+  Anthropic beta headers that Vertex rejects.
+- Claude is region-specific on Vertex, such as `us-east5`. Set
+  `CLOUD_ML_REGION=global` if you hit 429s, and use `VERTEX_REGION_CLAUDE_*` for
+  per-model region overrides.
+- Vertex applies to the `local` route only. If you select `--model-auth gateway`
+  or `direct`, deepsec clears `CLAUDE_CODE_USE_VERTEX` so the explicit provider is
+  used instead of an ambient Vertex setup.
+- deepsec forwards only the Vertex routing variables (`CLAUDE_CODE_USE_VERTEX`,
+  the project and region, the beta flag, and `VERTEX_REGION_CLAUDE_*`) to the
+  spawned `claude` child. It forwards no credential-file pointers, and the
+  allowlist drops everything else.
+- The agent reads untrusted repository code with shell and file tools, and it can
+  read the Application Default Credentials under `HOME`. Use a narrowly-scoped
+  identity for Vertex runs.
+
 ## CLI selection
 
 ```bash
