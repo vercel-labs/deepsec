@@ -38,6 +38,12 @@ describe("formatTokens", () => {
     expect(formatTokens(2_500_000)).toBe("2.5M");
     expect(formatTokens(3_500_000_000)).toBe("3.5B");
   });
+
+  it("rounds fractional counts from the per-file batch split", () => {
+    expect(formatTokens(2500 / 3)).toBe("833");
+    expect(formatTokens(0.1 + 0.2)).toBe("0");
+    expect(formatTokens(999.6)).toBe("1.0K");
+  });
 });
 
 describe("formatPct", () => {
