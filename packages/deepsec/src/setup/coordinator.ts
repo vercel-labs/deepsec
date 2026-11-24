@@ -47,6 +47,7 @@ import {
   writeGeneratedMatchers,
 } from "./generated-matchers.js";
 import { ensureWorkspaceInstall, type SupportedPackageManager } from "./install.js";
+import { summarizeProcessRecords } from "./process-summary.js";
 import { SetupProtocolError } from "./protocol.js";
 import { phaseLabel, type SetupReporter } from "./reporter.js";
 import {
@@ -836,6 +837,7 @@ export async function runSetupWorkflow(
       agentType,
       model,
       thinkingLevel,
+      completionContract: 2,
     });
     let processResult: Awaited<ReturnType<typeof processCandidates>>;
     if (!isCheckpointCurrent(state, "process", processInput) || !state.processRunId) {
@@ -850,6 +852,7 @@ export async function runSetupWorkflow(
           onProgress: (progress) => reportProcessProgress(reporter, progress),
         });
         if (durationController.signal.aborted) throw durationLimitError();
+        workflowSignal.throwIfAborted();
         if (result.costLimitReached) {
           throw new SetupProtocolError({
             code: "COST_LIMIT_REACHED",
@@ -858,10 +861,16 @@ export async function runSetupWorkflow(
             details: result.costLimitReached,
           });
         }
+        // Validate before runPhase publishes a successful durable checkpoint.
+        if (result.errorBatchCount > 0) {
+          throw new Error(
+            `AI processing completed with ${result.errorBatchCount} failed batch(es)`,
+          );
+        }
+        // completePhase persists this ID in the same write as the successful checkpoint.
+        state.processRunId = result.runId;
         return result;
       });
-      state.processRunId = processResult.runId;
-      writeSetupState(state);
     } else {
       processResult = {
         runId: state.processRunId,
@@ -876,34 +885,13 @@ export async function runSetupWorkflow(
       });
     }
 
-    if (processResult.errorBatchCount > 0) {
-      throw new Error(
-        `AI processing completed with ${processResult.errorBatchCount} failed batch(es)`,
-      );
-    }
-    const completedRecords = services.loadRecords(options.projectId);
-    const completedHistory = completedRecords.flatMap((record) =>
-      record.analysisHistory.filter((entry) => entry.runId === processResult.runId),
-    );
-    const completedFindings = completedRecords.flatMap((record) =>
-      record.findings.filter((finding) => finding.producedByRunId === processResult.runId),
-    );
-    const findingsBySeverity = Object.fromEntries(
-      completedFindings.reduce((counts, finding) => {
-        counts.set(finding.severity, (counts.get(finding.severity) ?? 0) + 1);
-        return counts;
-      }, new Map<string, number>()),
-    );
     return {
       ...workflowResult(state, "process", coverage),
       processRunId: processResult.runId,
-      process: {
-        analysisCount: completedHistory.length || processResult.analysisCount,
-        findingCount: completedFindings.length || processResult.findingCount,
-        errorBatchCount: processResult.errorBatchCount,
-        findingsBySeverity,
-        costUsd: completedHistory.reduce((total, entry) => total + (entry.costUsd ?? 0), 0),
-      },
+      process: summarizeProcessRecords(
+        services.loadRecords(options.projectId),
+        processResult.errorBatchCount,
+      ),
     };
   } catch (error) {
     if (durationController.signal.aborted && !(error instanceof SetupProtocolError)) {
