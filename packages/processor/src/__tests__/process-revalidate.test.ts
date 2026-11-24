@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { defineConfig, type FileRecord, setLoadedConfig } from "@deepsec/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { QuotaExhaustedError } from "../agents/shared.js";
+import { ContentFilteredError, QuotaExhaustedError } from "../agents/shared.js";
 import { process as processProject, revalidate } from "../index.js";
 import { StubAgent } from "./stub-agent.js";
 
@@ -1754,5 +1754,120 @@ describe("revalidate() reconciliation, repair, and adaptive splitting", () => {
     const after = fx.readRecord("app.ts");
     expect(after.findings[0].revalidation?.verdict).toBe("accepted-risk");
     expect(after.findings[0].revalidation?.reasoning).toBe("team decision");
+  });
+
+  describe("content-filter blocks", () => {
+    let prevPause: string | undefined;
+    beforeEach(() => {
+      prevPause = process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS;
+      process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = "1";
+    });
+    afterEach(() => {
+      if (prevPause === undefined) delete process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS;
+      else process.env.DEEPSEC_CONTENT_FILTER_PAUSE_MS = prevPause;
+    });
+
+    function seed(files: string[], findingsPerFile = 1) {
+      const fx = setupProject({ files });
+      for (const f of files) {
+        const rec = pendingRecord(fx.projectId, f);
+        rec.status = "analyzed";
+        rec.findings = Array.from({ length: findingsPerFile }, (_, n) => ({
+          severity: "HIGH" as const,
+          vulnSlug: "auth-bypass",
+          title: n === 0 ? `finding in ${f}` : `finding ${n + 1} in ${f}`,
+          description: "d",
+          lineNumbers: [1],
+          recommendation: "r",
+          confidence: "high" as const,
+        }));
+        fx.writeRecord(rec);
+      }
+      return fx;
+    }
+
+    function stubBlocking(
+      fx: { projectId: string; targetRoot: string },
+      blocked: (paths: string[]) => boolean,
+    ) {
+      const stub = new StubAgent({
+        revalidateImpl: async function* (params) {
+          if (blocked(params.batch.map((r) => r.filePath))) {
+            throw new ContentFilteredError(
+              "This content was flagged for possible cybersecurity risk.",
+            );
+          }
+          yield* [];
+          return {
+            verdicts: params.batch.flatMap((rec) =>
+              rec.findings.map((f) => ({
+                filePath: rec.filePath,
+                title: f.title,
+                verdict: "true-positive" as const,
+                reasoning: "ok",
+              })),
+            ),
+            meta: { durationMs: 1 },
+          };
+        },
+      });
+      setLoadedConfig(
+        defineConfig({
+          projects: [{ id: fx.projectId, root: fx.targetRoot }],
+          plugins: [{ name: "stub", agents: [stub] }],
+        }),
+      );
+      return stub;
+    }
+
+    it("retries a blocked batch one file at a time", async () => {
+      const fx = seed(["a.ts", "b.ts"]);
+      const stub = stubBlocking(fx, (paths) => paths.length > 1);
+      await revalidate({
+        projectId: fx.projectId,
+        agentType: "stub",
+        concurrency: 1,
+        batchSize: 2,
+      });
+      expect(stub.calls.revalidateCalls.map((c) => c.batch.length)).toEqual([2, 1, 1]);
+      expect(fx.readRecord("a.ts").findings[0].revalidation?.verdict).toBe("true-positive");
+      expect(fx.readRecord("b.ts").findings[0].revalidation?.verdict).toBe("true-positive");
+    });
+
+    it("doesn't retry finding by finding once a file stayed blocked", async () => {
+      const fx = seed(["a.ts"], 3);
+      const stub = stubBlocking(fx, () => true);
+      await revalidate({
+        projectId: fx.projectId,
+        agentType: "stub",
+        concurrency: 1,
+        batchSize: 1,
+      });
+      // The batch, then the per-file retry twice; no per-finding calls.
+      expect(stub.calls.revalidateCalls).toHaveLength(3);
+      expect(fx.readRecord("a.ts").findings.every((f) => !f.revalidation)).toBe(true);
+    });
+
+    it("leaves a file that stays blocked unrevalidated without losing the rest", async () => {
+      const fx = seed(["a.ts", "b.ts"]);
+      const stub = stubBlocking(fx, (paths) => paths.includes("b.ts"));
+      const progress: string[] = [];
+      await revalidate({
+        projectId: fx.projectId,
+        agentType: "stub",
+        concurrency: 1,
+        batchSize: 2,
+        onProgress: (p) => progress.push(p.message),
+      });
+      // Every block pauses new work, the last attempt on b.ts included.
+      expect(progress.filter((m) => /blocked by provider content filter/.test(m))).toHaveLength(3);
+      expect(progress.some((m) => /b\.ts, attempt 2\/2/.test(m))).toBe(true);
+      // batch of 2 (blocked), a.ts alone, b.ts twice (blocked both times)
+      expect(
+        stub.calls.revalidateCalls.map((c) => c.batch.map((r) => r.filePath).join(",")),
+      ).toEqual(["a.ts,b.ts", "a.ts", "b.ts", "b.ts"]);
+      expect(fx.readRecord("a.ts").findings[0].revalidation?.verdict).toBe("true-positive");
+      expect(fx.readRecord("b.ts").findings[0].revalidation).toBeUndefined();
+    });
   });
 });

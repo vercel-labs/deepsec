@@ -179,6 +179,10 @@ requires the complete access-token triple.
 | `PI_CODING_AGENT_DIR` | `--agent pi` | Optional Pi config/auth directory. Defaults to `~/.pi/agent`; local non-sandbox runs can reuse `auth.json` there. |
 | `DEEPSEC_AGENT_DEBUG` | both backends | Set to `1` to enable verbose agent logging. |
 | `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Equivalent to `dataDir` in config. |
+| `DEEPSEC_CONTENT_FILTER_PAUSE_MS` | `process`, `revalidate` | Pause before new batches and retries start after a provider content filter blocks a turn. Default `30000`. Each further block within 10 minutes doubles the pause, and the actual pause varies by ±25%. |
+| `DEEPSEC_CONTENT_FILTER_MAX_PAUSE_MS` | `process`, `revalidate` | Upper limit for that pause. Default `300000` (5 minutes). |
+| `DEEPSEC_LOCK_HEARTBEAT_MS` | `process` | How often a run renews the locks on files it still holds, so pauses and retries don't let them pass the 1-hour stale-lock limit. Default `300000` (5 minutes). |
+| `DEEPSEC_CONTENT_FILTER_CHUNK` | `process` | Size of the groups a blocked batch is retried in. Default `5`. A group that's blocked again is retried one file at a time, and a file blocked on both of its attempts is marked `error` so a later run picks it up. |
 
 ### Plugin-specific
 
