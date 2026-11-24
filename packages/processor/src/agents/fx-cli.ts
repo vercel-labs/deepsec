@@ -111,7 +111,6 @@ interface FxAskJson {
   exit_code?: number;
   model?: string;
   session_id?: string;
-  steps?: number;
   error?: string;
   usage?: {
     input_tokens?: number | null;
@@ -126,7 +125,6 @@ interface FxAskJson {
 interface FxPromptResult {
   resultText: string;
   meta: Partial<BatchMeta>;
-  turnCount: number;
   toolUseCount: number;
 }
 
@@ -591,7 +589,6 @@ class FxSession {
 /** Usage and cost come from the batch's FxUsageLedger, not one result. */
 function metaFromResult(result: FxAskJson): Partial<BatchMeta> {
   return {
-    numTurns: result.steps,
     agentSessionId: result.session_id || undefined,
   };
 }
@@ -606,7 +603,6 @@ async function runFxPrompt(
   return {
     resultText: result.final_output || result.output || "",
     meta: metaFromResult(result),
-    turnCount: result.steps ?? 0,
     toolUseCount: result.tool_calls?.length ?? 0,
   };
 }
@@ -819,7 +815,7 @@ export class FxAgentPlugin implements AgentPlugin {
       const costStr = costUsd !== undefined ? ` $${costUsd.toFixed(3)}` : "";
       yield {
         type: "complete",
-        message: `Investigation complete (${(durationMs / 1000).toFixed(1)}s, ${run.turnCount} turns, ${run.toolUseCount} tool calls${costStr}${tokensStr}${refusal?.refused ? " refusal" : ""})`,
+        message: `Investigation complete (${(durationMs / 1000).toFixed(1)}s, ${run.toolUseCount} tool calls${costStr}${tokensStr}${refusal?.refused ? " refusal" : ""})`,
       };
       return { results, meta: { ...run.meta, usage, costUsd, durationMs, refusal } };
     } finally {
@@ -923,7 +919,7 @@ export class FxAgentPlugin implements AgentPlugin {
       const costStr = costUsd !== undefined ? ` $${costUsd.toFixed(3)}` : "";
       yield {
         type: "complete",
-        message: `Revalidation complete (${(durationMs / 1000).toFixed(1)}s, ${run.turnCount} turns, ${run.toolUseCount} tool calls${costStr}, ${verdicts.length} verdicts${refusal?.refused ? " refusal" : ""})`,
+        message: `Revalidation complete (${(durationMs / 1000).toFixed(1)}s, ${run.toolUseCount} tool calls${costStr}, ${verdicts.length} verdicts${refusal?.refused ? " refusal" : ""})`,
       };
       return {
         verdicts,

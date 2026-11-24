@@ -208,7 +208,7 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
       cacheCreationInputTokens: 0,
     });
     expect(out.meta.costUsd).toBeCloseTo(600 * 0.000002 + 600 * 0.00001 + 1800 * 0.0000002, 10);
-    expect(out.meta.numTurns).toBe(3);
+    expect(out.meta).not.toHaveProperty("numTurns");
     expect(out.meta.agentSessionId).toBe("sess-1");
     expect(out.meta.refusal?.refused).toBe(false);
 

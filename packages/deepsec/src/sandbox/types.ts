@@ -48,6 +48,17 @@ export interface SandboxConfig {
   matchers?: string;
   /** Sandbox timeout in ms (default: 5 hours for Pro) */
   timeout: number;
+  /**
+   * Max worker sandboxes started per minute, each at a random point in its
+   * slot. 0 starts them all at once. Default: 10.
+   */
+  spawnRate?: number;
+  /**
+   * Shared spawn schedule. `sandbox-all` passes one limiter to every
+   * project so the rate applies across all of them; it replaces the
+   * per-run schedule from `spawnRate`.
+   */
+  spawnLimiter?: SpawnLimiter;
   /** Extra hostnames to allow through worker egress firewall (in addition to the AI host derived from base URLs) */
   allowedHosts?: string[];
   /** Extra CLI args to pass through to the subcommand */
@@ -61,6 +72,19 @@ export interface SandboxInstance {
   status: "creating" | "setup" | "running" | "collecting" | "done" | "error";
   manifest: string[];
   error?: string;
+  /** Command running the deepsec worker, once dispatched. */
+  cmdId?: string;
+  /** Results downloaded; nothing left to collect. */
+  collected?: boolean;
+  /** Run ID the worker uses for its file locks. */
+  workerRunId?: string;
+  /** The SDK reported the sandbox gone (timed out or stopped). */
+  gone?: boolean;
+}
+
+export interface SpawnLimiter {
+  /** Resolves when the caller may start its next sandbox. */
+  next(): Promise<void>;
 }
 
 export interface PartitionResult {
@@ -90,5 +114,15 @@ export interface SandboxRunState {
     cmdId: string;
     index: number;
     manifest: string[];
+    /** Run ID the worker uses for its file locks (`DEEPSEC_WORKER_RUN_ID`). */
+    workerRunId?: string;
+    /** When this worker was dispatched; holds expire relative to it. */
+    dispatchedAt?: string;
   }[];
+  /**
+   * Partitions planned but not dispatched yet. Saved right after
+   * partitioning so a concurrent run doesn't take the same files while
+   * this one is still bootstrapping or ramping up.
+   */
+  reserved?: { index: number; manifest: string[] }[];
 }
