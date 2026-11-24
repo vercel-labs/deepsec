@@ -264,6 +264,88 @@ export function formatMissingCodexBinaryError(msg: string): string {
   );
 }
 
+// --- Provider content filters ----------------------------------------------
+
+const CONTENT_FILTER_PATTERNS = [/flagged for possible cybersecurity risk/i];
+
+/** True when a provider safety filter ended the turn, as opposed to the model declining. */
+export function isContentFilterBlock(message: string | undefined): boolean {
+  if (!message) return false;
+  return CONTENT_FILTER_PATTERNS.some((re) => re.test(message));
+}
+
+/**
+ * Thrown by an agent backend when a provider content filter ended the turn.
+ * The processor owns the retry policy: it pauses new work and retries the
+ * batch's files in smaller groups, then one at a time, so one file's
+ * content can't fail the rest of the batch.
+ */
+export class ContentFilteredError extends Error {
+  readonly rawMessage: string;
+
+  constructor(rawMessage: string) {
+    super(`Blocked by provider content filter: ${rawMessage.slice(0, 300)}`);
+    this.name = "ContentFilteredError";
+    this.rawMessage = rawMessage;
+  }
+}
+
+/**
+ * Process-wide pause after content-filter blocks. Blocks arrive in waves
+ * under load, so each block holds back new batches and retries for a
+ * while; repeated blocks within `windowMs` double the pause up to `maxMs`.
+ */
+export class ContentFilterBrake {
+  private until = 0;
+  private strikes = 0;
+  private lastBlockAt = 0;
+
+  constructor(
+    private readonly baseMs: number,
+    private readonly maxMs: number,
+    private readonly windowMs = 10 * 60_000,
+    private readonly now: () => number = Date.now,
+    private readonly random: () => number = Math.random,
+  ) {}
+
+  /** Record a block; returns the pause it starts, in ms. */
+  noteBlock(): number {
+    const t = this.now();
+    this.strikes = t - this.lastBlockAt < this.windowMs ? this.strikes + 1 : 1;
+    this.lastBlockAt = t;
+    const pause = Math.min(this.maxMs, this.baseMs * 2 ** (this.strikes - 1));
+    // Cap after jitter so maxMs is a real upper limit.
+    const jittered = Math.min(this.maxMs, Math.round(pause * (0.75 + this.random() * 0.5)));
+    this.until = Math.max(this.until, t + jittered);
+    return jittered;
+  }
+
+  remainingMs(): number {
+    return Math.max(0, this.until - this.now());
+  }
+
+  /** Resolve once the pause is over, or right away when `signal` aborts. */
+  async wait(signal?: AbortSignal): Promise<void> {
+    for (;;) {
+      const ms = this.remainingMs();
+      if (ms <= 0 || signal?.aborted) return;
+      await new Promise<void>((resolve) => {
+        // Remove the abort listener when the timer wins, so repeated pauses
+        // don't pile up listeners on a long-lived signal.
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+  }
+}
+
 /**
  * Vercel AI Gateway endpoints — duplicated from preflight.ts on purpose:
  * processor doesn't depend on the deepsec CLI package. Keep these in sync
@@ -887,10 +969,20 @@ export function parseInvestigateResults(
     }
   }
 
-  for (const filePath of batchPaths) {
-    results.push({ filePath, findings: [] });
+  // The prompt requires an entry for every target file, empty findings
+  // included. Output that names none of them is not a result: tolerant
+  // jsonrepair turns prose such as "the allowlist is []" into an empty
+  // array, which used to record every file as clean. Throw so the caller
+  // runs its JSON repair turn or fails the batch.
+  if (batch.length > 0 && results.length === 0) {
+    const excerpt = resultText.slice(0, 400).replace(/\s+/g, " ");
+    throw new Error(
+      `Agent output did not include any of the ${batch.length} target file(s). First 400 chars: ${excerpt}`,
+    );
   }
 
+  // Files the agent left out are not clean. Leaving them out of `results`
+  // lets the processor mark them `error`, so the next run picks them up.
   return { results, invalid };
 }
 

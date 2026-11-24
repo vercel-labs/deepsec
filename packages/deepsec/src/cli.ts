@@ -318,6 +318,10 @@ program
     "Reasoning/thinking effort for the main agent run: minimal, low, medium, high, or xhigh (default: xhigh)",
   )
   .option(
+    "--cyber-access-program <program>",
+    "Codex: OpenAI Cyber access program for every turn: standard, daybreak_blue, or daybreak_red (needs codex login)",
+  )
+  .option(
     "--reinvestigate [n]",
     "Re-investigate files. No arg = all files. Pass N as a wave marker — productive analyses are tagged with N, and re-running with the same N skips already-done files. Bump N to request another pass.",
   )
@@ -395,6 +399,10 @@ program
   .option(
     "--thinking-level <level>",
     "Reasoning/thinking effort for the main agent run: minimal, low, medium, high, or xhigh (default: xhigh)",
+  )
+  .option(
+    "--cyber-access-program <program>",
+    "Codex: OpenAI Cyber access program for every turn: standard, daybreak_blue, or daybreak_red (needs codex login)",
   )
   .option(
     "--min-severity <sev>",
@@ -520,6 +528,11 @@ const sandboxCmd = program
   .option("--save-snapshot", "Snapshot after setup for future reuse")
   .option("--keep-alive", "Don't stop sandboxes after completion")
   .option("--timeout <ms>", "Sandbox timeout in ms (default: 5 hours)", parseInt)
+  .option(
+    "--spawn-rate <n>",
+    "Max worker sandboxes started per minute, at random points within each slot; 0 starts all at once (default: 10)",
+    parseInt,
+  )
   .action((subcommand: string, opts: Record<string, unknown>) => {
     // Commander puts unknown options into .args on the Command object
     const unknownArgs = sandboxCmd.args.slice(1); // skip the subcommand itself
@@ -538,6 +551,11 @@ const sandboxAllCmd = program
   .option("--sandboxes <n>", "Total sandboxes to distribute (default: 10)", parseInt)
   .option("--vcpus <n>", "vCPUs per sandbox (default: auto from concurrency, max: 8)", parseInt)
   .option("--timeout <ms>", "Sandbox timeout in ms (default: 5 hours)", parseInt)
+  .option(
+    "--spawn-rate <n>",
+    "Max worker sandboxes started per minute across all projects; 0 starts all at once (default: 10)",
+    parseInt,
+  )
   .action((subcommand: string, opts: Record<string, unknown>) => {
     const unknownArgs = sandboxAllCmd.args.slice(1);
     return sandboxAllCommand(subcommand, { ...opts, args: unknownArgs } as Parameters<

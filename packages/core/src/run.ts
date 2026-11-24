@@ -25,6 +25,9 @@ export function defaultConcurrency(): number {
   return Math.max(1, os.availableParallelism() - 1);
 }
 
+/** Matches the IDs `generateRunId()` produces. */
+const RUN_ID_PATTERN = /^\d{14}-[0-9a-f]{16}$/;
+
 export function generateRunId(): string {
   const now = new Date();
   const ts = now.toISOString().replace(/[-:T]/g, "").slice(0, 14); // YYYYMMDDHHmmss
@@ -114,8 +117,17 @@ export function createRunMeta(params: {
   type: RunMeta["type"];
   scannerConfig?: RunMeta["scannerConfig"];
   processorConfig?: RunMeta["processorConfig"];
+  /**
+   * Use this ID instead of generating one. The sandbox orchestrator assigns
+   * each worker's run ID so it can tell that worker's file locks apart from
+   * other runs'. Must match `RUN_ID_PATTERN`.
+   */
+  runId?: string;
 }): RunMeta {
-  const runId = generateRunId();
+  if (params.runId !== undefined && !RUN_ID_PATTERN.test(params.runId)) {
+    throw new Error(`Invalid run ID: ${params.runId}`);
+  }
+  const runId = params.runId ?? generateRunId();
   const meta: RunMeta = {
     runId,
     projectId: params.projectId,

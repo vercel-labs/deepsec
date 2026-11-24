@@ -38,6 +38,20 @@ deepsec is polyglot (TS, Go, Python, Lua, Terraform, …). The parent
 repo doesn't need to be a Node project — `.deepsec/` is self-contained
 and only needs pnpm or npm inside that one directory.
 
+### Why does `npx deepsec init` fail with `EBADDEVENGINES`?
+
+The repository's `package.json` sets `devEngines.packageManager` to a
+package manager other than npm, and npm refuses to run `npx` there unless
+`onFail` is `warn` or `ignore`. Run init through the required package
+manager instead:
+
+```bash
+pnpm dlx deepsec init
+```
+
+`.deepsec/` has its own `package.json` without `devEngines`, so commands
+run from inside it are unaffected.
+
 ### `.gitignore` policy
 
 The scaffold keeps `INFO.md`, `SETUP.md`, `deepsec.config.ts`, and

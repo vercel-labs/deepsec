@@ -82,6 +82,7 @@ export async function processCommand(opts: {
   model?: string;
   maxTurns?: number;
   thinkingLevel?: string;
+  cyberAccessProgram?: string;
   aiProvider?: string;
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
@@ -129,7 +130,12 @@ async function processStandardMode(opts: Parameters<typeof processCommand>[0]) {
   const model = opts.model ?? defaultModelForAgent(agentType);
   const resolvedRoute =
     !opts.aiApiKeyEnv && !opts.aiBaseUrl ? await applyConfiguredModelRoute(agentType) : undefined;
-  const agentConfig = buildAgentConfig({ ...opts, model, modelRoute: resolvedRoute?.route });
+  const agentConfig = buildAgentConfig({
+    ...opts,
+    agentType,
+    model,
+    modelRoute: resolvedRoute?.route,
+  });
   assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
 
   // --reinvestigate  → true (re-investigate all)
@@ -171,6 +177,9 @@ async function processStandardMode(opts: Parameters<typeof processCommand>[0]) {
   const result = await processRun({
     projectId,
     runId: opts.runId,
+    // Set by the sandbox orchestrator so it can recognize this worker's
+    // file locks when it releases unfinished files.
+    newRunId: opts.manifest ? process.env.DEEPSEC_WORKER_RUN_ID || undefined : undefined,
     agentType,
     config: agentConfig,
     reinvestigate,
@@ -277,7 +286,12 @@ async function processDirectMode(opts: Parameters<typeof processCommand>[0]) {
   const model = opts.model ?? defaultModelForAgent(agentType);
   const resolvedRoute =
     !opts.aiApiKeyEnv && !opts.aiBaseUrl ? await applyConfiguredModelRoute(agentType) : undefined;
-  const agentConfig = buildAgentConfig({ ...opts, model, modelRoute: resolvedRoute?.route });
+  const agentConfig = buildAgentConfig({
+    ...opts,
+    agentType,
+    model,
+    modelRoute: resolvedRoute?.route,
+  });
   assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
 
   // Resolve the file list.

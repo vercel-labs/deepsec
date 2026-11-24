@@ -8,6 +8,7 @@ import type { RefusalReport } from "@deepsec/core";
 import {
   Codex,
   type CodexOptions,
+  type CyberAccessProgram,
   type ModelReasoningEffort,
   type ThreadEvent,
   type ThreadItem,
@@ -19,9 +20,11 @@ import {
   buildInvestigatePrompt,
   buildRevalidateJsonRepairPrompt,
   buildRevalidatePrompt,
+  ContentFilteredError,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
   formatMissingCodexBinaryError,
+  isContentFilterBlock,
   isGatewayBaseUrl,
   isMissingBinaryError,
   isTransientError,
@@ -284,6 +287,7 @@ interface CodexInvocation {
   stderrLog: string | null;
   /** Tempdir under /tmp that was created for this invocation; cleanup on exit */
   codexHome: string;
+  cyberAccessProgram: CyberAccessProgram | undefined;
 }
 
 /**
@@ -314,15 +318,23 @@ export function buildGatewayProviderConfig(
   return providerConfig;
 }
 
-function buildCodexInvocation(): CodexInvocation {
-  // Decide between gateway mode (orchestrator has an API token, we route
-  // through Vercel AI Gateway via a custom provider) and subscription mode
-  // (no token but the user has run `codex login` on this machine — let
-  // codex use its default openai provider against their session). Sandbox
-  // workers always go gateway; the preflight ensures a token is present
-  // before we ever get here in that path.
+/**
+ * Decide between gateway mode (orchestrator has an API token, we route
+ * through Vercel AI Gateway via a custom provider) and subscription mode
+ * (no token but the user has run `codex login` on this machine — let
+ * codex use its default openai provider against their session). Sandbox
+ * workers always go gateway; the preflight ensures a token is present
+ * before we ever get here in that path.
+ */
+export function findCodexSubscriptionHome(): string | null {
   const haveApiToken = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  const subscriptionHome = haveApiToken ? null : findCodexSubscriptionAuth();
+  return haveApiToken ? null : findCodexSubscriptionAuth();
+}
+
+export function buildCodexInvocation(
+  requestedCyberAccessProgram: CyberAccessProgram | undefined,
+): CodexInvocation {
+  const subscriptionHome = findCodexSubscriptionHome();
 
   const codexHome = makeCodexHome();
   if (subscriptionHome) {
@@ -365,7 +377,7 @@ function buildCodexInvocation(): CodexInvocation {
     const env = buildCodexEnv(extras);
     const options: CodexOptions = { env, config: pluginLockdown };
     if (codexPathOverride) options.codexPathOverride = codexPathOverride;
-    return { options, stderrLog, codexHome };
+    return { options, stderrLog, codexHome, cyberAccessProgram: requestedCyberAccessProgram };
   }
 
   // Gateway mode (default): AI Gateway exposes an OpenAI-compatible
@@ -400,7 +412,7 @@ function buildCodexInvocation(): CodexInvocation {
     env: buildCodexEnv(extras),
   };
   if (codexPathOverride) options.codexPathOverride = codexPathOverride;
-  return { options, stderrLog, codexHome };
+  return { options, stderrLog, codexHome, cyberAccessProgram: undefined };
 }
 
 /**
@@ -669,6 +681,7 @@ async function runRefusalFollowUp(
   threadId: string | undefined,
   projectRoot: string,
   model: string,
+  cyberAccessProgram: CyberAccessProgram | undefined,
 ): Promise<RefusalReport | undefined> {
   const raw = await runToollessFollowUp(
     codex,
@@ -676,6 +689,7 @@ async function runRefusalFollowUp(
     projectRoot,
     model,
     REFUSAL_FOLLOWUP_PROMPT,
+    cyberAccessProgram,
   );
   if (raw === undefined) return undefined;
   return parseRefusalReport(raw);
@@ -687,6 +701,7 @@ async function runToollessFollowUp(
   projectRoot: string,
   model: string,
   prompt: string,
+  cyberAccessProgram: CyberAccessProgram | undefined,
 ): Promise<string | undefined> {
   if (!threadId) return undefined;
 
@@ -701,7 +716,7 @@ async function runToollessFollowUp(
       networkAccessEnabled: false,
       modelReasoningEffort: "low",
     });
-    const turn = await thread.run(prompt);
+    const turn = await thread.run(prompt, { cyberAccessProgram });
     raw = turn.finalResponse ?? "";
   } catch {
     return undefined;
@@ -713,7 +728,10 @@ async function runToollessFollowUp(
 export async function runCodexSetupTask(params: SetupTaskParams): Promise<string> {
   const model = (params.config.model as string) ?? DEFAULT_MODEL;
   const effort = (params.config.reasoningEffort as ModelReasoningEffort) ?? DEFAULT_EFFORT;
-  const invocation = buildCodexInvocation();
+  const invocation = buildCodexInvocation(
+    params.config.cyberAccessProgram as CyberAccessProgram | undefined,
+  );
+  const { cyberAccessProgram } = invocation;
   const codex = new Codex(invocation.options);
   const messages: string[] = [];
   let failure = "";
@@ -733,7 +751,10 @@ export async function runCodexSetupTask(params: SetupTaskParams): Promise<string
       webSearchEnabled: false,
     });
     const prompt = `${codexEnvironmentPreamble(params.projectRoot)}\n\n${params.prompt}`;
-    const { events } = await thread.runStreamed(prompt, { signal: params.signal });
+    const { events } = await thread.runStreamed(prompt, {
+      signal: params.signal,
+      cyberAccessProgram,
+    });
     for await (const event of events as AsyncGenerator<ThreadEvent>) {
       if (event.type === "item.completed") {
         const progress = itemToProgress(event.item);
@@ -754,6 +775,23 @@ export async function runCodexSetupTask(params: SetupTaskParams): Promise<string
   const text = finalizeCodexSetupResult(messages, failure);
   params.onProgress?.({ type: "complete", message: "Repository setup analysis complete" });
   return text;
+}
+
+/**
+ * Why an investigate turn produced no usable result, or "" when it
+ * completed. Only turns that left agent messages behind matter: a turn
+ * with no messages goes through the silent-failure path instead.
+ */
+export function codexIncompleteTurnReason(turn: {
+  agentMessages: number;
+  turnCompleted: boolean;
+  turnFailure: string;
+  lastError: string;
+}): string {
+  if (turn.agentMessages === 0) return "";
+  if (turn.turnFailure) return turn.turnFailure;
+  if (!turn.turnCompleted) return turn.lastError || "Codex turn ended before turn.completed";
+  return "";
 }
 
 export function finalizeCodexSetupResult(messages: string[], failure: string): string {
@@ -782,7 +820,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
 
     const basePrompt = buildInvestigatePrompt({ promptTemplate, projectInfo, batch });
     const prompt = `${codexEnvironmentPreamble(projectRoot)}\n\n${basePrompt}`;
-    const invocation = buildCodexInvocation();
+    const invocation = buildCodexInvocation(
+      config.cyberAccessProgram as CyberAccessProgram | undefined,
+    );
+    const { cyberAccessProgram } = invocation;
     // Idempotent cleanup the finally block runs whether we exit via return,
     // throw, or generator close. Each helper swallows missing-target errors,
     // so calling them twice is safe.
@@ -801,6 +842,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     let toolUseCount = 0;
     let sdkMeta: Partial<BatchMeta> = {};
     let lastError = "";
+    // Set when the turn ends without `turn.completed`: a `turn.failed`
+    // event (for example a safety-filter block), or the CLI dying mid-turn.
+    // The agent messages from such a turn are progress notes, not results.
+    let incompleteTurn = "";
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -816,6 +861,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           sdkMeta = {};
           lastError = "";
         }
+        let turnCompleted = false;
+        let turnFailure = "";
 
         try {
           const thread = codex.startThread({
@@ -834,7 +881,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
             modelReasoningEffort: effort,
             webSearchEnabled: false,
           });
-          const { events } = await thread.runStreamed(prompt, { signal });
+          const { events } = await thread.runStreamed(prompt, { signal, cyberAccessProgram });
 
           for await (const event of events as AsyncGenerator<ThreadEvent>) {
             switch (event.type) {
@@ -868,10 +915,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
                 }
                 sdkMeta.numTurns = turnCount;
                 sdkMeta.agentSessionId = threadId ?? thread.id ?? undefined;
+                turnCompleted = true;
                 break;
 
               case "turn.failed":
                 lastError = event.error?.message ?? "turn.failed";
+                turnFailure = lastError;
                 yield {
                   type: "error" as const,
                   message: `Codex turn failed: ${lastError.slice(0, 300)}`,
@@ -895,7 +944,38 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           };
         }
 
-        if (agentMessages.length > 0) break;
+        if (signal?.aborted) {
+          throw signal.reason instanceof Error ? signal.reason : new Error("Codex batch aborted");
+        }
+        // A provider content filter ended the turn. Retrying the same batch
+        // right away tends to hit the same filter; the processor pauses and
+        // retries the files in smaller groups instead. A turn that completed
+        // without turn.failed keeps its results even if an earlier stream
+        // error mentioned the filter.
+        const filterBlock =
+          turnCompleted && !turnFailure
+            ? undefined
+            : [turnFailure, lastError].find((m) => isContentFilterBlock(m));
+        if (filterBlock) throw new ContentFilteredError(filterBlock);
+        incompleteTurn = codexIncompleteTurnReason({
+          agentMessages: agentMessages.length,
+          turnCompleted,
+          turnFailure,
+          lastError,
+        });
+        if (agentMessages.length > 0 && !incompleteTurn) break;
+        if (incompleteTurn && agentMessages.length > 0) {
+          // A partial turn's last message would otherwise be parsed (or
+          // JSON-repaired) into "no findings" for files the agent never
+          // finished. Retry on a fresh thread, and fail the batch if every
+          // attempt ends this way so its files stay eligible for a re-run.
+          const quotaSource = classifyQuotaError(incompleteTurn, "codex");
+          if (quotaSource) throw new QuotaExhaustedError(quotaSource, incompleteTurn);
+          if (attempt >= MAX_ATTEMPTS) break;
+          lastError = incompleteTurn;
+          await backoff(attempt);
+          continue;
+        }
         // Codex frequently exits silent on quota/auth errors — the SDK
         // returns an empty `response.completed` and the error only lives in
         // the wrapper-captured stderr. Read it BEFORE deciding to retry so
@@ -933,6 +1013,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           };
         }
         await backoff(attempt);
+      }
+
+      if (incompleteTurn && agentMessages.length > 0) {
+        throw new Error(
+          `Codex turn did not complete after ${MAX_ATTEMPTS} attempt(s): ${incompleteTurn.slice(0, 500)}`,
+        );
       }
 
       const resultText = chooseFinalText(agentMessages);
@@ -1003,6 +1089,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           projectRoot,
           model,
           buildInvestigateJsonRepairPrompt(batch),
+          cyberAccessProgram,
         );
         if (repairText === undefined) {
           writeParseFailureDebug({
@@ -1037,7 +1124,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           results: parsed,
           invalid: parsedOutcome.invalid,
           batch,
-          followUp: (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p),
+          followUp: (p) =>
+            runToollessFollowUp(codex, threadId, projectRoot, model, p, cyberAccessProgram),
           agentLabel: "Codex",
           agentType: this.type,
           projectId,
@@ -1054,7 +1142,13 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         };
       }
 
-      const refusal = await runRefusalFollowUp(codex, threadId, projectRoot, model);
+      const refusal = await runRefusalFollowUp(
+        codex,
+        threadId,
+        projectRoot,
+        model,
+        cyberAccessProgram,
+      );
       if (refusal?.refused) {
         yield {
           type: "thinking" as const,
@@ -1112,7 +1206,10 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
       message: `Revalidating ${totalFindings} finding(s) across ${batch.length} file(s) with Codex SDK (${model})`,
     };
 
-    const invocation = buildCodexInvocation();
+    const invocation = buildCodexInvocation(
+      config.cyberAccessProgram as CyberAccessProgram | undefined,
+    );
+    const { cyberAccessProgram } = invocation;
     let cleanedUp = false;
     const cleanup = (): void => {
       if (cleanedUp) return;
@@ -1127,6 +1224,9 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
     let turnCount = 0;
     let sdkMeta: Partial<BatchMeta> = {};
     let lastError = "";
+    // See investigate(): a turn that ended without `turn.completed` left
+    // progress notes, not verdicts.
+    let incompleteTurn = "";
 
     try {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -1141,6 +1241,8 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           sdkMeta = {};
           lastError = "";
         }
+        let turnCompleted = false;
+        let turnFailure = "";
 
         try {
           const thread = codex.startThread({
@@ -1155,7 +1257,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
             modelReasoningEffort: effort,
             webSearchEnabled: false,
           });
-          const { events } = await thread.runStreamed(prompt, { signal });
+          const { events } = await thread.runStreamed(prompt, { signal, cyberAccessProgram });
 
           for await (const event of events as AsyncGenerator<ThreadEvent>) {
             switch (event.type) {
@@ -1183,9 +1285,11 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
                 }
                 sdkMeta.numTurns = turnCount;
                 sdkMeta.agentSessionId = threadId ?? thread.id ?? undefined;
+                turnCompleted = true;
                 break;
               case "turn.failed":
                 lastError = event.error?.message ?? "turn.failed";
+                turnFailure = lastError;
                 yield {
                   type: "error" as const,
                   message: `Codex turn failed: ${lastError.slice(0, 300)}`,
@@ -1205,7 +1309,31 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           yield { type: "error" as const, message: `Codex SDK error: ${lastError.slice(0, 300)}` };
         }
 
-        if (agentMessages.length > 0) break;
+        if (signal?.aborted) {
+          throw signal.reason instanceof Error ? signal.reason : new Error("Codex batch aborted");
+        }
+        // Same as investigate(): a content-filter block goes back to the
+        // processor, which pauses and retries the files one at a time.
+        const revalFilterBlock =
+          turnCompleted && !turnFailure
+            ? undefined
+            : [turnFailure, lastError].find((m) => isContentFilterBlock(m));
+        if (revalFilterBlock) throw new ContentFilteredError(revalFilterBlock);
+        incompleteTurn = codexIncompleteTurnReason({
+          agentMessages: agentMessages.length,
+          turnCompleted,
+          turnFailure,
+          lastError,
+        });
+        if (agentMessages.length > 0 && !incompleteTurn) break;
+        if (incompleteTurn && agentMessages.length > 0) {
+          const quotaSource = classifyQuotaError(incompleteTurn, "codex");
+          if (quotaSource) throw new QuotaExhaustedError(quotaSource, incompleteTurn);
+          if (attempt >= MAX_ATTEMPTS) break;
+          lastError = incompleteTurn;
+          await backoff(attempt);
+          continue;
+        }
         // See investigate() — read stderr first so we bail fast on quota
         // misses or missing binaries instead of burning all 3 attempts.
         const stderrPeek = readStderrTail(invocation.stderrLog) ?? "";
@@ -1239,6 +1367,12 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           };
         }
         await backoff(attempt);
+      }
+
+      if (incompleteTurn && agentMessages.length > 0) {
+        throw new Error(
+          `Codex revalidation turn did not complete after ${MAX_ATTEMPTS} attempt(s): ${incompleteTurn.slice(0, 500)}`,
+        );
       }
 
       const resultText = chooseFinalText(agentMessages);
@@ -1298,6 +1432,7 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
           projectRoot,
           model,
           jsonRepairPrompt,
+          cyberAccessProgram,
         );
         if (repairText === undefined) {
           writeParseFailureDebug({
@@ -1342,13 +1477,19 @@ export class CodexAgentSdkPlugin implements AgentPlugin {
         verdicts,
         initialRawText: parsedText,
         followUp: threadId
-          ? (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p)
+          ? (p) => runToollessFollowUp(codex, threadId, projectRoot, model, p, cyberAccessProgram)
           : undefined,
         agentLabel: "Codex",
       });
       verdicts = repair.verdicts;
 
-      const refusal = await runRefusalFollowUp(codex, threadId, projectRoot, model);
+      const refusal = await runRefusalFollowUp(
+        codex,
+        threadId,
+        projectRoot,
+        model,
+        cyberAccessProgram,
+      );
       if (refusal?.refused) {
         yield {
           type: "thinking" as const,

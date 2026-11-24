@@ -65,6 +65,7 @@ export async function revalidateCommand(opts: {
   model?: string;
   maxTurns?: number;
   thinkingLevel?: string;
+  cyberAccessProgram?: string;
   aiProvider?: string;
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
@@ -90,7 +91,12 @@ export async function revalidateCommand(opts: {
 
   const resolvedRoute =
     !opts.aiApiKeyEnv && !opts.aiBaseUrl ? await applyConfiguredModelRoute(agentType) : undefined;
-  const agentConfig = buildAgentConfig({ ...opts, model, modelRoute: resolvedRoute?.route });
+  const agentConfig = buildAgentConfig({
+    ...opts,
+    agentType,
+    model,
+    modelRoute: resolvedRoute?.route,
+  });
   assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);

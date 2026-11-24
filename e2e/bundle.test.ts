@@ -308,6 +308,9 @@ export default defineConfig({
         expect(fs.existsSync(path.join(workspace, f)), `missing ${f}`).toBe(true);
       }
       expect(fs.existsSync(path.join(workspace, ".env.local"))).toBe(false);
+      expect(fs.readFileSync(path.join(workspace, "pnpm-workspace.yaml"), "utf-8")).toContain(
+        "strictDepBuilds: false",
+      );
       // No top-level INFO.md / SETUP.md — both live under data/<id>/.
       expect(fs.existsSync(path.join(workspace, "INFO.md"))).toBe(false);
       expect(fs.existsSync(path.join(workspace, "SETUP.md"))).toBe(false);

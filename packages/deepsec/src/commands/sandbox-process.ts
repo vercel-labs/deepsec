@@ -22,6 +22,7 @@ interface SandboxOpts {
   detach?: boolean;
   runId?: string;
   timeout?: number;
+  spawnRate?: number;
   args?: string[];
 }
 
@@ -41,6 +42,14 @@ function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
 }
 
+export function rejectCyberAccessProgram(args: string[]): void {
+  if (args.some((a) => a === "--cyber-access-program" || a.startsWith("--cyber-access-program="))) {
+    throw new Error(
+      "--cyber-access-program needs Codex subscription auth, which sandbox workers don't have. Run process or revalidate locally instead.",
+    );
+  }
+}
+
 /**
  * Extract `--reinvestigate` in its optional-arg form. Returns:
  *   undefined — flag not present
@@ -57,6 +66,8 @@ export function extractReinvestigate(args: string[]): boolean | number | undefin
   }
   return true;
 }
+
+export const DEFAULT_SPAWN_RATE = 10;
 
 function buildConfig(
   subcommand: SandboxSubcommand,
@@ -90,6 +101,7 @@ function buildConfig(
     filter: extractFlag(args, "--filter"),
     matchers: extractFlag(args, "--matchers"),
     timeout: opts.timeout ?? 5 * 60 * 60 * 1000,
+    spawnRate: opts.spawnRate ?? DEFAULT_SPAWN_RATE,
     extraArgs: args,
   };
 }
@@ -146,6 +158,7 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   }
 
   const projectId = resolveProjectId(opts.projectId);
+  rejectCyberAccessProgram(opts.args ?? []);
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
 
   if (!config.aiApiKeyEnv && !config.aiBaseUrl) {

@@ -11,6 +11,12 @@ From the root of the repository you want to scan:
 npx deepsec init
 ```
 
+If the repository's `package.json` sets `devEngines.packageManager` to a
+package manager other than npm, npm stops `npx` with an `EBADDEVENGINES`
+error before deepsec starts. Run the command through that package manager
+instead, such as `pnpm dlx deepsec init`, and make the same substitution in
+the other `npx deepsec init` commands on this page.
+
 The command asks you two things, then does the rest on its own:
 
 1. **Which model to use.** You'll see a short list of recommended

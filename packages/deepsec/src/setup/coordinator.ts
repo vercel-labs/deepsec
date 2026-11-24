@@ -445,7 +445,7 @@ export async function runSetupWorkflow(
         provider: "vercel",
       };
     reconcileAiGatewayDefaultsForRoute(route);
-    const agentConfig = buildAgentConfig({ model, thinkingLevel, modelRoute: route });
+    const agentConfig = buildAgentConfig({ agentType, model, thinkingLevel, modelRoute: route });
     reconcileWorkspaceConfig(workspaceDir, route, agentType, model, thinkingLevel);
 
     const loaded = await loadConfig(workspaceDir);
