@@ -101,6 +101,8 @@ const SLUG_NOTES: Record<string, string> = {
     "Weak entry-point candidate — confirm no `LoginRequiredMixin` / `@login_required` / DRF `permission_classes` AND that user input reaches a sink before flagging.",
   "py-fastapi-route":
     "Weak entry-point candidate — confirm no `Depends(auth)` / `Security(...)` and that input reaches a sink before flagging.",
+  "py-litestar-route":
+    "Weak entry-point candidate — Litestar has no built-in auth on routes: confirm the handler carries `guards=[...]` (or inherits one from its `Router`/`Controller`), and that it isn't opted out via `exclude_from_auth`, before flagging.",
   "py-flask-route":
     "Weak entry-point candidate — confirm no `@login_required` / `before_request` auth hook before flagging.",
   "rb-rails-controller":
