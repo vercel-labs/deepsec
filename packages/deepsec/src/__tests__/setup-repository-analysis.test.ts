@@ -2,7 +2,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseRepositoryAnalysis } from "../setup/repository-analysis.js";
+import {
+  buildRepositoryAnalysisPrompt,
+  parseRepositoryAnalysis,
+} from "../setup/repository-analysis.js";
+
+describe("threat-model prompt dependency context", () => {
+  it("appends the osv context when provided", () => {
+    const ctx = "## Known-vulnerable dependencies (from osv-scanner)\n- `idna@2.8`: PYSEC-2024-60";
+    const prompt = buildRepositoryAnalysisPrompt("demo", ctx);
+    expect(prompt).toContain(ctx);
+  });
+
+  it("omits the section when no context is given", () => {
+    const prompt = buildRepositoryAnalysisPrompt("demo");
+    expect(prompt).not.toContain("Known-vulnerable dependencies");
+  });
+});
 
 describe("repository analysis parsing", () => {
   it("accepts legitimate angle-bracket syntax in a completed threat model", () => {

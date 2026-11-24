@@ -39,6 +39,7 @@ export interface InitOpts {
   force?: boolean;
   scaffoldOnly?: boolean;
   skipInstall?: boolean;
+  osv?: boolean;
   packageManager?: SupportedPackageManager;
   agent?: string;
   model?: string;
@@ -319,6 +320,7 @@ export async function initCommand(opts: InitOpts) {
         modelRoute,
         packageManager: opts.packageManager,
         skipInstall: opts.skipInstall,
+        osv: opts.osv,
         nonInteractive: headless,
         teamId: opts.teamId,
         vercelProjectId: opts.vercelProjectId,

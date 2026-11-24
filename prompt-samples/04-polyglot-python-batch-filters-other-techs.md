@@ -71,6 +71,14 @@ Before classifying an issue, check for mitigations:
 
 If fully mitigated, do NOT flag it. Report only genuine, exploitable vulnerabilities.
 
+## Known-vulnerable dependencies
+
+When project context (INFO.md) includes a **Dependency reachability** section, treat its graded verdicts as promotion guidance for dependency-advisory candidates:
+
+- **HIGH reachability** with a named call site (`file:line`): the vulnerable dependency code is reached from this codebase. Promote it to a finding at that site — do NOT dismiss it as "just a library default" or "the application's responsibility." The advisory's own severity carries into the finding. A HIGH verdict means reachability is already established upstream; your job is to confirm the call site and write it up, not to re-litigate whether a reachable advisory is worth reporting.
+- **MEDIUM reachability**: judge it on its merits like any other candidate.
+- **LOW reachability**: the affected API is not called, or the package is only transitive. Keep it as context; do NOT raise a standalone finding on the basis of a LOW grade. The one exception: if you find a concrete reachable call site (`file:line`) that the grading missed, treat it as reachable and promote — a LOW grade is a starting assumption, not a reason to ignore evidence.
+
 ## Auth Bypass Patterns to Look For
 
 Beyond missing auth, look for **subtle bypasses** in code that appears to have auth:

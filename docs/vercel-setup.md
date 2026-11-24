@@ -169,6 +169,9 @@ broker descriptor is kept in memory and is not written to detached-run state.
 This guarantee applies to Vercel Sandbox workers. The one-shot repository
 analysis phase runs through a local coding-agent SDK with read-only/no-network
 tool policy; treat the target repository as trusted at coding-agent privilege.
+The opt-in [dependency-CVE step](dependency-cves.md) is the exception: when
+enabled with `--osv` or `osv: true`, setup runs `osv-scanner` (and, for
+unpinned manifests, `uv`/`syft`) which reach the network. It is off by default.
 
 ## Changing or re-verifying a route
 

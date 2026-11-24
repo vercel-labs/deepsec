@@ -35,6 +35,14 @@ export interface SetupState {
   infoDigest?: string;
   inventoryDigest?: string;
   matcherDigest?: string;
+  /** The last explicit `--osv` (true) / `--no-osv` (false) choice, so a plain
+   * resume or a later bare `deepsec init` / `setup` keeps it instead of silently
+   * flipping it and re-analyzing. Undefined until a flag is passed. */
+  osvEnabled?: boolean;
+  /** Digest of the osv findings the dependency-CVE matcher pass last completed
+   * for. Recorded only after the pass finishes, so a failed pass is retried, and
+   * a changed set of vulnerable dependencies gets a fresh pass. */
+  osvMatcherPassDigest?: string;
   baselineScanRunId?: string;
   finalScanRunId?: string;
   baselineScanSummary?: {

@@ -27,6 +27,7 @@ export interface SetupCommandOptions extends ModelRouteCliOptions {
   thinkingLevel?: string;
   packageManager?: SupportedPackageManager;
   skipInstall?: boolean;
+  osv?: boolean;
   headless?: boolean;
   nonInteractive?: boolean;
   yes?: boolean;
@@ -133,6 +134,7 @@ export async function setupCommand(options: SetupCommandOptions): Promise<void> 
       modelRoute: route,
       packageManager: options.packageManager,
       skipInstall: options.skipInstall,
+      osv: options.osv,
       nonInteractive: headless,
       teamId: options.vercelTeamId,
       vercelProjectId: options.vercelProjectId,
