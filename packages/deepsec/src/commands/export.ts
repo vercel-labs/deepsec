@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { FileRecord, Finding, Severity } from "@deepsec/core";
-import { dataDir, getDataRoot, loadAllFileRecords } from "@deepsec/core";
+import { dataDir, getDataRoot, loadAllFileRecords, readProjectConfig } from "@deepsec/core";
 import { BOLD, DIM, GREEN, RESET, YELLOW } from "../formatters.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
+import { getDeepsecVersion } from "../version.js";
+import { repoPathPrefix, toSarif } from "./sarif.js";
 
 const SEVERITY_ORDER: Record<Severity, number> = {
   CRITICAL: 0,
@@ -25,7 +27,7 @@ interface OwnerSummary {
   recentCommitters: { name: string; email: string; date: string }[];
 }
 
-interface ExportedFinding {
+export interface ExportedFinding {
   title: string;
   description: string;
   severity: Severity;
@@ -33,6 +35,7 @@ interface ExportedFinding {
   /** Best-guess owner email, suitable for downstream issue-tracker assignment. */
   assignee?: string;
   metadata: {
+    findingId?: string;
     projectId: string;
     filePath: string;
     lineNumbers: number[];
@@ -122,7 +125,7 @@ function buildDescription(
   finding: Finding,
   record: FileRecord,
   projectId: string,
-  owners: OwnerSummary,
+  owners: OwnerSummary | undefined,
   githubUrl?: string,
 ): string {
   const head = githubUrl
@@ -135,7 +138,7 @@ function buildDescription(
     `**Severity:** ${finding.severity}  •  **Confidence:** ${finding.confidence}  •  **Slug:** \`${finding.vulnSlug}\``,
   ];
 
-  if (owners.assignee || owners.teams.length > 0 || owners.oncall.length > 0) {
+  if (owners && (owners.assignee || owners.teams.length > 0 || owners.oncall.length > 0)) {
     parts.push("", "## Owners");
     if (owners.assignee) {
       parts.push(
@@ -189,7 +192,7 @@ function buildDescription(
     );
   }
 
-  if (owners.contributors.length > 0) {
+  if (owners && owners.contributors.length > 0) {
     parts.push(
       "",
       "## Top contributors",
@@ -197,7 +200,7 @@ function buildDescription(
       ...owners.contributors.map((c) => `- ${c.name} <${c.email}> (score: ${c.score.toFixed(2)})`),
     );
   }
-  if (owners.recentCommitters.length > 0) {
+  if (owners && owners.recentCommitters.length > 0) {
     parts.push(
       "",
       "## Recent committers (`git log`)",
@@ -253,6 +256,15 @@ function writeJson(findings: ExportedFinding[], out: string | undefined) {
   } else {
     process.stdout.write(json + "\n");
   }
+}
+
+function writeSarif(findings: ExportedFinding[], out: string, projectId: string) {
+  const prefix = repoPathPrefix(readProjectConfig(projectId).rootPath);
+  if (prefix) console.log(`  SARIF paths prefixed with ${prefix}`);
+  const sarif = JSON.stringify(toSarif(findings, getDeepsecVersion(), prefix), null, 2);
+  fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+  fs.writeFileSync(out, sarif + "\n");
+  console.log(`\n${GREEN}Exported ${findings.length} finding(s)${RESET} → ${BOLD}${out}${RESET}`);
 }
 
 function writeMdDir(findings: ExportedFinding[], out: string) {
@@ -342,11 +354,17 @@ export async function exportCommand(opts: {
     : listProjectIds();
 
   const format = opts.format ?? "json";
-  if (format !== "json" && format !== "md-dir") {
-    throw new Error(`--format must be "json" or "md-dir", got "${format}"`);
+  if (format !== "json" && format !== "md-dir" && format !== "sarif") {
+    throw new Error(`--format must be "json", "md-dir", or "sarif", got "${format}"`);
   }
   if (format === "md-dir" && !opts.out) {
     throw new Error(`--format md-dir requires --out <dir>`);
+  }
+  if (format === "sarif" && !opts.out) {
+    throw new Error(`--format sarif requires --out <file>`);
+  }
+  if (format === "sarif" && projectIds.length !== 1) {
+    throw new Error(`--format sarif requires exactly one project; pass --project-id <id>`);
   }
 
   const minSeverity = opts.minSeverity as Severity | undefined;
@@ -414,11 +432,17 @@ export async function exportCommand(opts: {
   for (const projectId of projectIds) {
     let records: FileRecord[];
     try {
-      records = loadAllFileRecords(projectId);
+      // A SARIF upload replaces the previous one, so a record skipped while
+      // `process` is mid-write would close its open alerts.
+      records = loadAllFileRecords(projectId, { strict: format === "sarif" });
     } catch (err) {
-      console.error(
-        `  ${DIM}[${projectId}] skipped: ${err instanceof Error ? err.message : err}${RESET}`,
-      );
+      const reason = err instanceof Error ? err.message : err;
+      if (format === "sarif") {
+        throw new Error(
+          `--format sarif: ${reason}. Nothing was written. If \`deepsec process\` is running, export again after it finishes.`,
+        );
+      }
+      console.error(`  ${DIM}[${projectId}] skipped: ${reason}${RESET}`);
       continue;
     }
     const repoUrl = projectRepoUrl(projectId);
@@ -496,11 +520,20 @@ export async function exportCommand(opts: {
 
         findings.push({
           title: `[${finding.severity}] ${finding.title}`,
-          description: buildDescription(finding, record, projectId, owners, githubUrl),
+          // SARIF alerts are readable by anyone with alert access, so they
+          // carry no owner contact details.
+          description: buildDescription(
+            finding,
+            record,
+            projectId,
+            format === "sarif" ? undefined : owners,
+            githubUrl,
+          ),
           severity: finding.severity,
           labels,
           assignee: owners.assignee,
           metadata: {
+            findingId: finding.findingId,
             projectId,
             filePath: record.filePath,
             lineNumbers: finding.lineNumbers,
@@ -534,6 +567,8 @@ export async function exportCommand(opts: {
 
   if (format === "md-dir") {
     writeMdDir(findings, opts.out!);
+  } else if (format === "sarif") {
+    writeSarif(findings, opts.out!, projectIds[0]);
   } else {
     writeJson(findings, opts.out);
   }
