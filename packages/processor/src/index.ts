@@ -1930,7 +1930,11 @@ export async function revalidate(params: {
       );
     }
 
-    completeRun(projectId, runId, "done", {
+    // Abandoned batches mean the sweep never covered its scope, so the run
+    // is not "done". Reusing "error" rather than adding a phase keeps lock
+    // reclaim working — it treats exactly "done" | "error" as finished.
+    const batchesAbandoned = batches.length - batchesCompleted;
+    completeRun(projectId, runId, batchesAbandoned > 0 ? "error" : "done", {
       findingsRevalidated: totalRevalidated,
       truePositives: totalTP,
       falsePositives: totalFP,
@@ -1938,6 +1942,10 @@ export async function revalidate(params: {
       uncertain: totalUncertain,
       duplicates: totalDuplicate,
       totalCostUsd,
+      findingsRequested: totalRequested,
+      findingsUnresolved: totalUnresolved.length,
+      batchesTotal: batches.length,
+      batchesCompleted,
     });
 
     const totalDupeRejected = dupeRejectedIds.size;
