@@ -36,6 +36,18 @@ export function saveRunState(state: SandboxRunState): void {
   }
 }
 
+/**
+ * Rewrite an existing run state (attached runs shrink theirs as sandboxes
+ * finish). Writes to a temp file and renames so readers never see a
+ * partial file.
+ */
+export function updateRunState(state: SandboxRunState): void {
+  const dest = runPath(state.projectId, state.runId);
+  const tmp = `${dest}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
+  fs.renameSync(tmp, dest);
+}
+
 export function loadRunState(projectId: string, runId: string): SandboxRunState {
   const p = runPath(projectId, runId);
   return JSON.parse(fs.readFileSync(p, "utf-8"));

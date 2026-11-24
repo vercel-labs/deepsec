@@ -25,6 +25,14 @@ describe("generateRunId", () => {
 });
 
 describe("createRunMeta", () => {
+  it("uses a supplied run ID and rejects malformed ones", () => {
+    const base = { projectId: "p", rootPath: "/tmp", type: "process" as const };
+    expect(createRunMeta({ ...base, runId: "20261122000000-0123456789abcdef" }).runId).toBe(
+      "20261122000000-0123456789abcdef",
+    );
+    expect(() => createRunMeta({ ...base, runId: "../escape" })).toThrow(/Invalid run ID/);
+  });
+
   it("creates a scan RunMeta", () => {
     const meta = createRunMeta({
       projectId: "test-project",

@@ -9,10 +9,14 @@ import {
   assertSandboxCredential,
 } from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
-import { orchestrate } from "../sandbox/orchestrator.js";
+import { createSpawnLimiter, orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
-import { extractReinvestigate, rejectCyberAccessProgram } from "./sandbox-process.js";
+import {
+  DEFAULT_SPAWN_RATE,
+  extractReinvestigate,
+  rejectCyberAccessProgram,
+} from "./sandbox-process.js";
 
 // Mirror of VALID_COMMANDS in sandbox-process.ts. Kept in sync by hand —
 // `enrich` is intentionally excluded: it runs locally (git committer
@@ -72,6 +76,7 @@ export async function sandboxAllCommand(
     vcpus?: number;
     timeout?: number;
     detach?: boolean;
+    spawnRate?: number;
     args?: string[];
   },
 ) {
@@ -204,6 +209,12 @@ export async function sandboxAllCommand(
     console.log(`${DIM}[${elapsed}s]${RESET} ${CYAN}[${projectId}]${RESET} ${msg}`);
   };
 
+  // One schedule for every project, so the spawn rate applies to the whole
+  // run rather than separately to each project.
+  const spawnRate = opts.spawnRate ?? DEFAULT_SPAWN_RATE;
+  const spawnLimiter =
+    spawnRate > 0 && totalSandboxes > spawnRate ? createSpawnLimiter(spawnRate) : undefined;
+
   // Run all projects in parallel
   const promises = allocations.map(async (a) => {
     const config: SandboxConfig = {
@@ -229,6 +240,10 @@ export async function sandboxAllCommand(
       filter: extractFlag(passthrough, "--filter"),
       matchers: extractFlag(passthrough, "--matchers"),
       timeout,
+      // The shared limiter paces all projects; without one (small runs, or
+      // --spawn-rate 0) each project starts its sandboxes at once.
+      spawnRate: spawnLimiter ? spawnRate : 0,
+      spawnLimiter,
       extraArgs: passthrough,
     };
 
