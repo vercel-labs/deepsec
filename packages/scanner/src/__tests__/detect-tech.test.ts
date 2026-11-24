@@ -87,6 +87,54 @@ describe("detectTech", () => {
     expect(detectTech(tmpRoot).tags).toContain("rails");
   });
 
+  it("detects async-grpc Ruby stacks from Gemfile", () => {
+    write("Gemfile", `source "https://rubygems.org"\ngem "async-grpc", "~> 0.3"\n`);
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toEqual(expect.arrayContaining(["ruby", "async-grpc", "grpc-ruby", "grpc"]));
+  });
+
+  it("detects async-grpc Ruby stacks from Gemfile.lock", () => {
+    // Bundler spec entries are indented with exactly four spaces.
+    write("Gemfile.lock", `GEM\n  specs:\n    async-grpc (1.2.3)\n`);
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toEqual(expect.arrayContaining(["ruby", "async-grpc", "grpc-ruby", "grpc"]));
+  });
+
+  it("detects plain Ruby grpc without async-grpc", () => {
+    write("Gemfile", `source "https://rubygems.org"\ngem "grpc", "~> 1.60"\n`);
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toEqual(expect.arrayContaining(["ruby", "grpc-ruby", "grpc"]));
+    expect(tags).not.toContain("async-grpc");
+  });
+
+  it("detects Ruby async-websocket from Gemfile", () => {
+    write("Gemfile", `source "https://rubygems.org"\ngem "async-websocket", "~> 0.30"\n`);
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toEqual(expect.arrayContaining(["ruby", "async-websocket"]));
+  });
+
+  it("does not detect gRPC from commented gems or similarly named gems", () => {
+    write("Gemfile", `source "https://rubygems.org"\n# gem "grpc"\ngem "grpc-tools", "~> 1.60"\n`);
+    const tags = detectTech(tmpRoot).tags;
+    expect(tags).toContain("ruby");
+    expect(tags).not.toContain("grpc");
+    expect(tags).not.toContain("grpc-ruby");
+  });
+
+  it("keeps Python Falcon and Ruby Falcon as distinct tags", () => {
+    write("pyproject.toml", `[project]\nname = "x"\ndependencies = ["falcon"]\n`);
+    let tags = detectTech(tmpRoot).tags;
+    expect(tags).toContain("falcon");
+    expect(tags).not.toContain("falcon-ruby");
+
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-detect-tech-"));
+    write("Gemfile", `source "https://rubygems.org"\ngem "falcon", "~> 0.50"\n`);
+    tags = detectTech(tmpRoot).tags;
+    expect(tags).toContain("falcon-ruby");
+    expect(tags).not.toContain("falcon");
+  });
+
   it("detects Gin from go.mod", () => {
     write("go.mod", `module example.com/x\n\nrequire (\n  github.com/gin-gonic/gin v1.10.0\n)\n`);
     const tags = detectTech(tmpRoot).tags;
