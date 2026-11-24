@@ -219,16 +219,16 @@ export class QuotaExhaustedError extends Error {
 }
 
 const CODEX_VENDOR_BINARY_RE =
-  /@openai[\\/]codex[\\/]vendor[\\/][\s\S]*?[\\/]codex[\\/]codex(?:\.exe)?/i;
+  /@openai[\\/]codex(?:-[a-z0-9-]+)?[\\/]vendor[\\/][^\\/\s"'`]+[\\/](?:codex|bin)[\\/]codex(?:\.exe)?(?![\w.-])/i;
 
 function extractMissingCodexBinaryPath(msg: string): string | undefined {
   const spawnMatch = msg.match(
-    /\bspawn\s+(.+?@openai[\\/]codex[\\/]vendor[\\/].+?[\\/]codex[\\/]codex(?:\.exe)?)\s+(?:ENOENT|$)/i,
+    /\bspawn\s+(.+?@openai[\\/]codex(?:-[a-z0-9-]+)?[\\/]vendor[\\/][^\\/\s"'`]+[\\/](?:codex|bin)[\\/]codex(?:\.exe)?)(?![\w.-])\s+(?:ENOENT|$)/i,
   );
   if (spawnMatch?.[1]) return spawnMatch[1].trim();
 
   const pathMatch = msg.match(
-    /((?:[A-Za-z]:)?[^"'`\n\r]*?@openai[\\/]codex[\\/]vendor[\\/][^"'`\n\r]*?[\\/]codex[\\/]codex(?:\.exe)?)/i,
+    /((?:[A-Za-z]:)?[^"'`\n\r]*?@openai[\\/]codex(?:-[a-z0-9-]+)?[\\/]vendor[\\/][^\\/\s"'`]+[\\/](?:codex|bin)[\\/]codex(?:\.exe)?)(?![\w.-])/i,
   );
   return pathMatch?.[1]?.trim();
 }
