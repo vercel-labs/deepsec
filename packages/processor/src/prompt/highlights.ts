@@ -154,11 +154,13 @@ export const TECH_HIGHLIGHTS: TechHighlight[] = [
     title: "Laravel",
     languages: ["php"],
     bullets: [
-      "`Model::create($request->all())` without `$fillable`/`$guarded` is mass assignment — admin columns get overwritten",
-      "`DB::raw()` / `whereRaw()` / `selectRaw()` with interpolated input is SQL injection",
-      "`VerifyCsrfToken::$except` lists that include state-changing routes are CSRF-vulnerable unless an alternate verification (signed URL, webhook signature) exists",
-      "Blade `{!! $x !!}` renders raw HTML — XSS sink",
-      "Routes outside the `auth` middleware group, or routes with `->withoutMiddleware([...])`, need explicit per-action auth checks",
+      "`$guarded = []`, `Model::unguard()`, or `create($request->all())` is mass assignment: admin columns get overwritten",
+      "`DB::raw()` / `whereRaw()` with interpolated input is SQL injection; request-controlled `orderBy()` columns too",
+      "`VerifyCsrfToken::$except` on state-changing routes is CSRF unless a signed URL or webhook signature replaces it",
+      "Blade `{!! $x !!}` renders raw HTML: XSS sink",
+      "Mutating actions need `authorize()`, a policy, `can:` middleware, or a `FormRequest`; routes outside `auth` or with `->withoutMiddleware()` too",
+      "Livewire public properties are client-writable: id properties need `#[Locked]` and actions must re-authorize",
+      "Request input in storage paths, `Http::get()`, or `redirect()` is traversal, SSRF, or open redirect; `APP_DEBUG=true` or an open Telescope/Horizon gate leaks data",
     ],
   },
 

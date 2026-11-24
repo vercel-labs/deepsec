@@ -28,6 +28,7 @@ const SECRET_SLUGS = new Set([
   "secret-in-log",
   "secret-env-var",
   "env-exposure",
+  "laravel-config-exposure",
   "jwt-handling",
   "algorithm-confusion",
   "cron-secret-check",
