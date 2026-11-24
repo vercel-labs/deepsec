@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   configureProviderOverrides,
   createPiReadOnlyToolDefinitions,
+  registerMiniMaxProvider,
   resolvePiModelWithDynamicGateway,
 } from "../agents/pi-sdk.js";
 
@@ -71,6 +72,10 @@ describe("Pi model resolution", () => {
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "MINIMAX_API_KEY",
+    "MINIMAX_BASE_URL",
+    "MINIMAX_REGION",
+    "SAVED_MINIMAX_KEY",
     "ACME_MODEL_KEY",
   ] as const;
   const originalEnv = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
@@ -211,5 +216,140 @@ describe("Pi model resolution", () => {
       baseUrl: "https://models.acme.test/v1",
       headers: { "x-api-key": "secret" },
     });
+  });
+
+  it("registers the Flash-first MiniMax presets and resolves them offline", async () => {
+    for (const key of KEYS) delete process.env[key];
+    let called = false;
+    globalThis.fetch = async () => {
+      called = true;
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    };
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {});
+
+    const flash = await resolvePiModelWithDynamicGateway(
+      registry,
+      "minimax/MiniMax-M3.1-Flash",
+      {},
+    );
+    expect(flash.provider).toBe("minimax");
+    expect(flash.id).toBe("MiniMax-M3.1-Flash");
+    expect(flash.api).toBe("openai-completions");
+    expect(flash.reasoning).toBe(true);
+    expect(flash.thinkingLevelMap).toEqual({ xhigh: "max" });
+    expect(flash.input).toEqual(["text", "image"]);
+    expect(flash.contextWindow).toBe(1_000_000);
+    expect(flash.maxTokens).toBe(524_288);
+    expect(flash.cost).toMatchObject({ input: 0.15, output: 0.6, cacheRead: 0.015 });
+
+    const m3 = await resolvePiModelWithDynamicGateway(registry, "minimax/MiniMax-M3", {});
+    expect(m3.provider).toBe("minimax");
+    expect(m3.id).toBe("MiniMax-M3");
+    expect(m3.contextWindow).toBe(1_000_000);
+    expect(m3.thinkingLevelMap).toBeUndefined();
+    expect(m3.cost).toMatchObject({ input: 0.3, output: 1.2, cacheRead: 0.06 });
+
+    expect(called).toBe(false);
+  });
+
+  it("selects the CN MiniMax endpoint preset via MINIMAX_REGION", async () => {
+    for (const key of KEYS) delete process.env[key];
+    process.env.MINIMAX_REGION = "cn";
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {});
+
+    expect(registry.getRegisteredProviderConfig("minimax")?.baseUrl).toBe(
+      "https://api.minimaxi.com/v1",
+    );
+  });
+
+  it("defaults MiniMax to the global endpoint preset", async () => {
+    for (const key of KEYS) delete process.env[key];
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {});
+
+    expect(registry.getRegisteredProviderConfig("minimax")?.baseUrl).toBe(
+      "https://api.minimax.io/v1",
+    );
+  });
+
+  it("lets --ai-base-url override the MiniMax region preset", async () => {
+    for (const key of KEYS) delete process.env[key];
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, { aiBaseUrl: "https://example.test/v1" });
+
+    expect(registry.getRegisteredProviderConfig("minimax")?.baseUrl).toBe(
+      "https://example.test/v1",
+    );
+  });
+
+  it("keeps a saved custom MiniMax model route and key override intact", async () => {
+    for (const key of KEYS) delete process.env[key];
+    process.env.SAVED_MINIMAX_KEY = "saved-key";
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {
+      model: "minimax/custom-saved",
+      aiProvider: "minimax",
+      aiBaseUrl: "https://saved.example/v1",
+      aiApiKeyEnv: "SAVED_MINIMAX_KEY",
+      aiHeaders: { "x-saved": "yes" },
+    });
+
+    expect(registry.getRegisteredProviderConfig("minimax")).toMatchObject({
+      baseUrl: "https://saved.example/v1",
+      apiKey: "saved-key",
+      headers: { "x-saved": "yes" },
+    });
+  });
+
+  it("does not leak another provider's custom route or credential into MiniMax", async () => {
+    for (const key of KEYS) delete process.env[key];
+    process.env.ACME_MODEL_KEY = "acme-key";
+    process.env.MINIMAX_API_KEY = "minimax-key";
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {
+      aiProvider: "acme",
+      aiBaseUrl: "https://models.acme.test/v1",
+      aiApiKeyEnv: "ACME_MODEL_KEY",
+      aiHeaders: { "x-acme": "yes" },
+    });
+
+    expect(registry.getRegisteredProviderConfig("minimax")).toMatchObject({
+      baseUrl: "https://api.minimax.io/v1",
+      apiKey: "minimax-key",
+    });
+    expect(registry.getRegisteredProviderConfig("minimax")?.headers).toBeUndefined();
+  });
+
+  it("keeps request discovery offline for MiniMax presets", async () => {
+    for (const key of KEYS) delete process.env[key];
+    process.env.MINIMAX_API_KEY = "fixture-key";
+    let called = false;
+    globalThis.fetch = async () => {
+      called = true;
+      throw new Error("network boundary must not be reached");
+    };
+
+    const registry = await freshRegistry();
+    registerMiniMaxProvider(registry, {});
+    const model = await resolvePiModelWithDynamicGateway(
+      registry,
+      "minimax/MiniMax-M3.1-Flash",
+      {},
+    );
+
+    expect(model.provider).toBe("minimax");
+    expect(registry.getRegisteredProviderConfig("minimax")).toMatchObject({
+      baseUrl: "https://api.minimax.io/v1",
+      apiKey: "fixture-key",
+    });
+    expect(called).toBe(false);
   });
 });
