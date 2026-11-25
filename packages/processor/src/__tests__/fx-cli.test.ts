@@ -23,6 +23,7 @@ import {
   resetFxPricingCache,
   runFxSetupTask,
 } from "../agents/fx-cli.js";
+import { ContentFilteredError } from "../agents/shared.js";
 import type { AgentProgress, InvestigateOutput } from "../agents/types.js";
 
 vi.mock("../agents/shared.js", async (importOriginal) => {
@@ -289,10 +290,12 @@ describe("FxAgentPlugin.investigate with incomplete turns", () => {
   let log: string;
   let previousBin: string | undefined;
 
-  // A fake `fx` whose first `failures` main calls end like a provider
-  // safety-filter block: exit 1 with a JSON result whose output is a
-  // progress note that mentions "[]". Later calls answer normally.
-  function installFake(failures: number) {
+  const INTERRUPTED = "the turn ended before the model finished";
+
+  // A fake `fx` whose first `failures` main calls end incomplete: exit 1
+  // with a JSON result whose output is a progress note that mentions "[]".
+  // Later calls answer normally.
+  function installFake(failures: number, error = INTERRUPTED) {
     const fake = path.join(dir, "fx");
     writeFileSync(
       fake,
@@ -304,7 +307,7 @@ const followUp = args.includes("--resume");
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ followUp, home: process.env.HOME }) + "\\n");
 const mainCalls = fs.readFileSync(${JSON.stringify(log)}, "utf8").trim().split("\\n").map(JSON.parse).filter((c) => !c.followUp).length;
 if (!followUp && mainCalls <= ${failures}) {
-  process.stdout.write(JSON.stringify({ exit_code: 1, error: ${JSON.stringify(FLAGGED)}, output: "Checked the allowlist; it is [] so far.", session_id: "sess-flagged", usage: { input_tokens: 100, output_tokens: 10 } }));
+  process.stdout.write(JSON.stringify({ exit_code: 1, error: ${JSON.stringify(error)}, output: "Checked the allowlist; it is [] so far.", session_id: "sess-flagged", usage: { input_tokens: 100, output_tokens: 10 } }));
   process.exit(1);
 }
 const answer = followUp
@@ -366,10 +369,16 @@ process.stdout.write(JSON.stringify({ exit_code: 0, final_output: answer, sessio
     expect(out.meta.costUsd).toBeCloseTo(1300 * 0.000002 + 410 * 0.00001 + 800 * 0.0000002, 10);
   });
 
+  it("hands a content-filter block to the processor instead of retrying the batch", async () => {
+    installFake(99, FLAGGED);
+    await expect(drain(investigate())).rejects.toBeInstanceOf(ContentFilteredError);
+    expect(calls().filter((c) => !c.followUp)).toHaveLength(1);
+  });
+
   it("fails the batch after the last attempt instead of recording the files as clean", async () => {
     installFake(99);
     await expect(drain(investigate())).rejects.toThrow(
-      /fx produced no investigation result after 3 attempt\(s\)\. Last error: fx exited 1: This content was flagged/,
+      /fx produced no investigation result after 3 attempt\(s\)\. Last error: fx exited 1: the turn ended before the model finished/,
     );
     const all = calls();
     expect(all.filter((c) => !c.followUp)).toHaveLength(3);

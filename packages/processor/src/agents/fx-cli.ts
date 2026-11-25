@@ -9,8 +9,10 @@ import {
   buildInvestigatePrompt,
   buildRevalidateJsonRepairPrompt,
   buildRevalidatePrompt,
+  ContentFilteredError,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  isContentFilterBlock,
   isTransientError,
   jsonRepairFailureError,
   MAX_ATTEMPTS,
@@ -689,6 +691,10 @@ async function* runWithRetries(
         lastError = err instanceof Error ? err.message : String(err);
         turnIncomplete = err instanceof FxAskError && err.turnIncomplete;
         yield { type: "error", message: `fx error: ${lastError.slice(0, 300)}` };
+        // A provider content filter ended the turn. Retrying the same batch
+        // right away tends to hit the same filter; the processor pauses and
+        // retries the files in smaller groups instead, as it does for Codex.
+        if (isContentFilterBlock(lastError)) throw new ContentFilteredError(lastError);
       }
     } finally {
       if (!handedOff) session.dispose();
