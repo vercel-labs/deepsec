@@ -1,7 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import type { FileRecord } from "@deepsec/core";
-import { dataDir, loadAllFileRecords } from "@deepsec/core";
+import type { FileRecord, RunMeta } from "@deepsec/core";
+import { dataDir, isPidAlive, loadAllFileRecords, readRunMeta } from "@deepsec/core";
 import { noiseScore } from "@deepsec/scanner";
 import type { PartitionResult, SandboxSubcommand } from "./types.js";
 
@@ -12,6 +13,89 @@ const SEVERITY_ORDER: Record<string, number> = {
   HIGH_BUG: 3,
   BUG: 4,
 };
+
+/**
+ * Locks from sandbox workers name a run on another host, so neither PID
+ * liveness nor the processor's 1h stale-lock cutoff applies: a sandbox run
+ * can legitimately hold files for up to its 5h timeout.
+ */
+const SANDBOX_STALE_LOCK_MS = 6 * 60 * 60 * 1000;
+const MAX_LOCK_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * True when a `processing` record is still held by a run that may finish
+ * it. Partitioning such a file again would run it twice while another
+ * wave is in flight.
+ */
+export function hasLiveLock(
+  projectId: string,
+  r: FileRecord,
+  metaCache: Map<string, RunMeta | null> = new Map(),
+  now = Date.now(),
+): boolean {
+  if (r.status !== "processing" || !r.lockedByRunId) return false;
+  if (!metaCache.has(r.lockedByRunId)) {
+    try {
+      metaCache.set(r.lockedByRunId, readRunMeta(projectId, r.lockedByRunId));
+    } catch {
+      metaCache.set(r.lockedByRunId, null);
+    }
+  }
+  const meta = metaCache.get(r.lockedByRunId);
+  if (!meta || meta.phase === "done" || meta.phase === "error") return false;
+  if (meta.hostname === os.hostname() && meta.pid !== undefined && !isPidAlive(meta.pid))
+    return false;
+  const lockedAt = r.lockedAt ? Date.parse(r.lockedAt) : Number.NaN;
+  if (!Number.isFinite(lockedAt)) return false;
+  // Lock timestamps come from worker-written records. One far in the future
+  // (clock skew or tampering) would otherwise hold the file indefinitely.
+  if (lockedAt > now + MAX_LOCK_CLOCK_SKEW_MS) return false;
+  return now - lockedAt < SANDBOX_STALE_LOCK_MS;
+}
+
+/**
+ * Files assigned to other active sandbox runs of the same command, from
+ * their saved run states: partitions reserved but not dispatched yet, and
+ * dispatched sandboxes that haven't been collected. Revalidation takes no
+ * file locks, and a `process` worker's locks only reach this host at its
+ * first sync, so the run states are the record of what another run still
+ * has queued. Each entry expires a sandbox lifetime after its own dispatch
+ * (or the launch, while reserved), so a crashed run's leftover state can't
+ * hold files forever.
+ */
+function filesHeldByActiveRuns(projectId: string, command: string, now = Date.now()): Set<string> {
+  const held = new Set<string>();
+  const dir = path.join(dataDir(projectId), "sandbox-runs");
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return held;
+  }
+  for (const name of names) {
+    try {
+      const state = JSON.parse(fs.readFileSync(path.join(dir, name), "utf-8")) as {
+        command?: string;
+        launchedAt?: string;
+        sandboxes?: Array<{ manifest?: string[]; dispatchedAt?: string }>;
+        reserved?: Array<{ manifest?: string[] }>;
+      };
+      if (state.command !== command) continue;
+      const active = (since: string | undefined) => {
+        const t = Date.parse(since ?? "");
+        return Number.isFinite(t) && now - t <= SANDBOX_STALE_LOCK_MS;
+      };
+      for (const sb of state.sandboxes ?? []) {
+        if (!active(sb.dispatchedAt ?? state.launchedAt)) continue;
+        for (const f of sb.manifest ?? []) held.add(f);
+      }
+      if (active(state.launchedAt)) {
+        for (const r of state.reserved ?? []) for (const f of r.manifest ?? []) held.add(f);
+      }
+    } catch {}
+  }
+  return held;
+}
 
 /**
  * Load eligible files for the given command and split into N disjoint partitions.
@@ -30,8 +114,17 @@ export function partitionFiles(
     agentType?: string;
   } = {},
 ): PartitionResult {
-  const allRecords = loadAllFileRecords(projectId);
+  const metaCache = new Map<string, RunMeta | null>();
+  const now = Date.now();
   const command = opts.command ?? "process";
+  // Files another run is still working on, or has assigned to its workers,
+  // are never handed out again. Only partitioned commands claim files; other
+  // commands (scan) count every record.
+  const claims = command === "process" || command === "revalidate";
+  const held = claims ? filesHeldByActiveRuns(projectId, command, now) : new Set<string>();
+  const allRecords = loadAllFileRecords(projectId).filter(
+    (r) => !claims || (!held.has(r.filePath) && !hasLiveLock(projectId, r, metaCache, now)),
+  );
   const agentType = opts.agentType ?? "claude-agent-sdk";
 
   let eligible: FileRecord[];
@@ -63,7 +156,7 @@ export function partitionFiles(
       }
       break;
 
-    case "revalidate":
+    case "revalidate": {
       eligible = allRecords.filter((r) => {
         if (r.findings.length === 0) return false;
         const unrevalidated = r.findings.filter((f) => {
@@ -75,6 +168,7 @@ export function partitionFiles(
         return unrevalidated.length > 0;
       });
       break;
+    }
 
     default:
       eligible = allRecords;

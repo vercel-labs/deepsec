@@ -1,0 +1,265 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { type FileRecord, readFileRecord, writeFileRecord } from "@deepsec/core";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { releaseUnfinished, streamLogsCapped, withPartitionLock } from "../sandbox/orchestrator.js";
+
+/** A command whose log stream replays from the start and closes after `cuts[i]` chunks. */
+function replayingCommand(chunks: string[], cuts: number[]) {
+  let call = 0;
+  return {
+    calls: () => call,
+    logs() {
+      const limit = cuts[call++] ?? chunks.length;
+      return (async function* () {
+        for (const data of chunks.slice(0, limit)) yield { stream: "stdout", data };
+      })();
+    },
+  };
+}
+
+describe("streamLogsCapped reconnects", () => {
+  it("emits each line once when the stream closes early and replays", async () => {
+    const chunks = ["one\ntw", "o\nthree\n", "four\nfive\n"];
+    const cmd = replayingCommand(chunks, [2, 3]);
+    let checks = 0;
+    const lines: string[] = [];
+    await streamLogsCapped(
+      cmd,
+      "[s]",
+      (m) => lines.push(m),
+      undefined,
+      async () => ++checks > 1,
+    );
+    expect(lines.filter((l) => !l.includes("reconnecting"))).toEqual([
+      "[s] one",
+      "[s] two",
+      "[s] three",
+      "[s] four",
+      "[s] five",
+    ]);
+    expect(cmd.calls()).toBe(2);
+  });
+
+  it("waits for the replay instead of emitting a line cut off by an early close", async () => {
+    const lines: string[] = [];
+    const raw: string[] = [];
+    let checks = 0;
+    await streamLogsCapped(
+      replayingCommand(["one\ntw", "o\nthree\n"], [1, 2]),
+      "[s]",
+      (m) => lines.push(m),
+      (l) => raw.push(l),
+      async () => ++checks > 1,
+    );
+    expect(raw).toEqual(["one", "two", "three"]);
+  });
+
+  it("does not reconnect once the command has finished", async () => {
+    const cmd = replayingCommand(["a\n"], [1]);
+    await streamLogsCapped(
+      cmd,
+      "[s]",
+      () => {},
+      undefined,
+      async () => true,
+    );
+    expect(cmd.calls()).toBe(1);
+  });
+
+  it("stops an endless newline-free stream at the raw-byte budget", async () => {
+    const MiB = 1024 * 1024;
+    let yielded = 0;
+    const cmd = {
+      logs() {
+        return (async function* () {
+          for (;;) {
+            yielded++;
+            yield { stream: "stdout", data: "x".repeat(MiB) };
+          }
+        })();
+      },
+    };
+    const lines: string[] = [];
+    const raw: string[] = [];
+    await streamLogsCapped(
+      cmd,
+      "[s]",
+      (m) => lines.push(m),
+      (l) => raw.push(l),
+    );
+    // 40 MiB budget: the 41st chunk trips it.
+    expect(yielded).toBe(41);
+    expect(
+      lines.some((l) => /including replays after reconnects; further output suppressed/.test(l)),
+    ).toBe(true);
+    expect(raw.every((l) => l.length <= 64 * 1024)).toBe(true);
+  });
+
+  it("counts replayed bytes so endless reconnects stop at the budget", async () => {
+    const line = `${"y".repeat(1023)}\n`;
+    const chunk = line.repeat(1024); // 1 MiB of complete lines
+    const cmd = replayingCommand(Array(6).fill(chunk), []);
+    const lines: string[] = [];
+    await streamLogsCapped(
+      cmd,
+      "[s]",
+      (m) => lines.push(m),
+      undefined,
+      async () => false,
+    );
+    // 6 MiB per connection: the 7th connection crosses 40 MiB.
+    expect(cmd.calls()).toBe(7);
+    expect(lines.filter((l) => l.startsWith("[s] y")).length).toBe(6 * 1024);
+    expect(lines.some((l) => /including replays after reconnects/.test(l))).toBe(true);
+  });
+
+  it("makes a single pass without an isFinished check", async () => {
+    const cmd = replayingCommand(["a\n", "b\n"], [1]);
+    const lines: string[] = [];
+    await streamLogsCapped(cmd, "[s]", (m) => lines.push(m));
+    expect(lines).toEqual(["[s] a"]);
+    expect(cmd.calls()).toBe(1);
+  });
+});
+
+describe("releaseUnfinished", () => {
+  let prev: string | undefined;
+  let tmp: string;
+
+  beforeEach(() => {
+    prev = process.env.DEEPSEC_DATA_ROOT;
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-release-"));
+    process.env.DEEPSEC_DATA_ROOT = tmp;
+  });
+
+  afterEach(() => {
+    if (prev === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+    else process.env.DEEPSEC_DATA_ROOT = prev;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function record(filePath: string, status: FileRecord["status"]): FileRecord {
+    return {
+      filePath,
+      projectId: "p",
+      candidates: [],
+      lastScannedAt: new Date(0).toISOString(),
+      lastScannedRunId: "scan",
+      fileHash: "h",
+      findings: [],
+      analysisHistory: [],
+      status,
+      ...(status === "processing"
+        ? { lockedByRunId: "sandbox-run", lockedAt: new Date(0).toISOString() }
+        : {}),
+    };
+  }
+
+  it("marks the worker's still-processing files as error and leaves the rest alone", () => {
+    writeFileRecord(record("a.ts", "processing"));
+    writeFileRecord(record("b.ts", "analyzed"));
+    const logs: string[] = [];
+    releaseUnfinished({ manifest: ["a.ts", "b.ts", "missing.ts"], index: 3 }, "p", (m) =>
+      logs.push(m),
+    );
+    const a = readFileRecord("p", "a.ts");
+    expect(a?.status).toBe("error");
+    expect(a?.lockedByRunId).toBeUndefined();
+    expect(readFileRecord("p", "b.ts")?.status).toBe("analyzed");
+    expect(logs).toEqual(["[sandbox-3] 1 file(s) did not finish; marked error for the next run"]);
+  });
+
+  it("only releases locks held by the worker's own run", () => {
+    writeFileRecord(record("mine.ts", "processing"));
+    writeFileRecord({ ...record("theirs.ts", "processing"), lockedByRunId: "other-run" });
+    releaseUnfinished(
+      { manifest: ["mine.ts", "theirs.ts"], index: 0, workerRunId: "sandbox-run" },
+      "p",
+      () => {},
+    );
+    expect(readFileRecord("p", "mine.ts")?.status).toBe("error");
+    const theirs = readFileRecord("p", "theirs.ts");
+    expect(theirs?.status).toBe("processing");
+    expect(theirs?.lockedByRunId).toBe("other-run");
+  });
+
+  it("leaves live locks alone for run states from older versions", () => {
+    // Without the worker's run ID, only locks that can't belong to a live
+    // run are released.
+    fs.mkdirSync(path.join(tmp, "p", "runs"), { recursive: true });
+    const meta = (runId: string, phase: string) =>
+      fs.writeFileSync(
+        path.join(tmp, "p", "runs", `${runId}.json`),
+        JSON.stringify({
+          runId,
+          projectId: "p",
+          rootPath: "/vercel/sandbox/target",
+          createdAt: new Date().toISOString(),
+          type: "process",
+          phase,
+          pid: 23,
+          hostname: "other-host",
+          stats: {},
+        }),
+      );
+    meta("live-run", "running");
+    meta("done-run", "done");
+    const now = new Date().toISOString();
+    writeFileRecord({
+      ...record("live.ts", "processing"),
+      lockedByRunId: "live-run",
+      lockedAt: now,
+    });
+    writeFileRecord({
+      ...record("done.ts", "processing"),
+      lockedByRunId: "done-run",
+      lockedAt: now,
+    });
+    releaseUnfinished({ manifest: ["live.ts", "done.ts"], index: 0 }, "p", () => {});
+    expect(readFileRecord("p", "live.ts")?.status).toBe("processing");
+    expect(readFileRecord("p", "done.ts")?.status).toBe("error");
+  });
+});
+
+describe("withPartitionLock", () => {
+  let prev: string | undefined;
+  let tmp: string;
+  let lock: string;
+
+  beforeEach(() => {
+    prev = process.env.DEEPSEC_DATA_ROOT;
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-plock-"));
+    process.env.DEEPSEC_DATA_ROOT = tmp;
+    fs.mkdirSync(path.join(tmp, "p", "sandbox-runs"), { recursive: true });
+    lock = path.join(tmp, "p", "sandbox-runs", ".partition.lock");
+  });
+
+  afterEach(() => {
+    if (prev === undefined) delete process.env.DEEPSEC_DATA_ROOT;
+    else process.env.DEEPSEC_DATA_ROOT = prev;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("waits for the holder to release the lock, then removes its own", async () => {
+    fs.writeFileSync(lock, "");
+    let ran = false;
+    const pending = withPartitionLock("p", () => {
+      ran = true;
+      return 7;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(ran).toBe(false);
+    fs.unlinkSync(lock);
+    await expect(pending).resolves.toBe(7);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it("takes over a lock left behind by a crashed process", async () => {
+    fs.writeFileSync(lock, "");
+    const old = new Date(Date.now() - 3 * 60_000);
+    fs.utimesSync(lock, old, old);
+    await expect(withPartitionLock("p", () => "ok")).resolves.toBe("ok");
+  });
+});

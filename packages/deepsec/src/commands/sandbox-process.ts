@@ -24,6 +24,7 @@ interface SandboxOpts {
   detach?: boolean;
   runId?: string;
   timeout?: number;
+  spawnRate?: number;
   args?: string[];
 }
 
@@ -51,6 +52,8 @@ export function extractReinvestigate(args: string[]): boolean | number | undefin
   }
   return true;
 }
+
+export const DEFAULT_SPAWN_RATE = 10;
 
 function buildConfig(
   subcommand: SandboxSubcommand,
@@ -84,6 +87,7 @@ function buildConfig(
     filter: extractFlag(args, "--filter"),
     matchers: extractFlag(args, "--matchers"),
     timeout: opts.timeout ?? 5 * 60 * 60 * 1000,
+    spawnRate: opts.spawnRate ?? DEFAULT_SPAWN_RATE,
     extraArgs: args,
   };
 }
