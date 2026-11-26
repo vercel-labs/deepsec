@@ -257,11 +257,8 @@ export class RegexScannerDriver implements ScannerDriver {
         nodir: true,
         absolute: false,
       });
-      // glob returns native separators on Windows ("src\api\foo.ts").
-      // Record paths require POSIX separators (assertSafeFilePath rejects
-      // "\"), so normalize once here before anything reads or writes records.
-      const files = rawFiles.map((f) => f.replaceAll("\\", "/"));
-      globCache.set(key, files);
+      const posixPaths = files.map((p) => p.replace(/\\/g, "/"));
+      globCache.set(key, posixPaths);
       yield {
         type: "matcher_done" as const,
         message: `Found ${files.length} files`,

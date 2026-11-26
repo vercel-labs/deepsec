@@ -7,6 +7,7 @@
         "e2e/bundle.test.ts",
         "e2e/pipeline.test.ts",
         "e2e/pipeline-sandbox.test.ts",
+        "e2e/global-setup.ts",
         "e2e/vitest.config.ts"
       ]
     },

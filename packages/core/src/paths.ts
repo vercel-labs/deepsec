@@ -4,6 +4,11 @@ export function getDataRoot(): string {
   return process.env.DEEPSEC_DATA_ROOT || "data";
 }
 
+/** Root segment for joining per-project paths; normalize `\` so posix.join is stable on Windows. */
+function dataRootPosix(): string {
+  return getDataRoot().replace(/\\/g, "/");
+}
+
 // Reject empty, '.', '..', absolute paths, null bytes, and any path
 // separator. Used at every entry point that joins user-supplied segments
 // onto a per-project mirror so a `../`-laced projectId/runId can't escape
@@ -53,55 +58,55 @@ export function assertSafeFilePath(filePath: string): void {
 
 export function dataDir(projectId: string): string {
   assertSafeSegment(projectId, "projectId");
-  return path.join(getDataRoot(), projectId);
+  return path.posix.join(dataRootPosix(), projectId);
 }
 
 export function projectConfigPath(projectId: string): string {
-  return path.join(dataDir(projectId), "project.json");
+  return path.posix.join(dataDir(projectId), "project.json");
 }
 
 // --- File records (permanent per-file mirror) ---
 
 export function filesDir(projectId: string): string {
-  return path.join(dataDir(projectId), "files");
+  return path.posix.join(dataDir(projectId), "files");
 }
 
 export function fileRecordPath(projectId: string, filePath: string): string {
   assertSafeFilePath(filePath);
-  return path.join(filesDir(projectId), filePath + ".json");
+  return path.posix.join(filesDir(projectId), filePath + ".json");
 }
 
 // --- Runs (lightweight metadata) ---
 
 export function runsDir(projectId: string): string {
-  return path.join(dataDir(projectId), "runs");
+  return path.posix.join(dataDir(projectId), "runs");
 }
 
 export function runMetaPath(projectId: string, runId: string): string {
   assertSafeSegment(runId, "runId");
-  return path.join(runsDir(projectId), runId + ".json");
+  return path.posix.join(runsDir(projectId), runId + ".json");
 }
 
 // --- Reports ---
 
 export function reportsDir(projectId: string): string {
-  return path.join(dataDir(projectId), "reports");
+  return path.posix.join(dataDir(projectId), "reports");
 }
 
 export function reportJsonPath(projectId: string, runId?: string): string {
   if (runId !== undefined) assertSafeSegment(runId, "runId");
   const name = runId ? `report-${runId}.json` : "report.json";
-  return path.join(reportsDir(projectId), name);
+  return path.posix.join(reportsDir(projectId), name);
 }
 
 export function reportMdPath(projectId: string, runId?: string): string {
   if (runId !== undefined) assertSafeSegment(runId, "runId");
   const name = runId ? `report-${runId}.md` : "report.md";
-  return path.join(reportsDir(projectId), name);
+  return path.posix.join(reportsDir(projectId), name);
 }
 
 export function reportCsvPath(projectId: string, runId?: string): string {
   if (runId !== undefined) assertSafeSegment(runId, "runId");
   const name = runId ? `report-${runId}.csv` : "report.csv";
-  return path.join(reportsDir(projectId), name);
+  return path.posix.join(reportsDir(projectId), name);
 }
