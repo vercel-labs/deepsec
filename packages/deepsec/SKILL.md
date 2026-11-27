@@ -72,7 +72,7 @@ and actions to the user rather than inventing remediation. In particular,
 `VERCEL_AUTH_REQUIRED` normally asks the user to run `npx vercel login`; after
 they do, follow the returned link action from inside `.deepsec`. Use
 `npx vercel link` when the user needs to choose, or the returned parameterized
-`--yes --team <team-slug> --project <project-name>` form for a known existing
+`--yes --scope <team-slug> --project <project-name>` form for a known existing
 project. Then rerun the same Deepsec command. Exit code 2 means input is needed
 and exit code 3 means a requested cost/duration boundary stopped the resumable
 run. Never expose credential values, bypass `--yes`, or launch an interactive

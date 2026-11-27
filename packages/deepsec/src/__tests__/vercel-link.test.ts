@@ -87,7 +87,7 @@ describe("Vercel project link", () => {
       id: "vercel-link-known-project",
       commands: [
         expect.stringContaining(workspace),
-        "npx vercel link --yes --team <team-slug> --project <project-name>",
+        "npx vercel link --yes --scope <team-slug> --project <project-name>",
       ],
     });
   });

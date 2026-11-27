@@ -76,7 +76,7 @@ export function vercelAuthRecoveryActions(
               "If the team slug and an existing project name are known, the agent can link without prompts.",
             commands: [
               `cd ${shellArg(workspaceDir)}`,
-              "npx vercel link --yes --team <team-slug> --project <project-name>",
+              "npx vercel link --yes --scope <team-slug> --project <project-name>",
             ],
           },
         ]
@@ -221,7 +221,7 @@ async function linkProject(
   projectName: string,
 ): Promise<void> {
   await requireSuccess(
-    await runCli(["link", "--yes", "--team", teamSlug, "--project", projectName], cwd),
+    await runCli(["link", "--yes", "--scope", teamSlug, "--project", projectName], cwd),
     "vercel link",
   );
 }
