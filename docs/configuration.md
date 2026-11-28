@@ -31,7 +31,7 @@ see [`samples/webapp/deepsec.config.ts`](https://github.com/vercel-labs/deepsec/
 | `projects` | `ProjectDeclaration[]` | The codebases deepsec knows about. |
 | `plugins` | `DeepsecPlugin[]` | Loaded in order; later plugins override single-slot capabilities. |
 | `matchers` | `{ only?: string[]; exclude?: string[] }` | Filter the matcher set used by `scan`. |
-| `defaultAgent` | `string` | Default `--agent` value (`codex`, `claude`, or `pi`). See [models](models.md). |
+| `defaultAgent` | `string` | Default `--agent` value (`codex`, `claude`, `pi`, or `fx`). See [models](models.md). |
 | `defaultModel` | `string` | Default `--model` value selected during setup. |
 | `defaultThinkingLevel` | `string` | Default reasoning effort (`minimal` through `xhigh`) selected during setup. |
 | `codex` | `{ cyberAccessProgram?: "standard" \| "daybreak_blue" \| "daybreak_red" }` | Codex-only settings. `--cyber-access-program` overrides `cyberAccessProgram`. See [models](models.md#cyber-access-programs). |
@@ -55,7 +55,7 @@ ai: {
   baseUrl: "https://api.openai.com/v1",
 }
 
-// Pi-only custom provider
+// Custom provider (Pi and fx)
 ai: {
   mode: "custom",
   provider: "martian",
@@ -177,6 +177,7 @@ requires the complete access-token triple.
 | `OPENAI_API_KEY` | `--agent codex`, `--agent pi --model openai/...` | Codex SDK token or Pi OpenAI-provider token. Unset is fine if `AI_GATEWAY_API_KEY` is set. |
 | `OPENAI_BASE_URL` | `--agent codex` | Default (when `AI_GATEWAY_API_KEY` is set): `https://ai-gateway.vercel.sh/v1`. |
 | `PI_CODING_AGENT_DIR` | `--agent pi` | Optional Pi config/auth directory. Defaults to `~/.pi/agent`; local non-sandbox runs can reuse `auth.json` there. |
+| `DEEPSEC_FX_BIN` | `--agent fx` | Path to the `fx` binary. Defaults to `fx` on `PATH`. |
 | `DEEPSEC_AGENT_DEBUG` | both backends | Set to `1` to enable verbose agent logging. |
 | `DEEPSEC_DATA_ROOT` | core | Override the data directory location. Equivalent to `dataDir` in config. |
 | `DEEPSEC_CONTENT_FILTER_PAUSE_MS` | `process`, `revalidate` | Pause before new batches and retries start after a provider content filter blocks a turn. Default `30000`. Each further block within 10 minutes doubles the pause, and the actual pause varies by ±25%. |

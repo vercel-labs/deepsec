@@ -14,7 +14,9 @@ import { partitionFiles } from "../sandbox/partitioner.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
 import {
   DEFAULT_SPAWN_RATE,
+  extractFlag,
   extractReinvestigate,
+  normalizePassthroughArgs,
   rejectCyberAccessProgram,
 } from "./sandbox-process.js";
 
@@ -30,14 +32,6 @@ const VALID_COMMANDS: ReadonlySet<SandboxSubcommand> = new Set([
   "scan",
   "report",
 ]);
-
-function extractFlag(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  const val = args[idx + 1];
-  if (val.startsWith("--")) return undefined;
-  return val;
-}
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
@@ -92,7 +86,7 @@ export async function sandboxAllCommand(
     process.exit(1);
   }
   const command = subcommand as SandboxSubcommand;
-  const passthrough = opts.args ?? [];
+  const passthrough = normalizePassthroughArgs(opts.args ?? []);
   rejectCyberAccessProgram(passthrough);
   const totalSandboxes = opts.sandboxes ?? 10;
   const concurrency = parseInt(extractFlag(passthrough, "--concurrency") ?? "4", 10) || 4;

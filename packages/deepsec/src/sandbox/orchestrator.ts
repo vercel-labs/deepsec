@@ -48,12 +48,15 @@ import {
 /** Commands where we inject --root to point at the sandbox target checkout */
 const NEEDS_ROOT = new Set(["process", "revalidate", "scan"]);
 
+/** Commands that take --agent */
+const AGENT_COMMANDS = new Set(["process", "revalidate"]);
+
 /**
  * Build the (cmd, args) pair to run a deepsec subcommand inside the sandbox.
  * Differs by mode: dev runs the source via tsx; installed runs the bin shim
  * left behind by `pnpm install` in the uploaded `.deepsec/` workspace.
  */
-function buildSandboxInvocation(
+export function buildSandboxInvocation(
   config: SandboxConfig,
   mode: DeepsecMode,
   manifestPath: string | null,
@@ -82,6 +85,11 @@ function buildDeepsecInvocation(
   }
   for (const arg of config.extraArgs) {
     tail.push(...arg.split(/\s+/).filter(Boolean));
+  }
+  // The host validated this agent. Commander keeps the last --agent, so the
+  // worker runs it even if the passthrough args could be read another way.
+  if (config.agentType && AGENT_COMMANDS.has(config.command)) {
+    tail.push("--agent", config.agentType);
   }
 
   if (mode === "installed") {

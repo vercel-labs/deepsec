@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { defaultModelForAgent } from "../agent-defaults.js";
 import type { ModelProfile } from "../auth/model-picker.js";
 import { resolveModelProfile } from "../auth/model-picker.js";
 import type { ModelRoute } from "../auth/model-route.js";
@@ -114,6 +115,13 @@ export async function buildSetupPlan(options: {
     model = {
       agent: options.agent ?? "codex",
       model: options.model,
+      thinkingLevel: options.thinkingLevel,
+    };
+  } else if (options.yes && !options.modelProfile && options.agent === "fx") {
+    // DeepSecBench has no fx results to choose from; --yes keeps fx's default.
+    model = {
+      agent: "fx",
+      model: defaultModelForAgent("fx"),
       thinkingLevel: options.thinkingLevel,
     };
   } else if (options.modelProfile || options.yes) {

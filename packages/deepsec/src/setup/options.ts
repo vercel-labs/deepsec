@@ -1,4 +1,8 @@
-import { defaultCredentialHeaderScheme, type ModelRoute } from "../auth/model-route.js";
+import {
+  defaultCredentialHeaderScheme,
+  type ModelRoute,
+  modelRouteCompatibilityError,
+} from "../auth/model-route.js";
 
 export interface ModelRouteCliOptions {
   modelAuth?: "gateway" | "direct" | "custom" | "local";
@@ -10,6 +14,18 @@ export interface ModelRouteCliOptions {
 }
 
 export function modelRouteFromCli(options: ModelRouteCliOptions): ModelRoute {
+  const route = parseModelRoute(options);
+  assertFxSetupRoute(options.agent, route);
+  return route;
+}
+
+export function assertFxSetupRoute(agent: string | undefined, route: ModelRoute | undefined): void {
+  if (agent !== "fx" || !route) return;
+  const error = modelRouteCompatibilityError(route, agent);
+  if (error) throw new Error(error);
+}
+
+function parseModelRoute(options: ModelRouteCliOptions): ModelRoute {
   const mode = options.modelAuth ?? "gateway";
   if (mode !== "gateway" && mode !== "direct" && mode !== "custom" && mode !== "local") {
     throw new Error("--model-auth must be gateway, direct, custom, or local");

@@ -142,6 +142,21 @@ describe("DeepSecBench model picker", () => {
     });
   });
 
+  it("never replaces --agent fx with a recommendation for another harness", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ results }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    await expect(
+      resolveModelProfile({
+        profile: "best",
+        route: { mode: "gateway", provider: "vercel" },
+        agent: "fx",
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({ code: "MODEL_PROFILE_UNAVAILABLE" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("limits a profile to the harness supported by direct credentials", async () => {
     const fetchImpl = vi.fn(
       async () => new Response(JSON.stringify({ results }), { status: 200 }),

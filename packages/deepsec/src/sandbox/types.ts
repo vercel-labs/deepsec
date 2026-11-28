@@ -20,7 +20,7 @@ export interface SandboxConfig {
   concurrency: number;
   /** Batch size within each sandbox */
   batchSize: number;
-  /** Agent backend type — claude-agent-sdk, codex, or pi */
+  /** Agent backend type — claude-agent-sdk, codex, pi, or fx */
   agentType?: string;
   /** Pi provider API key env var for custom gateway/provider routing */
   aiApiKeyEnv?: string;

@@ -6,7 +6,7 @@ import type { ModelRoute } from "./model-route.js";
 export const DEEPSEC_BENCHMARK_URL =
   "https://vercel.com/ai-gateway/leaderboards/deepsecbench/results.json";
 
-export type ModelHarness = "codex" | "claude" | "pi";
+export type ModelHarness = "codex" | "claude" | "pi" | "fx";
 
 export interface BenchmarkResult {
   rank: number;
@@ -161,11 +161,14 @@ export function buildRecommendedModelChoices(results: BenchmarkResult[]): Recomm
 
 function canonicalHarness(value: string | undefined): ModelHarness | undefined {
   if (value === "claude-agent-sdk" || value === "claude") return "claude";
-  if (value === "codex" || value === "pi") return value;
+  if (value === "codex" || value === "pi" || value === "fx") return value;
   return undefined;
 }
 
 function compatibleHarness(route: ModelRoute, requested?: string): ModelHarness | undefined {
+  // fx has no DeepSecBench results, so naming it pins the harness instead of
+  // letting a recommendation for another harness replace it.
+  if (canonicalHarness(requested) === "fx") return "fx";
   if (route.mode === "direct") return route.provider === "anthropic" ? "claude" : "codex";
   if (route.mode === "custom") return "pi";
   return canonicalHarness(requested);
@@ -195,8 +198,16 @@ export async function resolveModelProfile(options: {
     label: string;
   }
 > {
-  const benchmark = await fetchBenchmarkResults(options.fetchImpl);
   const requiredHarness = compatibleHarness(options.route, options.agent);
+  if (requiredHarness === "fx") {
+    throw new SetupProtocolError({
+      code: "MODEL_PROFILE_UNAVAILABLE",
+      kind: "failure",
+      message:
+        "DeepSecBench has no fx results, so model profiles can't choose a model for --agent fx; pass --model",
+    });
+  }
+  const benchmark = await fetchBenchmarkResults(options.fetchImpl);
   const choices = buildRecommendedModelChoices(benchmark.results).filter(
     (choice) => !requiredHarness || choice.agent === requiredHarness,
   );
@@ -244,6 +255,7 @@ function modelForHarness(slug: string, harness: ModelHarness): string {
 function displayHarness(harness: ModelHarness): string {
   if (harness === "claude") return "Claude";
   if (harness === "codex") return "Codex";
+  if (harness === "fx") return "fx";
   return "Pi";
 }
 
@@ -300,10 +312,10 @@ export async function promptForModelSelection(options: {
     let agent = requiredHarness ?? inferModelHarness(slug);
     if (!requiredHarness) {
       const harnessAnswer = (
-        await prompt.question(`Agent harness (codex, claude, pi) [${agent}]: `)
+        await prompt.question(`Agent harness (codex, claude, pi, fx) [${agent}]: `)
       ).trim();
       const selectedHarness = canonicalHarness(harnessAnswer || agent);
-      if (!selectedHarness) throw new Error("Agent harness must be codex, claude, or pi");
+      if (!selectedHarness) throw new Error("Agent harness must be codex, claude, pi, or fx");
       agent = selectedHarness;
     }
     const level = (await prompt.question("Thinking level [medium]: ")).trim() || "medium";

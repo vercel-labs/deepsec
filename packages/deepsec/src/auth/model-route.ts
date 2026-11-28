@@ -66,8 +66,11 @@ export function modelRouteCompatibilityError(
   route: ModelRoute,
   agentType: string,
 ): string | undefined {
-  if (route.mode === "custom" && agentType !== "pi") {
-    return `Custom model routes require --agent pi (received ${agentType})`;
+  if (route.mode === "custom" && agentType !== "pi" && agentType !== "fx") {
+    return `Custom model routes require --agent pi or --agent fx (received ${agentType})`;
+  }
+  if ((route.mode === "direct" || route.mode === "local") && agentType === "fx") {
+    return `--agent fx can't use the ${route.mode} model route; use AI Gateway or a custom endpoint`;
   }
   if (route.mode === "direct" && route.provider === "anthropic" && agentType === "codex") {
     return "Direct Anthropic credentials are not compatible with --agent codex";

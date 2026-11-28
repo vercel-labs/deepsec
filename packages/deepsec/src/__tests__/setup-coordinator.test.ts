@@ -17,6 +17,32 @@ const originalCwd = process.cwd();
 afterEach(() => process.chdir(originalCwd));
 
 describe("one-shot setup coordinator", () => {
+  it.each([
+    "local",
+    "direct",
+  ] as const)("rejects %s with fx before persisting setup", async (mode) => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-route-"));
+    try {
+      await expect(
+        runSetupWorkflow({
+          workspaceDir: workspace,
+          projectRoot: workspace,
+          projectId: "app",
+          agent: "fx",
+          modelRoute: { mode, provider: mode === "local" ? "local" : "openai" },
+          services: {
+            install: () => {
+              throw new Error("unexpected installation");
+            },
+          },
+        }),
+      ).rejects.toThrow(`--agent fx can't use the ${mode} model route`);
+      expect(fs.readdirSync(workspace)).toEqual([]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("honors a local route selected during setup despite ambient workspace OIDC", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-local-route-"));
     const workspace = path.join(root, ".deepsec");
@@ -245,6 +271,41 @@ describe("one-shot setup coordinator", () => {
     expect(fs.readFileSync(path.join(workspace, "data", "app", "INFO.md"), "utf8")).toBe(
       curatedInfo,
     );
+  });
+
+  it("refuses a cost limit fx can't enforce before logging in or spending", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-fx-cost-"));
+    const workspace = path.join(root, ".deepsec");
+    const project = path.join(root, "app");
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(workspace, "package.json"), '{"private":true}\n');
+    try {
+      const error = await runSetupWorkflow({
+        workspaceDir: workspace,
+        projectId: "app",
+        projectRoot: project,
+        agent: "fx",
+        maxCostUsd: 5,
+        modelRoute: {
+          mode: "custom",
+          provider: "openai",
+          baseUrl: "https://llm.example.com/v1",
+          apiKeyEnv: "LLM_KEY",
+        },
+        services: {
+          install: async () => ({ packageManager: "pnpm", version: "test", installed: true }),
+          connect: () => {
+            throw new Error("unexpected login");
+          },
+        },
+        onLog: () => undefined,
+      }).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(SetupProtocolError);
+      expect(error).toMatchObject({ code: "COST_LIMIT_UNENFORCEABLE", kind: "failure" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("uses the new harness default model instead of a previous harness model", async () => {
