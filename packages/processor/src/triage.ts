@@ -16,6 +16,7 @@ import {
 const TRIAGE_BATCH_SIZE = 30;
 
 interface TriageVerdict {
+  id?: number;
   title: string;
   priority: TriagePriority;
   exploitability: "trivial" | "moderate" | "difficult";
@@ -123,6 +124,7 @@ export async function triage(params: {
     const findingsList = batch
       .map((item, idx) => {
         return `### ${idx + 1}. ${item.finding.title}
+- **ID:** ${idx + 1}
 - **File:** \`${item.record.filePath}\`
 - **Severity:** ${item.finding.severity}
 - **Slug:** ${item.finding.vulnSlug}
@@ -163,9 +165,13 @@ ${findingsList}
 
 ## Output
 
+Return one object per finding above, echoing its **ID** so each verdict can be
+matched back to the exact finding it judged (titles are not unique).
+
 \`\`\`json
 [
   {
+    "id": 1,
     "title": "exact title",
     "priority": "P0" | "P1" | "P2" | "skip",
     "exploitability": "trivial" | "moderate" | "difficult",
@@ -200,9 +206,19 @@ ${findingsList}
         verdicts = JSON.parse(jsonStr);
       } catch {}
 
+      // Match verdicts back to findings by the 1-based ID emitted in the
+      // prompt, not by title: titles are free-text and recur across a batch,
+      // so title-matching mis-attributes verdicts among same-titled findings.
+      // Fall back to title only when the model omits the id. Guard against a
+      // single finding being assigned twice (duplicate id/title in the reply).
+      const assigned = new Set<(typeof batch)[number]>();
       for (const verdict of verdicts) {
-        const item = batch.find((b) => b.finding.title === verdict.title);
-        if (!item) continue;
+        const item =
+          typeof verdict.id === "number" && verdict.id >= 1 && verdict.id <= batch.length
+            ? batch[verdict.id - 1]
+            : batch.find((b) => b.finding.title === verdict.title);
+        if (!item || assigned.has(item)) continue;
+        assigned.add(item);
 
         item.finding.triage = {
           priority: verdict.priority,
