@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getConfig } from "@deepsec/core";
+import { resolveCodexAuth, resolveCodexLoginHome } from "@deepsec/processor";
 import { getVercelOidcToken } from "@vercel/oidc";
 import {
   applyResolvedModelRoute,
@@ -131,6 +132,28 @@ export async function applySelectedModelRoute(
   return resolved;
 }
 
+/**
+ * One-run model-route override for `process` / `revalidate --model-auth`.
+ *
+ * Reuses the init/setup route machinery for a single command, so a saved
+ * local-subscription route can be overridden without editing
+ * deepsec.config.ts. Local routes have no brokered credential; they only
+ * need the startup-injected gateway defaults removed so they cannot mask the
+ * machine-wide login.
+ */
+export async function applyCommandModelRoute(
+  route: ModelRoute,
+  agentType: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ModelRoute> {
+  if (route.mode === "local") {
+    reconcileAiGatewayDefaultsForRoute(route, { env });
+    return route;
+  }
+  const resolved = await applySelectedModelRoute(route, agentType, env);
+  return resolved.route;
+}
+
 /** Rehydrate the non-secret model route persisted by one-shot setup. */
 export async function applyConfiguredModelRoute(
   agentType: string,
@@ -215,11 +238,14 @@ function hasLocalClaudeAgent(): boolean {
  * `auth.json` into a per-invocation tempdir, so we need that file to
  * actually exist. `which codex` alone isn't enough — a logged-out
  * codex CLI would fall through to gateway mode without an API key and
- * 401. Honors `CODEX_HOME`.
+ * 401.
+ *
+ * Delegates to the backend's own resolver so preflight cannot accept a login
+ * the Codex SDK will never find (for example when HOME diverges from the OS
+ * home directory).
  */
 function hasLocalCodexAgent(): boolean {
-  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
-  return existsSync(join(codexHome, "auth.json"));
+  return resolveCodexLoginHome() !== null;
 }
 
 function hasLocalPiAgent(): boolean {
@@ -239,10 +265,11 @@ const KNOWN_BACKENDS = new Set<string>(["claude-agent-sdk", "codex", "pi"]);
  * sandbox path brokers credentials via firewall header injection, but
  * that only works if the orchestrator actually has a token to inject.
  *
- * Pass `inSandbox: true` from sandbox commands. Subscription auth (a
- * local `claude login`) is only honored when this is false — the
- * sandbox worker has no `claude` CLI and no Keychain, so it must ship a
- * real API token through the firewall header rewrite.
+ * Pass `inSandbox: true` from sandbox commands (or run in a worker, where
+ * DEEPSEC_INSIDE_SANDBOX=1 is set). Subscription auth (a local
+ * `claude login`) is only honored outside a sandbox — the sandbox worker has
+ * no `claude` CLI and no Keychain, so it must ship a real API token through
+ * the firewall header rewrite.
  *
  * Skipped for plugin-supplied agents (`agentType` not in `KNOWN_BACKENDS`):
  * those backends own their credential story. Tests use this to plug in a
@@ -254,14 +281,37 @@ export function assertAgentCredential(
 ): void {
   if (agentType !== undefined && !KNOWN_BACKENDS.has(agentType)) return;
 
-  // A local-subscription route is the user saying "claude/codex are set up
-  // machine-wide" — skip the env-var checks entirely and let the agent SDK
-  // error clearly at first call if the login is actually missing. Sandboxes
-  // are the exception: they must broker a real token through the firewall,
-  // so fall through to the normal checks (an ambient AI_GATEWAY_API_KEY
-  // still works there, and the standard actionable error fires otherwise).
+  // In-VM commands are launched by sandbox-process/sandbox-all, which set
+  // DEEPSEC_INSIDE_SANDBOX=1 instead of threading an option through the CLI.
+  // Treat them as sandbox runs here too: machine-wide logins do not exist in
+  // the worker, so the brokered token is the only credential route.
+  const inSandbox = options.inSandbox === true || process.env.DEEPSEC_INSIDE_SANDBOX === "1";
+
+  // A local-subscription route is the user saying "machine-wide agent logins
+  // are set up" — skip the env-var checks for harnesses whose login is not
+  // inspected here. The mode is harness-agnostic, though: it also covers a
+  // Claude or Pi login, so --agent codex needs a Codex login before it can
+  // use subscription auth. Without one, fail closed before scanning starts:
+  // an ambient gateway key is deliberately NOT a fallback for an explicit
+  // local-subscription choice (a per-run `--model-auth gateway` is).
+  // Sandboxes are the exception: they must broker a real token through the
+  // firewall, so fall through to the normal checks (an ambient
+  // AI_GATEWAY_API_KEY still works there, and the standard actionable error
+  // fires otherwise).
   const selectedRoute = options.modelRoute ?? (getConfig()?.ai as ModelRoute | undefined);
-  if (selectedRoute?.mode === "local" && !options.inSandbox) return;
+  if (selectedRoute?.mode === "local" && !inSandbox) {
+    if (isCodex(agentType)) {
+      if (resolveCodexAuth({ modelAuth: "local" }).mode === "subscription") return;
+      throw new Error(
+        `Missing AI credentials for --agent codex with the selected local-subscription route.\n` +
+          `\n` +
+          `  Run:              codex login                     (Codex subscription auth)\n` +
+          `  Or override:      add --model-auth gateway        (use a gateway credential for this run)\n` +
+          `  Setup: ${SETUP_DOC_URL}`,
+      );
+    }
+    return;
+  }
 
   const gateway = process.env.AI_GATEWAY_API_KEY;
   const anthropic = process.env.ANTHROPIC_AUTH_TOKEN;
@@ -288,7 +338,7 @@ export function assertAgentCredential(
     // Codex prefers OPENAI_API_KEY; AI Gateway issues a single token that
     // authenticates both backends, so an ANTHROPIC token is also accepted.
     if (openai || anthropic) return;
-    if (!options.inSandbox && hasLocalCodexAgent()) return;
+    if (!inSandbox && hasLocalCodexAgent()) return;
     throw new Error(
       `Missing AI credentials for --agent codex.\n` +
         `\n` +
@@ -299,7 +349,7 @@ export function assertAgentCredential(
 
   if (isPi(agentType)) {
     if (gateway || custom) return;
-    if (!options.inSandbox && (anthropic || anthropicApi || openai || hasLocalPiAgent())) return;
+    if (!inSandbox && (anthropic || anthropicApi || openai || hasLocalPiAgent())) return;
     const customHint = options.aiApiKeyEnv
       ? `, or set ${options.aiApiKeyEnv}=… for the selected --ai-api-key-env`
       : "";
@@ -312,7 +362,7 @@ export function assertAgentCredential(
   }
 
   if (anthropic || anthropicApi) return;
-  if (!options.inSandbox && hasLocalClaudeAgent()) return;
+  if (!inSandbox && hasLocalClaudeAgent()) return;
   const displayAgent =
     agentType === "claude-agent-sdk" || agentType === undefined ? "claude" : agentType;
   throw new Error(

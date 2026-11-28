@@ -163,8 +163,13 @@ fixed placeholder environment value and an egress policy limited to the
 selected model host. The Sandbox network transform replaces the placeholder
 header at egress; repository-controlled commands cannot read the real token.
 
-This works for Gateway, direct OpenAI/Anthropic, and custom Pi routes. The
-broker descriptor is kept in memory and is not written to detached-run state.
+This works for Gateway, direct OpenAI/Anthropic, and custom Pi routes, and for
+the same routes selected as one-run overrides — `sandbox process … --model-auth
+gateway|direct|custom` is resolved and brokered on the orchestrator, so the
+worker still receives only a placeholder. `--model-auth local` is rejected for
+Sandbox runs because workers have no machine-wide login; run `process` or
+`revalidate` locally to use subscription auth. The broker descriptor is kept in
+memory and is not written to detached-run state.
 
 This guarantee applies to Vercel Sandbox workers. The one-shot repository
 analysis phase runs through a local coding-agent SDK with read-only/no-network

@@ -136,14 +136,50 @@ npx deepsec init --model-auth local
 Deepsec then configures nothing for model access: no API key, no gateway
 token, no environment variables. Later commands (`process`,
 `revalidate`, `triage`) skip their credential checks and rely on the
-machine-wide login — if it's missing, the agent SDK itself reports a
-clear error on first use.
+machine-wide login.
 
 Two caveats: the login must exist for the harness you actually run
 (`claude` for `--agent claude`, a logged-in `codex` for `--agent codex`),
 and `sandbox` commands still need a real API token
 (`AI_GATEWAY_API_KEY`), because a machine-local login can't be brokered
 into an isolated sandbox.
+
+The saved route is harness-agnostic, so it does not record which harness
+you logged in. `--agent codex` therefore fails closed when no Codex login
+exists: it never silently falls back to an ambient `OPENAI_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` (a stale or unrelated key could be billed or used
+against the wrong provider). `process` and `revalidate` report the missing
+login at preflight, before scanning starts, with a `codex login` hint.
+
+To use a gateway credential for a single run instead of the saved local
+route, pass `--model-auth` to `process` or `revalidate`:
+
+```bash
+npx deepsec process --project-id my-app --model-auth gateway
+```
+
+`--model-auth gateway` uses the linked workspace gateway credential
+(`AI_GATEWAY_API_KEY` or OIDC); `--model-auth direct --ai-provider openai`
+uses an exported `OPENAI_API_KEY`. Neither changes `deepsec.config.ts`.
+
+A one-run custom route follows the same rules as setup: it requires
+`--agent pi` plus the provider, base URL, API-key environment variable, and
+credential header flags.
+
+```bash
+MARTIAN_KEY=... npx deepsec process --project-id my-app \
+  --agent pi \
+  --model openai/gpt-5.5 \
+  --model-auth custom \
+  --ai-provider martian \
+  --ai-base-url https://api.martian.example/v1 \
+  --ai-api-key-env MARTIAN_KEY \
+  --ai-credential-header x-api-key:raw
+```
+
+Use `:bearer` for an `Authorization: Bearer …` header and `:raw` for a
+provider-specific token header. When a required custom flag is missing,
+`process` and `revalidate` name that flag in the error.
 
 ## Scaffold only
 

@@ -52,8 +52,18 @@ There is also a `local` route (`--model-auth local`, or "Use local
 subscriptions" in the interactive prompt) for machines where the `claude` or
 `codex` CLI is already logged in. It configures no credential at all and
 disables the env-var preflight checks — the machine-wide login is used
-directly. Sandbox commands are the exception: they must broker a real token,
-so they still require `AI_GATEWAY_API_KEY` (or an equivalent key).
+directly. For `--agent codex` the login must be a Codex login: when it is
+missing, the run fails closed instead of using an ambient gateway key, and
+`process`/`revalidate` report that at preflight. Pass `--model-auth` to
+`process` or `revalidate` to use a different credential route for one run
+(for example `--model-auth gateway` to use the gateway credential instead of
+the saved local route). `sandbox` and `sandbox-all` accept the same override:
+they resolve and broker the chosen route on the orchestrator, so workers
+still see only a placeholder credential. `--model-auth local` is rejected
+there — Sandbox workers have no machine-wide login, so subscription auth only
+works when the command runs locally. A one-run custom override is Pi-only and
+needs the same provider, base URL, API-key environment variable, and
+credential header flags as setup.
 
 ## CLI selection
 
@@ -81,7 +91,11 @@ pnpm deepsec triage --project-id my-app --model claude-haiku-4-5
 ```
 
 `--agent`, `--model`, and `--thinking-level` are also accepted on `setup` and
-`revalidate`. Setup persists the interactive choice as `defaultAgent`,
+`revalidate`. `process` and `revalidate` additionally accept a one-run
+`--model-auth gateway|direct|custom|local` override. Custom overrides are
+Pi-only and require `--ai-credential-header` along with the provider, base
+URL, and API-key environment flags. Setup persists the
+interactive choice as `defaultAgent`,
 `defaultModel`, and `defaultThinkingLevel`, checkpoints the exact combination,
 and invalidates affected phases when it changes.
 
@@ -140,11 +154,15 @@ export default defineConfig({
 The flag requires the Codex backend and a logged-in `codex` CLI (the `local`
 route). Deepsec rejects the flag with `--agent claude` or `--agent pi`, and
 it ignores the config value when another backend runs. Codex only accepts
-the program on OpenAI's built-in provider. When `OPENAI_API_KEY` or
-`ANTHROPIC_AUTH_TOKEN` routes Codex through AI Gateway, deepsec rejects the
-flag and ignores the config value with a warning. Sandbox workers always use
-AI Gateway, so `sandbox` and `sandbox-all` reject the flag before they
-provision anything.
+the program on OpenAI's built-in provider. A saved local-subscription route
+counts as Codex subscription auth even when unrelated `OPENAI_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` values are exported for other tools — but only when
+the Codex login actually exists; a missing login is reported as a
+`codex login` error, not as a gateway-credential problem. When Codex uses AI
+Gateway (no saved local route, or `--model-auth gateway` for one run),
+deepsec rejects the flag and ignores the config value with a warning.
+Sandbox workers always use AI Gateway, so `sandbox` and `sandbox-all` reject
+the flag before they provision anything.
 
 Deepsec runs Codex with a temporary `CODEX_HOME`, so the Daybreak toggle in
 the Codex desktop app doesn't carry over. Set the program explicitly.
@@ -200,8 +218,26 @@ pnpm deepsec setup --project-id my-app \
 ```
 
 Later `process`, `revalidate`, and Sandbox commands resolve the persisted
-route. Per-command `--ai-provider`, `--ai-base-url`, `--ai-api-key-env`, and
-repeatable `--ai-header name=value` remain available as Pi runtime overrides.
+route. Per-command `--ai-provider`, `--ai-base-url`, `--ai-api-key-env`,
+`--ai-credential-header`, and repeatable `--ai-header name=value` remain
+available as Pi runtime overrides.
+
+To use a custom route for one run without changing the saved route, pass the
+same flags with `--model-auth custom`:
+
+```bash
+MARTIAN_API_KEY=... pnpm deepsec process --project-id my-app \
+  --agent pi \
+  --model openai/gpt-5.5 \
+  --model-auth custom \
+  --ai-provider martian \
+  --ai-base-url https://api.withmartian.com/v1 \
+  --ai-api-key-env MARTIAN_API_KEY \
+  --ai-credential-header authorization:bearer
+```
+
+`--agent pi` is required. When a custom route is incomplete, `process` and
+`revalidate` report the flag that is missing.
 
 ### `claude-sonnet-4-6` for `triage`
 

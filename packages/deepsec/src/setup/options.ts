@@ -1,4 +1,4 @@
-import { defaultCredentialHeaderScheme, type ModelRoute } from "../auth/model-route.js";
+import { type ModelRoute, parseCredentialHeader } from "../auth/model-route.js";
 
 export interface ModelRouteCliOptions {
   modelAuth?: "gateway" | "direct" | "custom" | "local";
@@ -37,16 +37,11 @@ export function modelRouteFromCli(options: ModelRouteCliOptions): ModelRoute {
       "--model-auth custom requires --ai-api-key-env, --ai-base-url, and --ai-credential-header",
     );
   }
-  const [name, explicitScheme] = options.aiCredentialHeader.split(":");
-  const scheme = explicitScheme ?? defaultCredentialHeaderScheme(name);
-  if (scheme !== "bearer" && scheme !== "raw") {
-    throw new Error("--ai-credential-header scheme must be bearer or raw");
-  }
   return {
     mode,
     provider,
     apiKeyEnv: options.aiApiKeyEnv,
     baseUrl: options.aiBaseUrl,
-    credentialHeader: { name, scheme },
+    credentialHeader: parseCredentialHeader(options.aiCredentialHeader),
   };
 }

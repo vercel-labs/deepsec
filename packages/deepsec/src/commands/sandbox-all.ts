@@ -9,8 +9,10 @@ import {
   assertSandboxCredential,
 } from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
+import { extractFlag, hasFlag } from "../sandbox/args.js";
 import { createSpawnLimiter, orchestrate } from "../sandbox/orchestrator.js";
 import { partitionFiles } from "../sandbox/partitioner.js";
+import { extractSandboxModelRouteFlags, resolveSandboxModelRoute } from "../sandbox/route.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
 import {
   DEFAULT_SPAWN_RATE,
@@ -30,18 +32,6 @@ const VALID_COMMANDS: ReadonlySet<SandboxSubcommand> = new Set([
   "scan",
   "report",
 ]);
-
-function extractFlag(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  const val = args[idx + 1];
-  if (val.startsWith("--")) return undefined;
-  return val;
-}
-
-function hasFlag(args: string[], flag: string): boolean {
-  return args.includes(flag);
-}
 
 function discoverProjects(): string[] {
   const dataDir = path.resolve(getDataRoot());
@@ -101,16 +91,25 @@ export async function sandboxAllCommand(
   const agentType = resolveAgentType(extractFlag(passthrough, "--agent"));
   const explicitAiApiKeyEnv = extractFlag(passthrough, "--ai-api-key-env");
   const explicitAiBaseUrl = extractFlag(passthrough, "--ai-base-url");
+  // Same route resolution as sandbox-process: an explicit one-run override is
+  // resolved and brokered on the host (and "local" is rejected) before any
+  // project is provisioned or fanned out.
+  const explicitRoute = await resolveSandboxModelRoute(
+    extractSandboxModelRouteFlags(passthrough),
+    agentType,
+  );
   const resolvedRoute =
-    !explicitAiApiKeyEnv && !explicitAiBaseUrl
+    explicitRoute ??
+    (!explicitAiApiKeyEnv && !explicitAiBaseUrl
       ? await applyConfiguredModelRoute(agentType, process.env, { inSandbox: true })
-      : undefined;
+      : undefined);
 
   // Same preflight as sandbox-process — fail fast before fanning out.
   assertSandboxCredential();
   assertAgentCredential(agentType, {
     inSandbox: true,
     aiApiKeyEnv: explicitAiApiKeyEnv,
+    modelRoute: explicitRoute?.route,
   });
 
   console.log(`${BOLD}Sandbox All${RESET} — ${CYAN}${command}${RESET}`);

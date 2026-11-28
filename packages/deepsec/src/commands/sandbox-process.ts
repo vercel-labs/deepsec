@@ -7,7 +7,9 @@ import {
 } from "../preflight.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import { resolveProjectId } from "../resolve-project-id.js";
+import { extractFlag, hasFlag } from "../sandbox/args.js";
 import { checkStatus, collect, launch, orchestrate } from "../sandbox/orchestrator.js";
+import { extractSandboxModelRouteFlags, resolveSandboxModelRoute } from "../sandbox/route.js";
 import type { SandboxConfig, SandboxSubcommand } from "../sandbox/types.js";
 
 const VALID_COMMANDS: SandboxSubcommand[] = ["process", "revalidate", "triage", "scan", "report"];
@@ -24,22 +26,6 @@ interface SandboxOpts {
   timeout?: number;
   spawnRate?: number;
   args?: string[];
-}
-
-/**
- * Extract a value for a named flag from the passthrough args array.
- * e.g. extractFlag(["--limit", "50", "--force"], "--limit") => "50"
- */
-function extractFlag(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  const val = args[idx + 1];
-  if (val.startsWith("--")) return undefined;
-  return val;
-}
-
-function hasFlag(args: string[], flag: string): boolean {
-  return args.includes(flag);
 }
 
 export function rejectCyberAccessProgram(args: string[]): void {
@@ -161,7 +147,19 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   rejectCyberAccessProgram(opts.args ?? []);
   const config = buildConfig(subcommand as SandboxSubcommand, projectId, opts);
 
-  if (!config.aiApiKeyEnv && !config.aiBaseUrl) {
+  // A one-run `--model-auth` override must be resolved and brokered on the
+  // orchestrator, exactly like the saved route below: the worker has no host
+  // credential and re-resolves the override against the brokered placeholder.
+  // Resolving here also rejects "local" before provisioning, instead of
+  // letting the worker fail mid-batch after the snapshot + sandboxes exist.
+  const explicitRoute = await resolveSandboxModelRoute(
+    extractSandboxModelRouteFlags(config.extraArgs),
+    config.agentType ?? "codex",
+  );
+  if (explicitRoute) {
+    config.brokeredModelCredential = explicitRoute.broker;
+    config.aiBaseUrl = explicitRoute.route.baseUrl ?? config.aiBaseUrl;
+  } else if (!config.aiApiKeyEnv && !config.aiBaseUrl) {
     const resolved = await applyConfiguredModelRoute(config.agentType ?? "codex", process.env, {
       inSandbox: true,
     });
@@ -177,6 +175,7 @@ export async function sandboxCommand(subcommand: string, opts: SandboxOpts) {
   assertAgentCredential(config.agentType, {
     inSandbox: true,
     aiApiKeyEnv: config.aiApiKeyEnv,
+    modelRoute: explicitRoute?.route,
   });
 
   console.log(

@@ -1,13 +1,14 @@
 import type { Severity } from "@deepsec/core";
 import { readProjectConfig } from "@deepsec/core";
 import { revalidate } from "@deepsec/processor";
-import { buildAgentConfig } from "../agent-config.js";
 import { defaultModelForAgent } from "../agent-defaults.js";
+import type { ModelAuthMode } from "../auth/model-route.js";
 import { BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW } from "../formatters.js";
-import { applyConfiguredModelRoute, assertAgentCredential } from "../preflight.js";
+import { assertAgentCredential } from "../preflight.js";
 import { renderQuotaMessage } from "../quota-message.js";
 import { resolveAgentType } from "../resolve-agent-type.js";
 import { resolveProjectId } from "../resolve-project-id.js";
+import { resolveRunAgentConfig } from "../run-route.js";
 
 function logProgress(progress: {
   type: string;
@@ -70,6 +71,8 @@ export async function revalidateCommand(opts: {
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
   aiHeader?: string[];
+  /** One-run credential route override; defaults to the saved route. */
+  modelAuth?: ModelAuthMode;
   minSeverity?: string;
   force?: boolean;
   limit?: number;
@@ -89,15 +92,12 @@ export async function revalidateCommand(opts: {
   const onlySlugs = parseCsv(opts.onlySlugs);
   const skipSlugs = parseCsv(opts.skipSlugs);
 
-  const resolvedRoute =
-    !opts.aiApiKeyEnv && !opts.aiBaseUrl ? await applyConfiguredModelRoute(agentType) : undefined;
-  const agentConfig = buildAgentConfig({
+  const { agentConfig, explicitRoute } = await resolveRunAgentConfig({
     ...opts,
     agentType,
     model,
-    modelRoute: resolvedRoute?.route,
   });
-  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv });
+  assertAgentCredential(agentType, { aiApiKeyEnv: opts.aiApiKeyEnv, modelRoute: explicitRoute });
 
   console.log(`${BOLD}Revalidating${RESET} findings for project ${BOLD}${projectId}${RESET}`);
   console.log(`  Agent: ${agentType} (${model})`);

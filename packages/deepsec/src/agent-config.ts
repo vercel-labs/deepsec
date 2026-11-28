@@ -1,11 +1,16 @@
 import { getConfig } from "@deepsec/core";
-import { findCodexSubscriptionHome } from "@deepsec/processor";
-import { defaultCredentialHeaderScheme, type ModelRoute } from "./auth/model-route.js";
+import { type CodexAuthDecision, resolveCodexAuth } from "@deepsec/processor";
+import {
+  defaultCredentialHeaderScheme,
+  type ModelAuthMode,
+  type ModelRoute,
+  parseCredentialHeader,
+} from "./auth/model-route.js";
 
 const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const CYBER_ACCESS_PROGRAMS = ["standard", "daybreak_blue", "daybreak_red"] as const;
 
-interface AgentRuntimeOpts {
+export interface AgentRuntimeOpts {
   agentType: string;
   model?: string;
   maxTurns?: number;
@@ -13,8 +18,12 @@ interface AgentRuntimeOpts {
   aiProvider?: string;
   aiBaseUrl?: string;
   aiApiKeyEnv?: string;
+  /** `--ai-credential-header <name[:scheme]>`; custom route auth header for Pi. */
+  aiCredentialHeader?: string;
   aiHeader?: string[];
   cyberAccessProgram?: string;
+  /** One-run credential route override (`process` / `revalidate --model-auth`). */
+  modelAuth?: ModelAuthMode;
   modelRoute?: ModelRoute;
 }
 
@@ -77,24 +86,45 @@ export function buildAgentConfig(opts: AgentRuntimeOpts): Record<string, unknown
   if (opts.aiProvider || hasProviderOverride) config.aiProvider = effectiveProvider;
   if (aiBaseUrl) config.aiBaseUrl = aiBaseUrl;
   if (aiApiKeyEnv) config.aiApiKeyEnv = aiApiKeyEnv;
-  const credentialHeader =
-    customRoute?.credentialHeader ??
-    (customRoute?.authHeader
-      ? {
-          name: customRoute.authHeader,
-          scheme: customRoute.authScheme ?? defaultCredentialHeaderScheme(customRoute.authHeader),
-        }
-      : undefined);
+  // An explicit per-run flag wins over a rehydrated route, matching the
+  // precedence of the other Pi provider overrides above.
+  const credentialHeader = opts.aiCredentialHeader
+    ? parseCredentialHeader(opts.aiCredentialHeader)
+    : (customRoute?.credentialHeader ??
+      (customRoute?.authHeader
+        ? {
+            name: customRoute.authHeader,
+            scheme: customRoute.authScheme ?? defaultCredentialHeaderScheme(customRoute.authHeader),
+          }
+        : undefined));
   if (credentialHeader) {
     config.aiCredentialHeader = credentialHeader;
   }
   if (aiHeaders) config.aiHeaders = aiHeaders;
-  const cyberAccessProgram = resolveCyberAccessProgram(opts);
+  // The saved route mode travels with the run so backends can keep a
+  // local-subscription choice ahead of ambient provider API keys. Callers
+  // skip route resolution when --ai-* selects an explicit provider route, so
+  // those runs must not inherit the saved mode. Resolve it before the Cyber
+  // Access Program gate so both decisions use the same predicate.
+  const savedModelAuth = hasProviderOverride ? undefined : getConfig()?.ai?.mode;
+  const modelAuth = opts.modelRoute?.mode ?? savedModelAuth;
+  const cyberAccessProgram = resolveCyberAccessProgram(opts, modelAuth);
   if (cyberAccessProgram) config.cyberAccessProgram = cyberAccessProgram;
+  if (modelAuth) config.modelAuth = modelAuth;
   return config;
 }
 
-function resolveCyberAccessProgram(opts: AgentRuntimeOpts): string | undefined {
+/**
+ * Cyber Access Programs are a Codex-subscription feature: the gateway's
+ * custom provider cannot carry them. This uses the same predicate as the
+ * Codex backend ({@link resolveCodexAuth}) so a saved local route still
+ * counts as subscription auth when ambient API keys are exported for other
+ * tools, instead of being vetoed by them.
+ */
+function resolveCyberAccessProgram(
+  opts: AgentRuntimeOpts,
+  modelAuth: string | undefined,
+): string | undefined {
   if (opts.agentType !== "codex") {
     if (opts.cyberAccessProgram) throw new Error("--cyber-access-program requires --agent codex");
     return undefined;
@@ -106,16 +136,43 @@ function resolveCyberAccessProgram(opts: AgentRuntimeOpts): string | undefined {
       `--cyber-access-program must be one of ${CYBER_ACCESS_PROGRAMS.join(", ")}, got "${program}"`,
     );
   }
-  if (!findCodexSubscriptionHome()) {
-    if (opts.cyberAccessProgram) {
-      throw new Error(
-        `--cyber-access-program only works with Codex subscription auth. Run \`codex login\` and unset OPENAI_API_KEY and ANTHROPIC_AUTH_TOKEN.`,
-      );
-    }
-    console.warn(
-      "Ignoring codex.cyberAccessProgram from deepsec.config.ts: this run doesn't use Codex subscription auth.",
+  const auth = resolveCodexAuth({ modelAuth });
+  if (auth.mode === "subscription") return program;
+  if (opts.cyberAccessProgram) throw new Error(cyberAccessProgramError(auth));
+  console.warn(cyberAccessProgramWarning(auth));
+  return undefined;
+}
+
+/** Accurate CLI error for a program request the effective route cannot honor. */
+function cyberAccessProgramError(auth: CodexAuthDecision): string {
+  if (auth.localRoute) {
+    return (
+      "--cyber-access-program only works with Codex subscription auth. " +
+      "The saved local-subscription route requires a Codex login, but no Codex login was found " +
+      "(expected auth.json in CODEX_HOME, $HOME/.codex, or %USERPROFILE%/.codex). " +
+      "Run `codex login` and retry."
     );
-    return undefined;
   }
-  return program;
+  if (auth.hasGatewayApiKey) {
+    return (
+      "--cyber-access-program only works with Codex subscription auth. " +
+      "OPENAI_API_KEY or ANTHROPIC_AUTH_TOKEN routes this run through the AI Gateway, " +
+      "whose custom provider cannot carry the program. Unset those variables " +
+      "(or select the local-subscription route during setup) and use `codex login` instead."
+    );
+  }
+  return (
+    "--cyber-access-program only works with Codex subscription auth. " +
+    "Run `codex login`, or select the local-subscription route during setup."
+  );
+}
+
+/** Matching warning when a config-file program is silently unusable. */
+function cyberAccessProgramWarning(auth: CodexAuthDecision): string {
+  const reason = auth.localRoute
+    ? "the saved local-subscription route has no Codex login, so the run requires `codex login`"
+    : auth.hasGatewayApiKey
+      ? "this run uses gateway auth because OPENAI_API_KEY or ANTHROPIC_AUTH_TOKEN is set"
+      : "this run doesn't use Codex subscription auth";
+  return `Ignoring codex.cyberAccessProgram from deepsec.config.ts: ${reason}.`;
 }
