@@ -9,7 +9,9 @@ import {
   buildRevalidateJsonRepairPrompt,
   classifyQuotaError,
   formatJsonRepairFailureDebugText,
+  formatMissingCodexBinaryError,
   isGatewayBaseUrl,
+  isMissingBinaryError,
   isTransientError,
   isUsingAiGateway,
   parseInvestigateResults,
@@ -33,6 +35,16 @@ describe("isTransientError", () => {
 
   it("doesn't flag obvious permanent errors", () => {
     expect(isTransientError("ENOENT no such file")).toBe(false);
+    expect(
+      isTransientError(
+        "spawn /Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT",
+      ),
+    ).toBe(false);
+    expect(
+      isTransientError(
+        "spawn /Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/bin/codex ENOENT",
+      ),
+    ).toBe(false);
     expect(isTransientError("invalid api key")).toBe(false);
   });
 
@@ -44,6 +56,79 @@ describe("isTransientError", () => {
       false,
     );
     expect(isTransientError("Claude AI usage limit reached for the week")).toBe(false);
+  });
+});
+
+describe("isMissingBinaryError", () => {
+  const legacyVendorPath =
+    "/Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex";
+  const currentVendorPath =
+    "/Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/bin/codex";
+  const platformPkgVendorPath =
+    "/Users/me/project/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex";
+
+  it("matches vendored Codex spawn ENOENT failures for both legacy codex/codex and current bin/codex layouts", () => {
+    for (const vendorPath of [legacyVendorPath, currentVendorPath, platformPkgVendorPath]) {
+      expect(isMissingBinaryError(`spawn ${vendorPath} ENOENT`)).toBe(true);
+      expect(
+        isMissingBinaryError(
+          `Codex Exec exited with signal SIGKILL\nError: spawn ${vendorPath} ENOENT`,
+        ),
+      ).toBe(true);
+    }
+    expect(
+      isMissingBinaryError(
+        "spawn C:\\project\\node_modules\\@openai\\codex\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe ENOENT",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match SIGKILL-only text or unrelated ENOENT failures", () => {
+    expect(isMissingBinaryError("Codex Exec exited with signal SIGKILL")).toBe(false);
+    expect(isMissingBinaryError("spawn /tmp/codex ENOENT")).toBe(false);
+    expect(isMissingBinaryError("ENOENT no such file")).toBe(false);
+    expect(
+      isMissingBinaryError(
+        "spawn /Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/other/codex ENOENT",
+      ),
+    ).toBe(false);
+    expect(
+      isMissingBinaryError(
+        "spawn /Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/bin/codex-code-mode-host ENOENT",
+      ),
+    ).toBe(false);
+    expect(
+      isMissingBinaryError(
+        "spawn /Users/me/project/node_modules/@openai/codex/bin/codex.js ENOENT",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match transient or quota failures", () => {
+    expect(isMissingBinaryError("HTTP 429 too many requests")).toBe(false);
+    expect(isMissingBinaryError("ETIMEDOUT")).toBe(false);
+    expect(isMissingBinaryError("timeout waiting for Codex")).toBe(false);
+    expect(isMissingBinaryError("You've hit your usage limit.")).toBe(false);
+    expect(isMissingBinaryError("HTTP 429 insufficient_quota")).toBe(false);
+  });
+});
+
+describe("formatMissingCodexBinaryError", () => {
+  it("includes the failing path and macOS quarantine remediation for both layouts", () => {
+    const paths = [
+      "/Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex",
+      "/Users/me/project/node_modules/@openai/codex/vendor/aarch64-apple-darwin/bin/codex",
+    ];
+    for (const vendorPath of paths) {
+      const formatted = formatMissingCodexBinaryError(`spawn ${vendorPath} ENOENT`);
+
+      expect(formatted).toContain(vendorPath);
+      expect(formatted).toContain("Gatekeeper");
+      expect(formatted).toContain("quarantine");
+      expect(formatted).toContain("reinstall dependencies");
+      expect(formatted).toContain("xattr -dr com.apple.quarantine");
+      expect(formatted).not.toContain("produced no result");
+    }
   });
 });
 
