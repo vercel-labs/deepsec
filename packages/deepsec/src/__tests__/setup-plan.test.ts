@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildSetupPlan } from "../setup/plan.js";
 
 describe("headless setup plan", () => {
@@ -46,6 +46,35 @@ describe("headless setup plan", () => {
       ),
     });
     expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  it("skips Vercel authentication and project creation for local subscriptions", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-plan-"));
+    const workspace = path.join(root, ".deepsec");
+    const runCli = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+
+    try {
+      const plan = await buildSetupPlan({
+        workspaceDir: workspace,
+        projectRoot: root,
+        projectId: "app",
+        model: "gpt-5.6-sol",
+        agent: "codex",
+        modelRoute: { mode: "local", provider: "local" },
+        deterministicProjectName: "deepsec-app-abcd1234",
+        env: {},
+        runCli,
+      });
+
+      expect(runCli).not.toHaveBeenCalled();
+      expect(plan.ready).toBe(true);
+      expect(plan.missingInputs).toEqual([]);
+      expect(plan.vercel).toMatchObject({ action: "skip", credentialSources: [] });
+      expect(plan.actions).toEqual([]);
+      expect(fs.existsSync(workspace)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("checks Vercel authentication in a private temporary directory", async () => {

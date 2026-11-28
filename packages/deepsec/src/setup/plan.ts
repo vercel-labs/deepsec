@@ -27,7 +27,7 @@ export interface SetupPlan {
   workspace: { path: string; exists: boolean; resumable: boolean };
   install: { required: boolean; packageManager: SupportedPackageManager };
   vercel: {
-    action: "reuse-link" | "use-token-triple" | "discover-cli";
+    action: "skip" | "reuse-link" | "use-token-triple" | "discover-cli";
     link?: { teamId: string; projectId: string };
     credentialSources: string[];
     deterministicProjectName: string;
@@ -78,8 +78,9 @@ export async function buildSetupPlan(options: {
   setSetupDocumentationWorkspace(workspaceDir);
   const projectRoot = path.resolve(options.projectRoot);
   const env = { ...(options.env ?? process.env) };
-  await loadEnvFile(path.join(workspaceDir, ".env.local"), env);
-  const link = await readWorkspaceLink(workspaceDir);
+  const needsVercel = options.modelRoute?.mode !== "local";
+  if (needsVercel) await loadEnvFile(path.join(workspaceDir, ".env.local"), env);
+  const link = needsVercel ? await readWorkspaceLink(workspaceDir) : null;
   const tokenTriple = Boolean(
     env.VERCEL_TOKEN &&
       (options.teamId ?? env.VERCEL_TEAM_ID) &&
@@ -87,7 +88,7 @@ export async function buildSetupPlan(options: {
   );
   const linkCredential = Boolean(link && (env.VERCEL_OIDC_TOKEN || env.VERCEL_TOKEN));
   let cliAuthenticated = false;
-  if (!linkCredential && !tokenTriple) {
+  if (needsVercel && !linkCredential && !tokenTriple) {
     // `npx` fails in a target repo whose `devEngines.packageManager` is not npm.
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "deepsec-vercel-"));
     try {
@@ -101,12 +102,14 @@ export async function buildSetupPlan(options: {
   const missingInputs: string[] = [];
   const suggestedArgs: string[] = [];
   const actions: SetupAction[] = [];
-  if (!linkCredential && !tokenTriple && !cliAuthenticated) {
-    missingInputs.push("vercel.authentication");
-    actions.push(...vercelAuthRecoveryActions(workspaceDir, link !== null));
-  } else if (!link && !tokenTriple && !options.vercelProjectId && !options.yes) {
-    missingInputs.push("vercel.projectCreationApproval");
-    suggestedArgs.push("--yes");
+  if (needsVercel) {
+    if (!linkCredential && !tokenTriple && !cliAuthenticated) {
+      missingInputs.push("vercel.authentication");
+      actions.push(...vercelAuthRecoveryActions(workspaceDir, link !== null));
+    } else if (!link && !tokenTriple && !options.vercelProjectId && !options.yes) {
+      missingInputs.push("vercel.projectCreationApproval");
+      suggestedArgs.push("--yes");
+    }
   }
 
   let model: SetupPlan["model"];
@@ -159,16 +162,22 @@ export async function buildSetupPlan(options: {
       required: !fs.existsSync(path.join(workspaceDir, "node_modules", "deepsec")),
       packageManager: plannedPackageManager(projectRoot, options.packageManager),
     },
-    vercel: {
-      action: linkCredential ? "reuse-link" : tokenTriple ? "use-token-triple" : "discover-cli",
-      ...(link ? { link: { teamId: link.orgId, projectId: link.projectId } } : {}),
-      credentialSources: [
-        ...(env.VERCEL_OIDC_TOKEN ? ["oidc"] : []),
-        ...(env.VERCEL_TOKEN ? ["access-token"] : []),
-        ...(cliAuthenticated ? ["vercel-cli-authenticated"] : ["vercel-cli"]),
-      ],
-      deterministicProjectName: options.deterministicProjectName,
-    },
+    vercel: needsVercel
+      ? {
+          action: linkCredential ? "reuse-link" : tokenTriple ? "use-token-triple" : "discover-cli",
+          ...(link ? { link: { teamId: link.orgId, projectId: link.projectId } } : {}),
+          credentialSources: [
+            ...(env.VERCEL_OIDC_TOKEN ? ["oidc"] : []),
+            ...(env.VERCEL_TOKEN ? ["access-token"] : []),
+            ...(cliAuthenticated ? ["vercel-cli-authenticated"] : ["vercel-cli"]),
+          ],
+          deterministicProjectName: options.deterministicProjectName,
+        }
+      : {
+          action: "skip",
+          credentialSources: [],
+          deterministicProjectName: options.deterministicProjectName,
+        },
     model,
     phases: [
       "workspace",
