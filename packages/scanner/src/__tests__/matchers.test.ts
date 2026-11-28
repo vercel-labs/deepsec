@@ -104,6 +104,34 @@ describe("secrets-exposure matcher", () => {
 });
 
 describe("insecure-crypto matcher", () => {
+  it("matches weak cipher names and aliases in algorithm identifiers", () => {
+    for (const name of [
+      "DES",
+      "des-ede3-cbc",
+      "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+      "EVP_des_cbc",
+      "CryptoJS.TripleDES",
+      "DESede",
+      "RC4",
+      "rc4_128",
+      "CryptoJS.RC4Drop",
+      "arcfour",
+      "Blowfish",
+      "bf-cbc",
+    ]) {
+      const matches = insecureCryptoMatcher.match(name, "src/ciphers.ts");
+      expect(
+        matches.map((match) => match.matchedPattern),
+        name,
+      ).toContain("weak cipher algorithm");
+    }
+  });
+
+  it("ignores cipher substrings in ordinary identifiers", () => {
+    const content = "const description = destinations.includes(selectedNodes);";
+    expect(insecureCryptoMatcher.match(content, "src/options.ts")).toEqual([]);
+  });
+
   it("detects MD5 and Math.random", () => {
     const content = readFixture("lib/crypto.ts");
     const matches = insecureCryptoMatcher.match(content, "src/lib/crypto.ts");

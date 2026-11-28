@@ -28,7 +28,12 @@ export const insecureCryptoMatcher: MatcherPlugin = {
         { regex: /createHash\s*\(\s*['"]md5['"]/, label: "MD5 hash" },
         { regex: /createHash\s*\(\s*['"]sha1['"]/, label: "SHA1 hash" },
         { regex: /createCipher\s*\(/, label: "deprecated createCipher (use createCipheriv)" },
-        { regex: /DES|RC4|Blowfish/i, label: "weak cipher algorithm" },
+        {
+          // OpenSSL and TLS names can use underscores between algorithm tokens.
+          regex:
+            /(?<![a-z0-9])(?:3des|tripledes|des(?:ede|3|x)?|rc4(?:drop)?|arcfour|blowfish|bf(?=[-_](?:cbc|cfb|ecb|ofb)))(?![a-z0-9])/i,
+          label: "weak cipher algorithm",
+        },
         { regex: /\bmd5\s*\(/, label: "MD5 function call" },
         {
           regex: /===?\s*.{0,40}\bhmac\b|\bhmac\b.{0,40}===?/,
